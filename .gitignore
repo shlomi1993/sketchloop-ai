@@ -216,3 +216,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Private source material and local research artifacts
+*.pdf
+*.PDF
+/private/
+/data/
+/runs/
+/models/
+/tmp/
+/output/
+/.dist/
+.env.*
+!.env.example
+.DS_Store
+*.safetensors
+*.ckpt
+*.pt
+*.pth
