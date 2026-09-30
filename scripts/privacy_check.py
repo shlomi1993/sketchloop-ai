@@ -28,7 +28,23 @@ def public_paths(root: Path = ROOT) -> list[str]:
     return sorted(set(p.decode("utf-8") for p in raw.split(b"\0") if p))
 
 
+def is_public_article(name: str) -> bool:
+    """Tell whether a path is an openly licensed article PDF allowed for publication.
+
+    Args:
+        name (str): Repository-relative POSIX path.
+
+    Returns:
+        bool: True for PDFs placed directly in docs/articles/.
+    """
+    path = PurePosixPath(name)
+    return path.parent == PurePosixPath("docs/articles") and path.suffix.lower() == ".pdf"
+
+
 def path_findings(name: str) -> list[str]:
+    if is_public_article(name):
+        return []
+
     path = PurePosixPath(name.lower())
     if (
         path.suffix in PRIVATE_SUFFIXES
@@ -56,7 +72,7 @@ def check(root: Path = ROOT) -> list[str]:
         issues = path_findings(name)
         if path.is_symlink():
             issues.append("symlink requires explicit publication review")
-        elif path.is_file():
+        elif path.is_file() and not is_public_article(name):
             issues += content_findings(path.read_bytes())
         findings.extend(f"worktree {name}: {issue}" for issue in issues)
 
@@ -71,7 +87,7 @@ def check(root: Path = ROOT) -> list[str]:
             issues.append("unresolved merge entry")
         if mode in {"120000", "160000"}:
             issues.append("symlink/submodule requires explicit publication review")
-        else:
+        elif not is_public_article(name):
             issues += content_findings(git("cat-file", "blob", object_id, root=root))
         findings.extend(f"index {name}: {issue}" for issue in issues)
     return findings

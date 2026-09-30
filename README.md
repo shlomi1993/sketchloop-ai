@@ -8,7 +8,7 @@ The intended loop is **draw → capture → preprocess → generate alternatives
 
 ## Start here
 
-- Agents: read [AGENTS.md](AGENTS.md), then [current status](docs/STATUS.md).
+- Agents: read [AGENTS.md](AGENTS.md), then [current status](docs/STATUS.md). Claude Code loads these through [CLAUDE.md](CLAUDE.md).
 - Product scope and acceptance criteria: [project specification](docs/PROJECT.md).
 - Design: [architecture](docs/ARCHITECTURE.md) and [experiment contract](docs/EXPERIMENTS.md).
 - Work sequence: [roadmap](docs/ROADMAP.md).

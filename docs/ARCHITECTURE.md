@@ -54,7 +54,7 @@ Start locally, with one user and manual triggering. A filesystem artifact store 
 
 OpenCV, Diffusers, and Gradio are candidates for capture/processing, generation, and a thin local UI respectively. Evaluate them against actual camera, operating system, memory, accelerator, model license, and interaction requirements before adoption. No such dependency is installed in this scaffold. Record decisions and compatible dependency versions in ADRs.
 
-The first model decision must cover sketch conditioning, visual quality, supported guidance, memory/latency, local versus remote execution, availability/version pinning, license, and replay limits. Do not invent hardware or choose a cloud provider on behalf of the researcher. Contracts, synthetic fixtures, and offline orchestration can proceed while this remains open.
+The first model decision must cover sketch conditioning, visual quality, supported guidance, memory/latency, local versus remote execution, availability/version pinning, license, and replay limits. Known hardware: a Windows laptop without a GPU, a laptop or USB webcam, and possibly a GPU or Colab later. Keep the generator interface usable both in-process and against a remote runtime such as Colab. Do not choose a paid provider on behalf of the researcher. Contracts, synthetic fixtures, and offline orchestration can proceed while this remains open.
 
 ## Expansion seams
 

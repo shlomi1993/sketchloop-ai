@@ -234,3 +234,10 @@ __marimo__/
 *.ckpt
 *.pt
 *.pth
+
+# Personal agent settings (shared settings in .claude/settings.json are tracked)
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Openly licensed articles may be published (see docs/PRIVACY.md)
+!docs/articles/*.pdf

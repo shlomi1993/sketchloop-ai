@@ -8,13 +8,13 @@ from privacy_check import check, content_findings, path_findings
 
 @pytest.mark.parametrize(
     "name",
-    ["project.pdf", "copies/brief.PDF", "runs/run/image.png", ".env.local"],
+    ["project.pdf", "copies/brief.PDF", "runs/run/image.png", ".env.local", "docs/articles/nested/paper.pdf", "docs/paper.pdf"],
 )
 def test_private_artifact_paths(name: str) -> None:
     assert path_findings(name)
 
 
-@pytest.mark.parametrize("name", ["docs/PROJECT.md", ".env.example"])
+@pytest.mark.parametrize("name", ["docs/PROJECT.md", ".env.example", "docs/articles/Open Paper.pdf"])
 def test_public_paths(name: str) -> None:
     assert not path_findings(name)
 

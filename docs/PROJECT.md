@@ -10,7 +10,7 @@ This is a sanitized English synthesis of all seven pages of the original Hebrew 
 
 The conceptual foundation is the iterative method discussed in *Rethinking sketching: Integrating hand drawings, digital tools, and AI in modern design*. Sketching supports exploration, selection of directions, and refinement early in design. The referenced method places Style Analysis before Exploration, Definition, Refinement, and Selection within Stylistic Design Engineering (SDE). AI helps produce variations, preserve structural and stylistic features, and move from initial concepts toward more detailed digital representations.
 
-The proposal describes the paper's use of Stable Diffusion 1.5, SDXL, and FLUX through Krita AI Diffusion; latent diffusion; ControlNet conditioning such as edges and depth; image-to-image generation; textual guidance; and CLIP-based similarity filtering followed by human selection. These are background examples, not mandated implementations. The project does not reproduce the paper's tooling or restrict itself to its vehicle-design case study. [References](REFERENCES.md) preserve the full reading list by title and link without personal names.
+The proposal describes the paper's use of Stable Diffusion 1.5, SDXL, and FLUX through Krita AI Diffusion; latent diffusion; ControlNet conditioning such as edges and depth; image-to-image generation; textual guidance; and CLIP-based similarity filtering followed by human selection. These are background examples, not mandated implementations. The project does not reproduce the paper's tooling or restrict itself to its vehicle-design case study. [References](REFERENCES.md) preserve the full reading list as standard citations.
 
 ## Required workflow
 

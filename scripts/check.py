@@ -12,6 +12,11 @@ from privacy_check import ROOT, main as privacy_main, public_paths
 
 
 def main() -> int:
+    """Run the privacy guard, file checks, Ruff lint, and pytest in order, stopping at the first failure.
+
+    Returns:
+        int: Process exit code, 0 when every check passes.
+    """
     if privacy_main():
         return 1
 
@@ -46,6 +51,9 @@ def main() -> int:
         return 1
 
     print("Python syntax, TOML, and local Markdown targets passed.", flush=True)
+    if subprocess.run([sys.executable, "-m", "ruff", "check", "."], cwd=ROOT).returncode:
+        return 1
+
     result = subprocess.run([sys.executable, "-m", "pytest"], cwd=ROOT)
     return result.returncode
 

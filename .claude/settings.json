@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash",
+      "PowerShell",
+      "Read",
+      "Glob",
+      "Grep",
+      "Edit(/**)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(git merge *)",
+      "Bash(git rebase *)",
+      "Bash(git pull *)",
+      "PowerShell(git push *)",
+      "PowerShell(git merge *)",
+      "PowerShell(git rebase *)",
+      "PowerShell(git pull *)"
+    ],
+    "deny": [
+      "Bash(git push *--force*)",
+      "Bash(git push * -f*)",
+      "PowerShell(git push *--force*)",
+      "PowerShell(git push * -f*)",
+      "Bash(rm * /)",
+      "Bash(rm * /*)",
+      "Bash(rm * ~*)",
+      "Bash(rm * $HOME*)",
+      "Bash(rm * ..*)",
+      "Bash(rm * .)",
+      "Bash(rm * C:*)",
+      "Bash(rm * c:*)",
+      "Bash(sudo *)",
+      "Bash(su *)",
+      "Bash(dd *)",
+      "Bash(mkfs*)",
+      "Bash(shutdown*)",
+      "Bash(reboot*)",
+      "Bash(chmod -R *)",
+      "Bash(chown -R *)",
+      "PowerShell(Remove-Item * C:*)",
+      "PowerShell(Remove-Item C:*)",
+      "PowerShell(Remove-Item * ~*)",
+      "PowerShell(Remove-Item ~*)",
+      "PowerShell(Remove-Item * $HOME*)",
+      "PowerShell(Remove-Item $HOME*)",
+      "PowerShell(Remove-Item * $env:*)",
+      "PowerShell(Remove-Item $env:*)",
+      "PowerShell(Remove-Item * ..*)",
+      "PowerShell(Remove-Item ..*)",
+      "PowerShell(Format-Volume *)",
+      "PowerShell(Clear-Disk *)",
+      "PowerShell(Initialize-Disk *)",
+      "PowerShell(Stop-Computer *)",
+      "PowerShell(Restart-Computer *)",
+      "Read(./private/**)",
+      "Read(./.env)",
+      "Read(./.env.local)"
+    ]
+  }
+}
