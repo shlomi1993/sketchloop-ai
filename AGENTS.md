@@ -24,7 +24,9 @@ The original proposal is private and is not needed to develop this project. Neve
 
 State the intended outcome, implement the smallest complete slice, and validate the behavior affected. Use typed public interfaces, explicit data contracts, dependency injection, and clear errors at boundaries. Avoid introducing a framework, service, provider lock-in, or heavyweight dependency without a concrete need. Verify current upstream APIs before adopting dependencies, then record compatible versions and a reproducible lock/constraints strategy.
 
-Use `python3 scripts/check.py` (or `make check`) for repository checks. Use pytest with plain test functions, fixtures, and parametrization for meaningful unit and integration tests as behavior is implemented. Install the development extra (`python -m pip install -e ".[dev]"`) before running checks. Before a model/camera milestone is declared complete, run the corresponding real integration and record hardware and limitations. Do not silently replace a failed backend with synthetic output.
+Prefer the smallest diff that fully solves the problem. Small changes are easier to review, fix, and revert. When two solutions behave the same, choose the one that changes fewer lines and files. Do not refactor, rename, reformat, or add abstractions beyond what the task needs. Split large work into separate small commits.
+
+Run repository checks with the project interpreter: `.venv/bin/python scripts/check.py` on Linux/macOS, `.venv\Scripts\python.exe scripts/check.py` on Windows, or `python scripts/check.py` in an activated environment. `make check` is a POSIX convenience alias. On Windows, `python3` may be a Microsoft Store stub and `make` is often unavailable. Use pytest with plain test functions, fixtures, and parametrization for meaningful unit and integration tests as behavior is implemented. Install the development extra (`python -m pip install -e ".[dev]"`) before running checks. Before a model/camera milestone is declared complete, run the corresponding real integration and record hardware and limitations. Do not silently replace a failed backend with synthetic output.
 
 For durable interface, storage, dependency, or scope decisions, add an ADR using `docs/templates/DECISION.md`. Update requirements traceability and `docs/STATUS.md` when completing a task. At session end record what changed, checks and results, unresolved questions, and the exact next action; do not copy transcripts or local machine details.
 
@@ -34,54 +36,48 @@ For durable interface, storage, dependency, or scope decisions, add an ADR using
 
 ## Code style
 
-- Always include type hints for every function parameter and return value, including helpers and tests.
-- Use `-> None` for functions that return no value; implicit `self` and `cls` parameters need no annotation.
-
-- Do not add file-level (module) docstrings unless explicitly requested by the user.
-
-- Use a maximum line length of 120 characters, including indentation.
-- Prefer a single line for calls, expressions, and collections when they fit within 120 characters and remain readable.
-- Do not wrap a short call merely to put its arguments on separate lines.
-- Prefer concise error messages and single-line `raise` statements within the 120-character limit.
-- Shorten redundant wording instead of splitting an error message across adjacent string literals.
-- Preserve the essential cause and recovery action; wrap only when that information cannot fit clearly on one line.
-- Add a blank line after a `return` or `raise` statement when another statement follows, including after a guard clause before execution continues at an outer indentation level.
-- Avoid trailing commas that exist only to force multiline formatting. Wrap when the line exceeds the limit or clarity requires it.
-
-Preferred:
-
-```python
-result = subprocess.run([sys.executable, "-m", "pytest"], cwd=ROOT)
-```
-
-Preferred error-message style:
-
-```python
-raise RuntimeError("Existing .venv is incomplete. Move it aside and rerun the installer.")
-```
-
-Preferred guard-clause spacing:
+- Type hints on every function and method parameter and return value, including helpers and tests. Use `-> None` when nothing is returned. Implicit `self` and `cls` need no annotation.
+- Target 120 characters per line. Up to 130 is fine when it keeps a statement on one line and the file shorter.
+- Prefer single-line statements, calls, and collections unless one line is hard to read. Do not wrap short calls or add trailing commas just to force multiline formatting.
+- Keep log strings and error messages on one line. Shorten redundant wording instead of splitting a message across string literals, but keep the cause and recovery action.
+- Add a blank line after `return` or `raise` when another statement follows, including after a guard clause. Add a blank line before a comment unless it is the first line of a block. No extra blank line is needed at the end of a function or file.
+- Use self-explanatory names. Avoid single letters and abbreviations except conventional loop indices, and include units where they matter (for example `timeout_seconds`).
 
 ```python
 if privacy_main():
     return 1
 
+# Scan index blobs too, so a cleaned worktree cannot hide a staged secret.
 failures = []
+raise RuntimeError("Existing .venv is incomplete. Move it aside and rerun the installer.")
 ```
 
-Apply the same spacing after `raise`. No extra blank line is needed solely at the end of a function or file.
+## Docstrings
+
+Do not write docstrings during development. Add them before committing (the `/commit` skill does this) for functions, methods, and classes in the change, except tests. Never add a file-level (module) docstring. Keep them short: one to three lines of explanation (one is best), an `Args:` section with one line per argument, and a `Returns:` section. Do not document raised exceptions.
+
+```python
+def filter_candidates(candidates: list[Candidate], threshold: float = 0.5) -> list[Candidate]:
+    """Keep candidates whose similarity score reaches the threshold.
+
+    Args:
+        candidates (list[Candidate]): Candidates to filter.
+        threshold (float, optional): Minimum similarity score to keep. Defaults to 0.5.
+
+    Returns:
+        list[Candidate]: Candidates at or above the threshold, in original order.
+    """
+```
 
 ## Import ordering
 
-Use three import blocks, separated by one blank line:
+Use three blocks separated by one blank line, sorted alphabetically within each block. Never use wildcard (`*`) imports.
 
-1. Plain `import package` statements for standard-library and third-party packages.
-2. `from package import name` statements for standard-library and third-party packages.
-3. Imports from project-local modules, including relative imports.
+1. `import package` for standard-library and third-party packages, one per line.
+2. `from package import name` for standard-library and third-party packages.
+3. Project-local imports (`sketchloop` and relative imports), including plain local imports.
 
-Sort each block alphabetically by module/package path, and sort multiple imported names alphabetically.
-Keep one plain import per line. Omit empty blocks. Required `from __future__` imports remain first,
-in their own block. Keep project-local plain imports in the project-local block as well.
+Omit empty blocks. Sort multiple imported names alphabetically. `from __future__` imports come first in their own block.
 
 ```python
 import os

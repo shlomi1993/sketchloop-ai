@@ -25,10 +25,10 @@ T01a: define image/artifact, guidance, generation result, and iteration contract
 
 | Question | Needed by | Safe progress meanwhile |
 | --- | --- | --- |
-| Target OS, camera, compute/accelerator and memory? | Real adapters, T02/T03 | Core contracts, synthetic image fixtures, orchestration tests |
-| Local inference or remote model? Model identity, license, cost and reproducibility constraints? | T03 | Capability abstraction; backend comparison criteria |
+| ~~Target OS, camera, compute?~~ Answered: Windows laptop with no GPU, laptop camera or USB webcam. A GPU or Colab may become available later. | Real adapters, T02/T03 | Core contracts, synthetic image fixtures, orchestration tests |
+| Model identity, license, cost, and reproducibility constraints? With no local GPU, the first backend must run acceptably on CPU or on Colab, so generation should not assume in-process local inference. | T03 | Capability abstraction; researcher comparison of CPU-feasible and Colab-hosted options |
 | UI toolkit and intended local deployment? | T06 | Framework-independent application service |
-| Durable store format and optional experiment tracker? | T05 | Define record semantics and artifact lifecycle |
+| Durable store format and optional experiment tracker? | T05 | Define record semantics and artifact lifecycle. During T01, have the researcher compare MLflow tracking with a filesystem store before building one |
 | Measured latency target? | T08 | Instrument stages; no invented real-time claim |
 | Public software license? | Distribution | Develop without asserting an unchosen license |
 
