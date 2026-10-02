@@ -8,13 +8,13 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, get_args
 
+
 # Persisted records carry this version so later readers can migrate older runs.
 SCHEMA_VERSION: Final = 1
 ControlValue: TypeAlias = bool | int | float | str
 ColorMode: TypeAlias = Literal["L", "RGB", "RGBA"]
 ExecutionKind: TypeAlias = Literal["fake", "in_process", "remote"]
-IssueCode: TypeAlias = Literal["unknown_control", "wrong_type", "out_of_range", "invalid_choice", "unsupported_feature",
-                               "too_many_candidates"]
+IssueCode: TypeAlias = Literal["unknown_control", "wrong_type", "out_of_range", "invalid_choice", "unsupported_feature", "too_many_candidates"]
 
 # Formats checked with fullmatch, so the patterns need no anchors.
 _CONTROL_NAME = re.compile(r"[a-z][a-z0-9_]*")
@@ -45,7 +45,6 @@ class ValidationIssue:
     """
     One problem found while validating a request against backend capabilities.
     """
-
     field: str
     code: IssueCode
     message: str
@@ -100,7 +99,6 @@ class ImageRef:
     """
     Reference to a stored image by relative path, size, color mode, media type, and checksum.
     """
-
     path: str
     width: int
     height: int
@@ -126,7 +124,6 @@ class Guidance:
     """
     Text guidance and named controls the person supplies for generation.
     """
-
     prompt: str
     negative_prompt: str | None = None
     controls: Mapping[str, ControlValue] = field(default_factory=dict)
@@ -146,7 +143,6 @@ class GenerationRequest:
     """
     Everything a generator needs to produce candidates from a sketch.
     """
-
     sketch: ImageRef
     guidance: Guidance
     num_candidates: int = 1
@@ -162,7 +158,6 @@ class BackendIdentity:
     """
     Which adapter and model produced a result, and how it ran.
     """
-
     adapter: str
     adapter_version: str
     execution: ExecutionKind
@@ -189,7 +184,6 @@ class EffectiveSettings:
     """
     Settings the backend reports it actually used, including defaults it applied.
     """
-
     prompt: str | Unavailable
     negative_prompt: str | None | Unavailable
     controls: Mapping[str, ControlValue | Unavailable]
@@ -204,7 +198,6 @@ class Candidate:
     """
     One generated alternative with its image and effective seed.
     """
-
     id: str = field(default_factory=_new_id)
     index: int
     image: ImageRef
@@ -219,7 +212,6 @@ class GenerationResult:
     """
     Candidates from one generation call plus the backend and effective settings.
     """
-
     candidates: tuple[Candidate, ...]
     backend: BackendIdentity
     effective: EffectiveSettings
@@ -241,7 +233,6 @@ class Iteration:
     """
     One round of the loop, linking a request, its result, and the parent iteration.
     """
-
     schema_version: int = SCHEMA_VERSION
     id: str = field(default_factory=_new_id)
     parent_id: str | None
@@ -260,7 +251,6 @@ class SelectionEvent:
     """
     The person's explicit choice of candidates, or an explicit choice of none.
     """
-
     schema_version: int = SCHEMA_VERSION
     id: str = field(default_factory=_new_id)
     iteration_id: str
