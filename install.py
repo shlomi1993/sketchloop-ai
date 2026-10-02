@@ -1,5 +1,4 @@
 import os
-import shlex
 import subprocess
 import sys
 import venv
@@ -12,9 +11,9 @@ VENV = ROOT / ".venv"
 ENV_NAME = "sketchloop-ai"
 
 
-def run(label: str, command: str) -> None:
+def run(label: str, *command: str | Path) -> None:
     print(label, flush=True)
-    subprocess.run(shlex.split(command), cwd=ROOT, check=True)
+    subprocess.run(command, cwd=ROOT, check=True)
 
 
 def update_environment_prompt(environment: Path) -> None:
@@ -42,26 +41,19 @@ def main() -> int:
 
             print("Reusing .venv.", flush=True)
         else:
-            run("Creating .venv...", f"{shlex.quote(sys.executable)} -m venv --prompt {ENV_NAME} {shlex.quote(str(VENV))}")
+            run("Creating .venv...", sys.executable, "-m", "venv", "--prompt", ENV_NAME, VENV)
 
-        executable = shlex.quote(str(python))
         interpreter_check = (
             "import sys; from pathlib import Path; "
             "valid = sys.version_info >= (3, 11) and sys.prefix != sys.base_prefix "
             "and Path(sys.prefix).resolve() == Path(sys.argv[1]).resolve(); "
             "sys.exit(0 if valid else 'Invalid .venv: move it aside and rerun the installer.')"
         )
-        run(
-            "Checking the environment interpreter...",
-            f"{executable} -c {shlex.quote(interpreter_check)} {shlex.quote(str(VENV))}",
-        )
+        run("Checking the environment interpreter...", python, "-c", interpreter_check, VENV)
         update_environment_prompt(VENV)
-        run(
-            "Installing the project and development dependencies...",
-            f'{executable} -m pip --disable-pip-version-check install -e ".[dev]"',
-        )
-        run("Checking dependency compatibility...", f"{executable} -m pip check")
-        run("Running readiness tests...", f"{executable} -m pytest -q tests/test_environment.py")
+        run("Installing dependencies...", python, "-m", "pip", "--disable-pip-version-check", "install", "-e", ".[dev]")
+        run("Checking dependency compatibility...", python, "-m", "pip", "check")
+        run("Running readiness tests...", python, "-m", "pytest", "-q", "tests/test_environment.py")
 
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         print("Installation did not complete: " + str(exc), file=sys.stderr)

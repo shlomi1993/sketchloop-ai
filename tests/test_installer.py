@@ -11,23 +11,13 @@ from pathlib import Path
 
 
 @pytest.fixture
-def run_command() -> Callable[[str, str], None]:
+def run_command() -> Callable[..., None]:
     return runpy.run_path(str(Path(__file__).resolve().parents[1] / "install.py"))["run"]
 
 
-def test_command_preserves_quoted_arguments(tmp_path: Path, run_command: Callable[[str, str], None]) -> None:
-    output = tmp_path / "directory with spaces" / "result.txt"
-    output.parent.mkdir()
-    value = "literal ; $variable 'quoted' \\path"
-    code = "import sys; from pathlib import Path; Path(sys.argv[1]).write_text(sys.argv[2])"
-    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}"
-    run_command("Checking quoted arguments", f"{command} {shlex.quote(str(output))} {shlex.quote(value)}")
-    assert output.read_text() == value
-
-
-def test_failed_command_propagates(run_command: Callable[[str, str], None]) -> None:
+def test_failed_command_propagates(run_command: Callable[..., None]) -> None:
     with pytest.raises(subprocess.CalledProcessError) as error:
-        run_command("Checking failure handling", f'{shlex.quote(sys.executable)} -c "raise SystemExit(7)"')
+        run_command("Checking failure handling", sys.executable, "-c", "raise SystemExit(7)")
 
     assert error.value.returncode == 7
 
