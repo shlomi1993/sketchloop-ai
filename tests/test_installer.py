@@ -19,7 +19,7 @@ def test_failed_command_propagates(run_command: Callable[..., None]) -> None:
     with pytest.raises(subprocess.CalledProcessError) as error:
         run_command("Checking failure handling", sys.executable, "-c", "raise SystemExit(7)")
 
-    assert error.value.returncode == 7
+    assert error.value.returncode == 7, f"Expected exit code 7, got {error.value.returncode}"
 
 
 def test_refresh_existing_environment_prompt(tmp_path: Path) -> None:
@@ -29,10 +29,10 @@ def test_refresh_existing_environment_prompt(tmp_path: Path) -> None:
     marker.write_text("preserved")
     installer = runpy.run_path(str(Path(__file__).resolve().parents[1] / "install.py"))
     installer["update_environment_prompt"](environment)
-    assert marker.read_text() == "preserved"
-    assert "prompt = 'sketchloop-ai'" in (environment / "pyvenv.cfg").read_text()
+    assert marker.read_text() == "preserved", "Refreshing the prompt must keep existing files"
+    assert "prompt = 'sketchloop-ai'" in (environment / "pyvenv.cfg").read_text(), "pyvenv.cfg must get the new prompt"
     if os.name == "nt":
-        assert "sketchloop-ai" in (environment / "Scripts/activate.bat").read_text()
+        assert "sketchloop-ai" in (environment / "Scripts/activate.bat").read_text(), "activate.bat must use the new prompt"
         return
 
     activate = shlex.quote(str(environment / "bin/activate"))
@@ -40,5 +40,5 @@ def test_refresh_existing_environment_prompt(tmp_path: Path) -> None:
     command = f'. {activate} && printf "%s\\n" "$VIRTUAL_ENV_PROMPT" && python -c {code}'
     result = subprocess.run(["sh", "-c", command], capture_output=True, text=True, check=True)
     lines = result.stdout.splitlines()
-    assert "sketchloop-ai" in lines[0]
-    assert Path(lines[1]).resolve() == environment.resolve()
+    assert "sketchloop-ai" in lines[0], f"Activated prompt must be sketchloop-ai, got {lines[0]!r}"
+    assert Path(lines[1]).resolve() == environment.resolve(), f"Activation must select the venv, got {lines[1]!r}"
