@@ -8,6 +8,7 @@ from sketchloop.domain import (BackendIdentity, Candidate, ControlValue, Effecti
                                GenerationResult, ImageRef, Unavailable)
 from sketchloop.generation import ControlSpec, GenerationOutput, GeneratorCapabilities, validate_request
 
+# Controls typical of an image-to-image diffusion backend, so tests exercise realistic validation.
 _DEFAULT_CONTROLS = (ControlSpec(name="steps", kind="int", minimum=1, maximum=50, default=4),
                      ControlSpec(name="guidance_scale", kind="float", minimum=0, maximum=20, default=7.5),
                      ControlSpec(name="strength", kind="float", minimum=0, maximum=1, default=0.75))
@@ -16,14 +17,17 @@ _DEFAULT_CAPABILITIES = GeneratorCapabilities(controls=_DEFAULT_CONTROLS, max_ca
 
 
 class FakeGenerator:
-    """Deterministic test-only generator that labels its output as fake."""
+    """
+    Deterministic test-only generator that labels its output as fake.
+    """
 
     def __init__(self, capabilities: GeneratorCapabilities | None = None, *, size: tuple[int, int] = (8, 8)) -> None:
         self._capabilities = capabilities or _DEFAULT_CAPABILITIES
         self._size = size
 
     def capabilities(self) -> GeneratorCapabilities:
-        """Return the fake backend's capabilities.
+        """
+        Return the fake backend's capabilities.
 
         Returns:
             GeneratorCapabilities: Supported controls and limits.
@@ -31,7 +35,8 @@ class FakeGenerator:
         return self._capabilities
 
     def generate(self, request: GenerationRequest) -> GenerationOutput:
-        """Validate the request and render deterministic grayscale images derived from it.
+        """
+        Validate the request and render deterministic grayscale images derived from it.
 
         Args:
             request (GenerationRequest): Request to generate from.
@@ -39,9 +44,12 @@ class FakeGenerator:
         Returns:
             GenerationOutput: Candidates and their image bytes.
         """
+        # Validate like a real backend, then fill in defaults so the effective settings are complete.
         validate_request(request, self._capabilities)
         defaults = {spec.name: spec.default for spec in self._capabilities.controls if spec.default is not None}
         controls = defaults | dict(request.guidance.controls)
+
+        # Render one image per candidate, giving each its own seed so the outputs differ.
         candidates = []
         payloads = {}
         for index in range(request.num_candidates):
@@ -53,6 +61,7 @@ class FakeGenerator:
             candidates.append(Candidate(id=candidate_id, index=index, image=image, seed=seed))
             payloads[image.path] = payload
 
+        # Label the backend as fake so its output is never mistaken for a real model run.
         backend = BackendIdentity(adapter="sketchloop.fake", adapter_version="1", execution="fake",
                                   model_id=Unavailable("fake backend has no model"))
         prompt, negative_prompt = request.guidance.prompt, request.guidance.negative_prompt
@@ -61,9 +70,12 @@ class FakeGenerator:
         return GenerationOutput(result=result, payloads=payloads)
 
     def _render(self, request: GenerationRequest, controls: Mapping[str, ControlValue], index: int, seed: int) -> bytes:
+        # Hash every input that affects the output, so identical requests give identical bytes.
         material = {"sketch": request.sketch.sha256, "prompt": request.guidance.prompt, "controls": dict(controls),
                     "negative_prompt": request.guidance.negative_prompt, "index": index, "seed": seed}
         digest = hashlib.sha256(json.dumps(material, sort_keys=True, separators=(",", ":")).encode()).digest()
+
+        # Stretch the digest into enough pixel bytes and prefix a binary PGM header.
         width, height = self._size
         pixel_count = width * height
         blocks = (hashlib.sha256(digest + block.to_bytes(4, "big")).digest() for block in range(pixel_count // 32 + 1))

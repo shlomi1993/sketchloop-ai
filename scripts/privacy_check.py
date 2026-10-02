@@ -1,4 +1,6 @@
-"""Check public worktree/index content without printing sensitive matches."""
+"""
+Check public worktree/index content without printing sensitive matches.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +11,8 @@ from pathlib import Path, PurePosixPath
 ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_DIRS = {"private", "data", "runs", "models", "tmp", "output", ".dist"}
 PRIVATE_SUFFIXES = {".pdf", ".safetensors", ".ckpt", ".pt", ".pth"}
+
+# Label each pattern by what it suggests, so findings can be reported without echoing the match.
 PATTERNS = {
     "email address": re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"),
     "personal home path": re.compile(r"(?:/(?:Users|home)/|[A-Za-z]:\\Users\\)[^\s/\\]+"),
@@ -23,13 +27,16 @@ def git(*args: str, root: Path = ROOT) -> bytes:
 
 
 def public_paths(root: Path = ROOT) -> list[str]:
-    """Include tracked and unignored untracked files; never traverse ignored data."""
+    """
+    Include tracked and unignored untracked files; never traverse ignored data.
+    """
     raw = git("ls-files", "--cached", "--others", "--exclude-standard", "-z", root=root)
     return sorted(set(p.decode("utf-8") for p in raw.split(b"\0") if p))
 
 
 def is_public_article(name: str) -> bool:
-    """Tell whether a path is an openly licensed article PDF allowed for publication.
+    """
+    Tell whether a path is an openly licensed article PDF allowed for publication.
 
     Args:
         name (str): Repository-relative POSIX path.
@@ -42,9 +49,11 @@ def is_public_article(name: str) -> bool:
 
 
 def path_findings(name: str) -> list[str]:
+    # Openly licensed article PDFs are the one allowed exception to the PDF rule.
     if is_public_article(name):
         return []
 
+    # Flag model weights, PDFs, private data folders, and env files by name alone, case-insensitively.
     path = PurePosixPath(name.lower())
     if (
         path.suffix in PRIVATE_SUFFIXES
@@ -56,8 +65,11 @@ def path_findings(name: str) -> list[str]:
 
 
 def content_findings(data: bytes) -> list[str]:
+    # Detect PDFs by magic bytes so a renamed source document is still caught.
     if b"%PDF-" in data[:1024]:
         return ["PDF content (including renamed source documents)"]
+
+    # Only text content can be pattern-matched.
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
@@ -66,10 +78,13 @@ def content_findings(data: bytes) -> list[str]:
 
 
 def check(root: Path = ROOT) -> list[str]:
+    # Scan worktree files that a commit could publish.
     findings = []
     for name in public_paths(root):
         path = root / name
         issues = path_findings(name)
+
+        # Never follow a symlink, since its target may lie outside the repository.
         if path.is_symlink():
             issues.append("symlink requires explicit publication review")
         elif path.is_file() and not is_public_article(name):
@@ -79,12 +94,15 @@ def check(root: Path = ROOT) -> list[str]:
     # Scan index blobs too: a cleaned worktree must not hide an older staged secret.
     entries = git("ls-files", "--stage", "-z", root=root).split(b"\0")
     for entry in filter(None, entries):
+        # Each entry is "mode object stage<TAB>path".
         metadata, raw_name = entry.split(b"\t", 1)
         mode, object_id, stage = metadata.decode("ascii").split()
         name = raw_name.decode("utf-8")
         issues = path_findings(name)
         if stage != "0":
             issues.append("unresolved merge entry")
+
+        # Symlink and submodule entries have no file content to scan, so they need a human look.
         if mode in {"120000", "160000"}:
             issues.append("symlink/submodule requires explicit publication review")
         elif not is_public_article(name):
@@ -94,6 +112,7 @@ def check(root: Path = ROOT) -> list[str]:
 
 
 def main() -> int:
+    # List only the file and finding label, never the matched text.
     findings = check()
     if findings:
         print("Publication guard failed (matched content is withheld):")

@@ -1,1 +1,3 @@
-"""SketchLoop research library namespace; application implementation is pending."""
+"""
+SketchLoop research library namespace; application implementation is pending.
+"""
