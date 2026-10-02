@@ -2,7 +2,7 @@
 
 ## Current state
 
-Development environment and project documentation only. No application code exists yet: capture, preprocessing, generation, orchestration, storage, and UI are all unimplemented, and interfaces in the design documents are proposals.
+T01a is done: typed domain records, the generator contract with capability validation, and a labeled deterministic fake adapter ([design](design/t01a-contracts.md), [ADR 0005](decisions/0005-domain-records-and-generator-contract.md)). T01 is not fully done. Capture, preprocessing, real generation, orchestration, storage, and UI are unimplemented, and no real model has run.
 
 In place:
 - Installer (`install.py`), offline checks (`scripts/check.py`: publication guard, syntax, TOML, Markdown links, Ruff lint, pytest), and GitHub Actions CI for Python 3.11/3.12.
@@ -14,15 +14,15 @@ Known hardware: Windows laptop without a GPU, laptop camera or USB webcam. A GPU
 
 ## Next action
 
-Start T01a in [ROADMAP.md](ROADMAP.md): typed domain contracts and synthetic adapter contract tests. In parallel, the researcher can compare MLflow with a filesystem store. The foundational paper is summarized in [research/sde-sketching-paper.md](research/sde-sketching-paper.md).
+Finish T01 (T01b in [ROADMAP.md](ROADMAP.md)): record research findings and the hardware, first-model, and UI decisions. In parallel, the researcher can compare MLflow with a filesystem store. The foundational paper is summarized in [research/sde-sketching-paper.md](research/sde-sketching-paper.md).
 
 ## Open questions
 
-First real model (CPU-feasible or Colab-hosted), UI toolkit, store format, and software license. None blocks T01a. See the roadmap for when each is needed.
+First real model (CPU-feasible or Colab-hosted), UI toolkit, store format, and software license. None blocks T01b. See the roadmap for when each is needed.
 
 ## Validation
 
-On Windows 11 with Python 3.12, `.venv\Scripts\python.exe scripts/check.py` passes all checks and 19 tests. The installer was verified earlier on Python 3.14 in a fresh copy, but not rerun on Windows. Hosted CI has not run yet. No camera or model behavior has been tested.
+On Windows 11 with Python 3.12, `.venv\Scripts\python.exe scripts/check.py` passes all checks and 29 tests. The installer was verified earlier on Python 3.14 in a fresh copy, but not rerun on Windows. Hosted CI has not run yet. No camera or model behavior has been tested.
 
 ## Handoff discipline
 
