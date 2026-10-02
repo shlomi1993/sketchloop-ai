@@ -14,7 +14,9 @@ SCHEMA_VERSION: Final = 1
 ControlValue: TypeAlias = bool | int | float | str
 ColorMode: TypeAlias = Literal["L", "RGB", "RGBA"]
 ExecutionKind: TypeAlias = Literal["fake", "in_process", "remote"]
-IssueCode: TypeAlias = Literal["unknown_control", "wrong_type", "out_of_range", "invalid_choice", "unsupported_feature", "too_many_candidates"]
+IssueCode: TypeAlias = Literal[
+    "unknown_control", "wrong_type", "out_of_range", "invalid_choice", "unsupported_feature", "too_many_candidates"
+]
 
 # Formats checked with fullmatch, so the patterns need no anchors.
 _CONTROL_NAME = re.compile(r"[a-z][a-z0-9_]*")
