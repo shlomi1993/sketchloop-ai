@@ -14,7 +14,7 @@ Hint from the user: $ARGUMENTS
 3. Run the full check with the project interpreter (`.venv/Scripts/python.exe scripts/check.py` on Windows, `.venv/bin/python scripts/check.py` elsewhere). If it fails, stop and report. Do not commit around a failure.
 4. Stage the chosen files by name. Avoid `git add -A` unless every change belongs in the commit.
 5. Delegate a review of the staged diff to the `privacy-reviewer` subagent. If it reports findings, stop and show them to the user.
-6. Read `git log --oneline -10` and match its style. Write a short imperative subject (about 50 characters, no trailing period). Add a body when the reason is not obvious. Say what changed and why, the task and requirement IDs if any, and the checks that passed.
-7. End the message with the co-author trailer that the current session's attribution instructions specify.
+6. Read `git log --oneline -10` and match its style. Write the message as one imperative sentence (no trailing period, no body), naming the task ID if there is one.
+7. Do not add co-author or attribution trailers. Show the proposed message to the user and wait for approval before committing.
 8. Commit with a heredoc or message file so formatting survives. Never use `--no-verify`, never amend an existing commit, and never push unless the user explicitly asks.
 9. Show the resulting `git log --oneline -1` and a one-line summary.
