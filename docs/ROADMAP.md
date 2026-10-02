@@ -4,7 +4,7 @@ All application tasks below are pending. Environment setup is complete; task com
 
 | Task | Proposal stage | Dependencies | Concrete completion evidence | Requirements |
 | --- | --- | --- | --- | --- |
-| T01 | Month 1: literature, requirements, architecture | None | Read foundational research; record findings separately from proposal summaries. Define typed image/guidance/candidate/iteration contracts and fake adapters; document hardware/model/UI questions and decisions. Offline contract tests pass. | R02, R03, R08 |
+| T01 | Month 1: literature, requirements, architecture | None | Read foundational research; record findings separately from proposal summaries. Define typed image/guidance/candidate/iteration contracts and fake adapters; document hardware/model/UI questions and decisions. Offline contract tests pass. T01a (contracts and fake adapter) is done. Research findings and the hardware/model/UI decisions remain. | R02, R03, R08 |
 | T02 | Month 2: camera and preprocessing | T01 | Capture a real physical sketch; preserve raw image; demonstrate selected preprocessing operations and replaceable file-input test source. Camera disconnect and invalid-image behavior verified. | R01 |
 | T03 | Month 2: first generative baseline | T01, T02 for camera demonstration | Choose and document one real sketch-conditioned backend; generate/display an output from camera input. Record model/version/settings and timing; distinguish real and fake execution. | R02, R03, R09 |
 | T04 | Month 3: iterative workflow | T03 | Multiple alternatives, explicit human selection, changed sketch/prompt/parameters, and successive manual iterations. Evaluation interface independent of generation; no-op scorer allowed. | R04, R05 |
@@ -19,7 +19,7 @@ Model/library research can proceed alongside offline contracts. Introduce enough
 
 ## Next bounded task
 
-T01a: define image/artifact, guidance, generation result, and iteration contracts with explicit capability validation. Write synthetic contract tests that reject unsupported controls and invalid candidate selection. Implement only a deterministic test adapter, label it clearly, and preserve the real-model requirement in T03. Do not select hardware-dependent packages until their suitability is known.
+T01b: finish T01 by recording research findings and the hardware, first-model, and UI questions and decisions. T01a (typed contracts, capability validation, and the labeled fake adapter) is done; see [design/t01a-contracts.md](design/t01a-contracts.md).
 
 ## Open decisions
 

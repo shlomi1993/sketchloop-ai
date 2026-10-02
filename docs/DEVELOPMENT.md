@@ -65,8 +65,6 @@ Use pytest test functions, plain assertions, `tmp_path` for temporary files, and
 
 `AGENTS.md` is the single source for code style, docstrings, and import ordering. `scripts/check.py` runs `ruff check` (pinned in the `dev` extra) for pyflakes errors, wildcard imports, missing type hints (`ANN`), and the 130-character hard limit. The 120-character target, blank-line rules, import blocks, and naming are not machine-checked and rely on review. The Ruff formatter is not enforced. See [ADR 0004](decisions/0004-research-workspace-and-tooling.md).
 
-The installer's `run(label: str, command: str) -> None` accepts a POSIX-quoted command string, parsed with `shlex.split` and executed without a shell on all platforms. Quote dynamic arguments with `shlex.quote`; shell operators and variable expansion are not supported.
-
 ## Coding agents
 
 `AGENTS.md` is the single working agreement for all coding agents. Tool-specific entry points only import it and add tool mechanics, so shared rules are never duplicated. See [ADR 0003](decisions/0003-claude-code-environment.md).

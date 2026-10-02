@@ -1,6 +1,6 @@
 # Experiment records and reproducibility
 
-Status: proposed implementation contract derived from R06; exact serialization is decided during T01/T05. This document adds engineering detail to the source requirement and does not describe an implemented store.
+Status: proposed implementation contract derived from R06; exact serialization is decided during T01/T05. This document adds engineering detail to the source requirement and does not describe an implemented store. The first in-memory records for guidance, generation, candidates, iterations, and selection are specified in [the T01a design](design/t01a-contracts.md).
 
 ## Minimum information
 
