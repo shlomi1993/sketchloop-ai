@@ -1,7 +1,3 @@
-"""
-Fast installation checks; no camera, model, credentials, or network required.
-"""
-
 from importlib.metadata import version
 from pathlib import Path
 

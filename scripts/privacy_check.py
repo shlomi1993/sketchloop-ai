@@ -1,7 +1,3 @@
-"""
-Check public worktree/index content without printing sensitive matches.
-"""
-
 from __future__ import annotations
 
 import re

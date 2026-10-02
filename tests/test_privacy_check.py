@@ -6,10 +6,8 @@ from pathlib import Path
 from privacy_check import check, content_findings, path_findings
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["project.pdf", "copies/brief.PDF", "runs/run/image.png", ".env.local", "docs/articles/nested/paper.pdf", "docs/paper.pdf"],
-)
+@pytest.mark.parametrize("name", ["project.pdf", "copies/brief.PDF", "runs/run/image.png", ".env.local",
+                                  "docs/articles/nested/paper.pdf", "docs/paper.pdf"],)
 def test_private_artifact_paths(name: str) -> None:
     """
     Private artifact paths must be flagged by name alone.
