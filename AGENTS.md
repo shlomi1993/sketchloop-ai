@@ -41,6 +41,7 @@ For durable interface, storage, dependency, or scope decisions, add an ADR using
 - Prefer single-line statements, calls, and collections unless one line is hard to read. Do not wrap short calls or add trailing commas just to force multiline formatting.
 - Keep log strings and error messages on one line. Shorten redundant wording instead of splitting a message across string literals, but keep the cause and recovery action.
 - Add a blank line after `return` or `raise` when another statement follows, including after a guard clause. Add a blank line before a comment unless it is the first line of a block. No extra blank line is needed at the end of a function or file.
+- In tests, give every `assert` a short message that says what went wrong, for example `assert seeds == [7, 8], f"Expected seed + index, got {seeds}"`.
 - Use self-explanatory names. Avoid single letters and abbreviations except conventional loop indices, and include units where they matter (for example `timeout_seconds`).
 
 ```python

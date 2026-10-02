@@ -11,27 +11,27 @@ from privacy_check import check, content_findings, path_findings
     ["project.pdf", "copies/brief.PDF", "runs/run/image.png", ".env.local", "docs/articles/nested/paper.pdf", "docs/paper.pdf"],
 )
 def test_private_artifact_paths(name: str) -> None:
-    assert path_findings(name)
+    assert path_findings(name), f"{name} must be flagged as private"
 
 
 @pytest.mark.parametrize("name", ["docs/PROJECT.md", ".env.example", "docs/articles/Open Paper.pdf"])
 def test_public_paths(name: str) -> None:
-    assert not path_findings(name)
+    assert not path_findings(name), f"{name} must be publishable"
 
 
 def test_renamed_pdf() -> None:
-    assert content_findings(b"%P" + b"DF-1.7\nprivate source")
+    assert content_findings(b"%P" + b"DF-1.7\nprivate source"), "PDF content must be flagged even when renamed"
 
 
 @pytest.mark.parametrize("value", ["sample" + "@" + "example.invalid", "/Users" + "/fictional-account/file.txt",
                                    "123" + "456" + "789", "sk-" + "x" * 25, "-----BEGIN " + "PRIVATE KEY-----"],
     ids=["email", "home-path", "identifier", "api-key", "private-key"])
 def test_synthetic_sensitive_patterns(value: str) -> None:
-    assert content_findings(value.encode())
+    assert content_findings(value.encode()), "Sensitive pattern must be flagged"
 
 
 def test_public_project_text() -> None:
-    assert not content_findings(b"R06: preserve model revision and iteration lineage.")
+    assert not content_findings(b"R06: preserve model revision and iteration lineage."), "Plain project text must pass"
 
 
 def test_index_and_ignored_pdf(tmp_path: Path) -> None:
@@ -43,12 +43,12 @@ def test_index_and_ignored_pdf(tmp_path: Path) -> None:
     (tmp_path / "project.pdf").write_bytes(b"%P" + b"DF-1.7\n")
     assert not check(tmp_path), "Ignored private source must not block local work"
     git("add", "-f", "project.pdf")
-    assert any("index project.pdf" in item for item in check(tmp_path))
+    assert any("index project.pdf" in item for item in check(tmp_path)), "Force-staged PDF must be flagged"
     git("rm", "--cached", "project.pdf")
     secret = "sk-" + "x" * 25
     (tmp_path / "notes.md").write_text(secret)
     git("add", "notes.md")
     (tmp_path / "notes.md").write_text("Clean working copy")
     results = check(tmp_path)
-    assert any("index notes.md" in item for item in results)
+    assert any("index notes.md" in item for item in results), "Staged secret must be flagged despite a clean worktree"
     assert not any(secret in item for item in results), "Do not print matches"

@@ -10,11 +10,11 @@ from sketchloop.domain import (ControlValue, GenerationRequest, Guidance, ImageR
 from sketchloop.fakes import FakeGenerator
 from sketchloop.generation import ControlSpec, GenerationOutput, GeneratorCapabilities
 
+
 SKETCH = ImageRef(path="sketches/s1.png", width=8, height=8, mode="L", media_type="image/png", sha256="a" * 64)
 
 
-def make_request(controls: dict[str, ControlValue] | None = None, sketch: ImageRef = SKETCH,
-                 **changes: Any) -> GenerationRequest:
+def make_request(controls: dict[str, ControlValue] | None = None, sketch: ImageRef = SKETCH, **changes: Any) -> GenerationRequest:
     return GenerationRequest(sketch=sketch, guidance=Guidance(prompt="chair", controls=controls or {}), **changes)
 
 
@@ -26,41 +26,52 @@ def test_fake_loop_generates_selects_and_builds_child_iteration() -> None:
     generator = FakeGenerator()
     request = make_request(num_candidates=2, seed=7)
     output = generator.generate(request)
-    assert payloads_of(FakeGenerator().generate(request)) == payloads_of(output)
-    assert payloads_of(generator.generate(dataclasses.replace(request, seed=9))) != payloads_of(output)
+    assert payloads_of(FakeGenerator().generate(request)) == payloads_of(output), "Same request must give same images"
+    assert payloads_of(generator.generate(dataclasses.replace(request, seed=9))) != payloads_of(output), "Seed must change images"
 
     parent = Iteration(parent_id=None, request=request, result=output.result)
     first, second = parent.result.candidates
     checksums = [hashlib.sha256(payload).hexdigest() for payload in payloads_of(output)]
-    assert checksums == [first.image.sha256, second.image.sha256] and [first.seed, second.seed] == [7, 8]
-    assert parent.result.backend.is_fake and isinstance(parent.result.backend.model_id, Unavailable)
-    assert request.guidance.controls == {}
-    assert parent.result.effective.controls == {"steps": 4, "guidance_scale": 7.5, "strength": 0.75}
+    assert checksums == [first.image.sha256, second.image.sha256], "Image checksums must match payload bytes"
+    assert [first.seed, second.seed] == [7, 8], f"Expected seed + index, got {[first.seed, second.seed]}"
+    assert parent.result.backend.is_fake, "Fake backend must label itself as fake"
+    assert isinstance(parent.result.backend.model_id, Unavailable), "Fake model ID must be Unavailable"
+    assert request.guidance.controls == {}, "Requested controls must not gain defaults"
+    effective = parent.result.effective.controls
+    assert effective == {"steps": 4, "guidance_scale": 7.5, "strength": 0.75}, f"Defaults missing from effective: {effective}"
 
     selection = select_candidates(parent, [second.id])
     child_request = make_request({"steps": 20}, sketch=second.image)
     child_result = generator.generate(child_request).result
     child = Iteration(parent_id=selection.iteration_id, request=child_request, result=child_result)
-    assert child.parent_id == parent.id and child.result.effective.controls["steps"] == 20
+    assert child.parent_id == parent.id, "Child must link to its parent iteration"
+    assert child.result.effective.controls["steps"] == 20, "Requested control must override the default"
 
 
 def test_every_unsupported_setting_is_reported_together() -> None:
-    controls = (ControlSpec(name="steps", kind="int", minimum=1, maximum=50),
-                ControlSpec(name="scale", kind="float", minimum=0, maximum=20),
-                ControlSpec(name="sampler", kind="choice", choices=("euler", "ddim")))
-    capabilities = GeneratorCapabilities(controls=controls, max_candidates=8, supports_negative_prompt=False,
-                                         supports_seed=False)
+    controls = (
+        ControlSpec(name="steps", kind="int", minimum=1, maximum=50),
+        ControlSpec(name="scale", kind="float", minimum=0, maximum=20),
+        ControlSpec(name="sampler", kind="choice", choices=("euler", "ddim"))
+    )
+    capabilities = GeneratorCapabilities(controls=controls, max_candidates=8, supports_negative_prompt=False, supports_seed=False)
     invalid = {"steps": 51, "scale": True, "sampler": "x", "eta": 1}
     guidance = Guidance(prompt="chair", negative_prompt="", controls=invalid)
     request = GenerationRequest(sketch=SKETCH, guidance=guidance, num_candidates=9, seed=0)
     with pytest.raises(UnsupportedConfigurationError) as raised:
         FakeGenerator(capabilities).generate(request)
 
-    expected = [("num_candidates", "too_many_candidates"), ("seed", "unsupported_feature"),
-                ("guidance.negative_prompt", "unsupported_feature"), ("guidance.controls.eta", "unknown_control"),
-                ("guidance.controls.sampler", "invalid_choice"), ("guidance.controls.scale", "wrong_type"),
-                ("guidance.controls.steps", "out_of_range")]
-    assert [(issue.field, issue.code) for issue in raised.value.issues] == expected
+    expected = [
+        ("num_candidates", "too_many_candidates"),
+        ("seed", "unsupported_feature"),
+        ("guidance.negative_prompt", "unsupported_feature"),
+        ("guidance.controls.eta", "unknown_control"),
+        ("guidance.controls.sampler", "invalid_choice"),
+        ("guidance.controls.scale", "wrong_type"),
+        ("guidance.controls.steps", "out_of_range")
+    ]
+    actual = [(issue.field, issue.code) for issue in raised.value.issues]
+    assert actual == expected, f"Every issue must be reported in order, got {actual}"
 
 
 def test_select_candidates_rejects_foreign_and_duplicate_ids() -> None:
