@@ -9,11 +9,12 @@ from sketchloop.domain import (BackendIdentity, Candidate, ControlValue, Effecti
 from sketchloop.generation import ControlSpec, GenerationOutput, GeneratorCapabilities, validate_request
 
 # Controls typical of an image-to-image diffusion backend, so tests exercise realistic validation.
-_DEFAULT_CONTROLS = (ControlSpec(name="steps", kind="int", minimum=1, maximum=50, default=4),
-                     ControlSpec(name="guidance_scale", kind="float", minimum=0, maximum=20, default=7.5),
-                     ControlSpec(name="strength", kind="float", minimum=0, maximum=1, default=0.75))
-_DEFAULT_CAPABILITIES = GeneratorCapabilities(controls=_DEFAULT_CONTROLS, max_candidates=8,
-                                              supports_negative_prompt=True, supports_seed=True)
+_DEFAULT_CONTROLS = (
+    ControlSpec(name="steps", kind="int", minimum=1, maximum=50, default=4),
+    ControlSpec(name="guidance_scale", kind="float", minimum=0, maximum=20, default=7.5),
+    ControlSpec(name="strength", kind="float", minimum=0, maximum=1, default=0.75)
+)
+_DEFAULT_CAPABILITIES = GeneratorCapabilities(controls=_DEFAULT_CONTROLS, max_candidates=8, supports_negative_prompt=True, supports_seed=True)
 
 
 class FakeGenerator:
@@ -25,6 +26,7 @@ class FakeGenerator:
         self._capabilities = capabilities or _DEFAULT_CAPABILITIES
         self._size = size
 
+    @property
     def capabilities(self) -> GeneratorCapabilities:
         """
         Return the fake backend's capabilities.

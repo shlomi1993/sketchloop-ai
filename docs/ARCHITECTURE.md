@@ -39,7 +39,7 @@ Create modules when their first vertical slice needs them; empty directory trees
 
 Use typed records and Python protocols or equivalent small interfaces. Prefer plain serializable metadata with schema versions.
 
-T01a (accepted, not implemented) defines `sketchloop.domain`, `sketchloop.generation`, and a labelled fake in `sketchloop.fakes`. See [the T01a design](design/t01a-contracts.md) and [ADR 0005](decisions/0005-domain-records-and-generator-contract.md). Records reference images through `ImageRef`, and bytes stay in transient generation output. `Generator.capabilities()` declares supported controls, `validate_request` reports every unsupported setting, and `generate(request)` returns candidates with adapter-reported effective settings and backend identity. Selection is an explicit event limited to the iteration's candidates. Iteration status, failures, and retries are deferred to T05.
+T01a (accepted, not implemented) defines `sketchloop.domain`, `sketchloop.generation`, and a labelled fake in `sketchloop.fakes`. See [the T01a design](design/t01a-contracts.md) and [ADR 0005](decisions/0005-domain-records-and-generator-contract.md). Records reference images through `ImageRef`, and bytes stay in transient generation output. `Generator.capabilities` declares supported controls, `validate_request` reports every unsupported setting, and `generate(request)` returns candidates with adapter-reported effective settings and backend identity. Selection is an explicit event limited to the iteration's candidates. Iteration status, failures, and retries are deferred to T05.
 
 Later contracts, still proposals:
 

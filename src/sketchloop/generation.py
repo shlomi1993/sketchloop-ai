@@ -11,8 +11,7 @@ from sketchloop.domain import (ControlValue, GenerationRequest, GenerationResult
 ControlKind: TypeAlias = Literal["int", "float", "bool", "choice"]
 
 # Python types each control kind accepts, where float controls also take ints.
-_ACCEPTED_TYPES_BY_KIND: dict[str, tuple[type, ...]] = {"int": (int,), "float": (int, float), "bool": (bool,),
-                                                         "choice": (str,)}
+_ACCEPTED_TYPES_BY_KIND: dict[str, tuple[type, ...]] = {"int": (int,), "float": (int, float), "bool": (bool,), "choice": (str,)}
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -20,7 +19,6 @@ class ControlSpec:
     """
     Describes one backend control: its kind, bounds or choices, and default.
     """
-
     name: str
     kind: ControlKind
     minimum: float | None = None
@@ -52,7 +50,6 @@ class GeneratorCapabilities:
     """
     What a backend supports, used to validate requests before generating.
     """
-
     controls: tuple[ControlSpec, ...]
     max_candidates: int
     supports_negative_prompt: bool
@@ -73,7 +70,6 @@ class GenerationOutput:
     """
     A generation result plus each candidate's image bytes, checked against its checksum.
     """
-
     result: GenerationResult
     payloads: Mapping[str, bytes]
 
@@ -110,7 +106,6 @@ def _control_problem(spec: ControlSpec, value: ControlValue) -> tuple[IssueCode,
     # Numeric values must fall within the declared bounds.
     if spec.minimum is not None and value < spec.minimum:
         return "out_of_range", f"{value} is below the minimum {spec.minimum}."
-
     if spec.maximum is not None and value > spec.maximum:
         return "out_of_range", f"{value} is above the maximum {spec.maximum}."
 
