@@ -13,6 +13,9 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["pytest==9.0.2", "ruff==0.16.9"]
 
+[project.scripts]
+sketchloop = "sketchloop.cli:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["scripts"]
