@@ -7,7 +7,7 @@ Development is incremental. From T01b on, every task ends with a runnable increm
 | Task | Proposal stage | Dependencies | Concrete completion evidence | Requirements | Runnable increment |
 | --- | --- | --- | --- | --- | --- |
 | T01 | Month 1: literature, requirements, architecture | None | Read foundational research; record findings separately from proposal summaries. Define typed image/guidance/candidate/iteration contracts and fake adapters; document hardware/model/UI questions and decisions. Offline contract tests pass. Done: T01a (contracts and fake adapter) and T01b (the `sketchloop` command, research notes, and [ADR 0006](decisions/0006-first-backend-store-and-ui.md)). | R02, R03, R08 | `sketchloop examples/sketch.png` loads an example sketch image, makes fake variations, saves them under `runs/`, and lets the person pick one in the terminal (T01b) |
-| T02a | Month 2: sketch input and preprocessing | T01 | Load a sketch image file; preserve the raw image; demonstrate selected preprocessing operations (crop, perspective, contrast, resize). Invalid-image behavior verified. | R01 | The same command shows the original and preprocessed sketch before generating |
+| T02a | Month 2: sketch input and preprocessing | T01 | Load a sketch image file; preserve the raw image; demonstrate selected preprocessing operations (crop, perspective, contrast, resize). Invalid-image behavior verified. Done: PNG/JPEG loading, grayscale, crop, contrast, and resize with recorded steps, and `--raw` (perspective correction deferred). | R01 | The same command shows the original and preprocessed sketch before generating |
 | T02b | Month 2: webcam capture | T02a | Capture a real physical sketch from the laptop or USB webcam through the same input interface; camera disconnect behavior verified. | R01 | `sketchloop --camera` takes the sketch from the webcam instead of a file |
 | T03 | Month 2: first generative baseline | T01, T02a (T02b for camera demonstration) | Choose and document one real sketch-conditioned backend; generate/display an output from camera input. Record model/version/settings and timing; distinguish real and fake execution. | R02, R03, R09 | The same command makes real AI images from the loaded sketch or webcam capture |
 | T04 | Month 3: iterative workflow | T03 | Multiple alternatives, explicit human selection, changed sketch/prompt/parameters, and successive manual iterations. Evaluation interface independent of generation; no-op scorer allowed. | R04, R05 | Several rounds in one session: pick, change the sketch, prompt, or settings, and run again |
@@ -22,7 +22,7 @@ Model/library research can proceed alongside offline contracts. Introduce enough
 
 ## Next bounded task
 
-T02a: load and preprocess a sketch image file (crop, perspective, contrast, resize), keep the raw image, and show original and preprocessed sketches in the `sketchloop` command before generating.
+T02b: capture a real physical sketch from the laptop or USB webcam through the same input interface (`sketchloop --camera`), with camera disconnect behavior verified.
 
 ## Open decisions
 
