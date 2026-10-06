@@ -147,11 +147,11 @@ class GenerationRequest:
     """
     sketch: ImageRef
     guidance: Guidance
-    num_candidates: int = 1
+    n_candidates: int = 1
     seed: int | None = None
 
     def __post_init__(self) -> None:
-        _require(_is_int(self.num_candidates) and self.num_candidates >= 1, "num_candidates must be an int >= 1.")
+        _require(_is_int(self.n_candidates) and self.n_candidates >= 1, "n_candidates must be an int >= 1.")
         _require(self.seed is None or (_is_int(self.seed) and self.seed >= 0), "seed must be None or an int >= 0.")
 
 
@@ -244,7 +244,7 @@ class Iteration:
     def __post_init__(self) -> None:
         # Block a self-loop in the lineage and a backend that silently returned a different candidate count.
         _require(self.parent_id != self.id, "An iteration cannot be its own parent.")
-        expected, actual = self.request.num_candidates, len(self.result.candidates)
+        expected, actual = self.request.n_candidates, len(self.result.candidates)
         _require(actual == expected, f"Backend returned {actual} candidates but {expected} were requested.")
 
 
