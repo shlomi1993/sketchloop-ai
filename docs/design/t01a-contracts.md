@@ -32,12 +32,12 @@ IssueCode: TypeAlias = Literal["unknown_control", "wrong_type", "out_of_range", 
 | `Unavailable` | `reason: str` | Non-empty reason. |
 | `ImageRef` | `path: str`, `width: int`, `height: int`, `mode: ColorMode`, `media_type: str`, `sha256: str` | `path` is a relative POSIX key under the experiment artifact root: no leading `/`, no `\`, no drive prefix, no empty, `.`, or `..` segments. Sizes are `int` (not `bool`) and at least 1. `media_type` looks like `type/subtype`. `sha256` is 64 lowercase hex characters. |
 | `Guidance` | `prompt: str`, `negative_prompt: str \| None = None`, `controls: Mapping[str, ControlValue] = {}` | `None` means no negative prompt requested, distinct from `""`. Control names match `[a-z][a-z0-9_]*`. Floats are finite. |
-| `GenerationRequest` | `sketch: ImageRef`, `guidance: Guidance`, `num_candidates: int = 1`, `seed: int \| None = None` | `num_candidates` is an `int` of at least 1. `seed` is `None` (backend chooses) or a non-negative `int`, not `bool`. |
+| `GenerationRequest` | `sketch: ImageRef`, `guidance: Guidance`, `n_candidates: int = 1`, `seed: int \| None = None` | `n_candidates` is an `int` of at least 1. `seed` is `None` (backend chooses) or a non-negative `int`, not `bool`. |
 | `BackendIdentity` | `adapter: str`, `adapter_version: str`, `execution: ExecutionKind`, `model_id: str \| Unavailable` | Non-empty strings. Property `is_fake` returns `execution == "fake"`. |
 | `EffectiveSettings` | `prompt: str \| Unavailable`, `negative_prompt: str \| None \| Unavailable`, `controls: Mapping[str, ControlValue \| Unavailable]` | `controls` includes defaults the backend applied. |
 | `Candidate` | `id: str = <uuid4 hex>`, `index: int`, `image: ImageRef`, `seed: int \| Unavailable` | `index` at least 0. An unreported seed is `Unavailable`. |
 | `GenerationResult` | `candidates: tuple[Candidate, ...]`, `backend: BackendIdentity`, `effective: EffectiveSettings` | At least one candidate. Unique IDs and image paths. Indices are `0..n-1` in order. |
-| `Iteration` | `schema_version`, `id: str = <uuid4 hex>`, `parent_id: str \| None`, `request: GenerationRequest`, `result: GenerationResult` | `parent_id != id`. `len(result.candidates) == request.num_candidates`, so returning fewer images is an error. |
+| `Iteration` | `schema_version`, `id: str = <uuid4 hex>`, `parent_id: str \| None`, `request: GenerationRequest`, `result: GenerationResult` | `parent_id != id`. `len(result.candidates) == request.n_candidates`, so returning fewer images is an error. |
 | `SelectionEvent` | `schema_version`, `id: str = <uuid4 hex>`, `iteration_id: str`, `selected_candidate_ids: tuple[str, ...]`, `created_at: datetime = <now, UTC>` | IDs unique, in the order given. Empty means explicit no-selection. `created_at` is timezone-aware. Property `is_no_selection`. |
 
 ```python
@@ -84,7 +84,7 @@ class Generator(Protocol):
     def generate(self, request: GenerationRequest) -> GenerationOutput: ...
 ```
 
-`request_issues` returns every problem, ordered by `num_candidates`, `seed`, `guidance.negative_prompt`, then controls by name. `validate_request` raises `UnsupportedConfigurationError` if any exist.
+`request_issues` returns every problem, ordered by `n_candidates`, `seed`, `guidance.negative_prompt`, then controls by name. `validate_request` raises `UnsupportedConfigurationError` if any exist.
 
 | Rule | Code |
 | --- | --- |
@@ -93,11 +93,11 @@ class Generator(Protocol):
 | Value outside inclusive bounds | `out_of_range` |
 | Choice not allowed | `invalid_choice` |
 | Seed given without `supports_seed`, or negative prompt given without `supports_negative_prompt` | `unsupported_feature` |
-| `num_candidates > max_candidates` | `too_many_candidates` |
+| `n_candidates > max_candidates` | `too_many_candidates` |
 
 `generate` is synchronous so it fits both in-process and remote (Colab) backends. It must call `validate_request` first. For now the adapter builds candidates and uses the path `candidates/<candidate id><ext>`. It does not write storage, score, or select.
 
-Paper parameters map as follows: `steps`, `guidance_scale`, and `strength` are controls. Batch size is `num_candidates`. Seed is `seed`. ControlNet input and CLIP filtering are deferred.
+Paper parameters map as follows: `steps`, `guidance_scale`, and `strength` are controls. Batch size is `n_candidates`. Seed is `seed`. ControlNet input and CLIP filtering are deferred.
 
 ## `src/sketchloop/fakes.py`
 
@@ -146,7 +146,7 @@ Use synthetic values. Compute checksums with `hashlib` or use `"a" * 64`, becaus
 | `ControlSpec` and `GeneratorCapabilities` reject inconsistent specs and duplicate names. | R02, R03 |
 | `FakeGenerator.generate` raises `UnsupportedConfigurationError` for an invalid request. | R02, R03 |
 | The fake is deterministic across instances, and output changes when prompt, a control, seed, or sketch checksum changes. | R02 |
-| The fake returns `num_candidates` candidates with seeds `seed + index`, payloads matching paths and checksums, `is_fake` true, and `Unavailable` model ID. | R02, R04 |
+| The fake returns `n_candidates` candidates with seeds `seed + index`, payloads matching paths and checksums, `is_fake` true, and `Unavailable` model ID. | R02, R04 |
 | With no controls requested, the request controls are empty while effective controls list the defaults. | R02, R03 |
 | `Iteration` rejects a result with fewer candidates than requested and `parent_id == id`. Generated IDs are 32-character lowercase hex and unique. | R04, R08 |
 | `select_candidates` records valid IDs in order and rejects foreign, unknown, duplicate, and empty selections. `record_no_selection` gives `is_no_selection` true and a timezone-aware time. | R04 |

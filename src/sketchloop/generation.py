@@ -125,9 +125,9 @@ def request_issues(request: GenerationRequest, capabilities: GeneratorCapabiliti
     """
     # Check the candidate limit first.
     issues = []
-    if request.num_candidates > capabilities.max_candidates:
-        message = f"Requested {request.num_candidates}, the backend allows at most {capabilities.max_candidates}."
-        issues.append(ValidationIssue(field="num_candidates", code="too_many_candidates", message=message))
+    if request.n_candidates > capabilities.max_candidates:
+        message = f"Requested {request.n_candidates}, the backend allows at most {capabilities.max_candidates}."
+        issues.append(ValidationIssue(field="n_candidates", code="too_many_candidates", message=message))
 
     # Report optional features the backend lacks instead of silently ignoring them.
     if request.seed is not None and not capabilities.supports_seed:

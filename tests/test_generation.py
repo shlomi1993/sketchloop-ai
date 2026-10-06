@@ -33,7 +33,7 @@ def test_fake_loop_generates_selects_and_builds_child_iteration() -> None:
     """
     # The fake must be deterministic per request yet sensitive to the seed.
     generator = FakeGenerator()
-    request = make_request(num_candidates=2, seed=7)
+    request = make_request(n_candidates=2, seed=7)
     output = generator.generate(request)
     assert payloads_of(FakeGenerator().generate(request)) == payloads_of(output), "Same request must give same images"
     assert payloads_of(generator.generate(dataclasses.replace(request, seed=9))) != payloads_of(output), "Seed must change images"
@@ -74,13 +74,13 @@ def test_every_unsupported_setting_is_reported_together() -> None:
     capabilities = GeneratorCapabilities(controls=controls, max_candidates=8, supports_negative_prompt=False, supports_seed=False)
     invalid = {"steps": 51, "scale": True, "sampler": "x", "eta": 1}
     guidance = Guidance(prompt="chair", negative_prompt="", controls=invalid)
-    request = GenerationRequest(sketch=SKETCH, guidance=guidance, num_candidates=9, seed=0)
+    request = GenerationRequest(sketch=SKETCH, guidance=guidance, n_candidates=9, seed=0)
     with pytest.raises(UnsupportedConfigurationError) as raised:
         FakeGenerator(capabilities).generate(request)
 
     # Request-level issues come first, then controls in name order.
     expected = [
-        ("num_candidates", "too_many_candidates"),
+        ("n_candidates", "too_many_candidates"),
         ("seed", "unsupported_feature"),
         ("guidance.negative_prompt", "unsupported_feature"),
         ("guidance.controls.eta", "unknown_control"),
@@ -97,7 +97,7 @@ def test_select_candidates_rejects_foreign_and_duplicate_ids() -> None:
     Selecting a foreign or repeated candidate ID must fail and name that ID.
     """
     # Take a foreign ID from a second generation, since its candidates get fresh IDs.
-    request = make_request(num_candidates=2)
+    request = make_request(n_candidates=2)
     iteration = Iteration(parent_id=None, request=request, result=FakeGenerator().generate(request).result)
     own, foreign = iteration.result.candidates[0].id, FakeGenerator().generate(request).result.candidates[0].id
 
@@ -121,6 +121,6 @@ def test_iteration_rejects_fewer_candidates_than_requested() -> None:
     An iteration must reject a result with fewer candidates than requested.
     """
     # Pair a two-candidate result with a three-candidate request to mimic a backend that returned too few.
-    result = FakeGenerator().generate(make_request(num_candidates=2)).result
+    result = FakeGenerator().generate(make_request(n_candidates=2)).result
     with pytest.raises(InvalidRecordError, match="2 candidates but 3"):
-        Iteration(parent_id=None, request=make_request(num_candidates=3), result=result)
+        Iteration(parent_id=None, request=make_request(n_candidates=3), result=result)
