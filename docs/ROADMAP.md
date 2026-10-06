@@ -6,7 +6,7 @@ Development is incremental. From T01b on, every task ends with a runnable increm
 
 | Task | Proposal stage | Dependencies | Concrete completion evidence | Requirements | Runnable increment |
 | --- | --- | --- | --- | --- | --- |
-| T01 | Month 1: literature, requirements, architecture | None | Read foundational research; record findings separately from proposal summaries. Define typed image/guidance/candidate/iteration contracts and fake adapters; document hardware/model/UI questions and decisions. Offline contract tests pass. T01a (contracts and fake adapter) is done. Research findings and the hardware/model/UI decisions remain. | R02, R03, R08 | `sketchloop examples/sketch.png` loads an example sketch image, makes fake variations, saves them under `runs/`, and lets the person pick one in the terminal (T01b) |
+| T01 | Month 1: literature, requirements, architecture | None | Read foundational research; record findings separately from proposal summaries. Define typed image/guidance/candidate/iteration contracts and fake adapters; document hardware/model/UI questions and decisions. Offline contract tests pass. Done: T01a (contracts and fake adapter) and T01b (the `sketchloop` command, research notes, and [ADR 0006](decisions/0006-first-backend-store-and-ui.md)). | R02, R03, R08 | `sketchloop examples/sketch.png` loads an example sketch image, makes fake variations, saves them under `runs/`, and lets the person pick one in the terminal (T01b) |
 | T02a | Month 2: sketch input and preprocessing | T01 | Load a sketch image file; preserve the raw image; demonstrate selected preprocessing operations (crop, perspective, contrast, resize). Invalid-image behavior verified. | R01 | The same command shows the original and preprocessed sketch before generating |
 | T02b | Month 2: webcam capture | T02a | Capture a real physical sketch from the laptop or USB webcam through the same input interface; camera disconnect behavior verified. | R01 | `sketchloop --camera` takes the sketch from the webcam instead of a file |
 | T03 | Month 2: first generative baseline | T01, T02a (T02b for camera demonstration) | Choose and document one real sketch-conditioned backend; generate/display an output from camera input. Record model/version/settings and timing; distinguish real and fake execution. | R02, R03, R09 | The same command makes real AI images from the loaded sketch or webcam capture |
@@ -22,16 +22,16 @@ Model/library research can proceed alongside offline contracts. Introduce enough
 
 ## Next bounded task
 
-T01b: finish T01 by recording research findings and the hardware, first-model, and UI questions and decisions. T01a (typed contracts, capability validation, and the labeled fake adapter) is done; see [design/t01a-contracts.md](design/t01a-contracts.md).
+T02a: load and preprocess a sketch image file (crop, perspective, contrast, resize), keep the raw image, and show original and preprocessed sketches in the `sketchloop` command before generating.
 
 ## Open decisions
 
 | Question | Needed by | Safe progress meanwhile |
 | --- | --- | --- |
 | ~~Target OS, camera, compute?~~ Answered: Windows laptop with no GPU, laptop camera or USB webcam. A GPU or Colab may become available later. | Real adapters, T02/T03 | Core contracts, synthetic image fixtures, orchestration tests |
-| Model identity, license, cost, and reproducibility constraints? With no local GPU, the first backend must run acceptably on CPU or on Colab, so generation should not assume in-process local inference. | T03 | Capability abstraction; researcher comparison of CPU-feasible and Colab-hosted options |
-| UI toolkit and intended local deployment? | T06 | Framework-independent application service |
-| Durable store format and optional experiment tracker? | T05 | Define record semantics and artifact lifecycle. During T01, have the researcher compare MLflow tracking with a filesystem store before building one |
+| ~~First model?~~ Answered in [ADR 0006](decisions/0006-first-backend-store-and-ui.md): SD 1.5 with ControlNet scribble and an LCM-LoRA CPU mode, about one minute per round as a starting target. | T03 | Capability abstraction; researcher comparison of CPU-feasible and Colab-hosted options |
+| ~~UI toolkit?~~ Answered in [ADR 0006](decisions/0006-first-backend-store-and-ui.md): Gradio as an optional extra. | T06 | Framework-independent application service |
+| ~~Store format?~~ Answered in [ADR 0006](decisions/0006-first-backend-store-and-ui.md): filesystem JSON records and artifacts under `runs/`. | T05 | Define record semantics and artifact lifecycle. During T01, have the researcher compare MLflow tracking with a filesystem store before building one |
 | Measured latency target? | T08 | Instrument stages; no invented real-time claim |
 | Public software license? | Distribution | Develop without asserting an unchosen license |
 
