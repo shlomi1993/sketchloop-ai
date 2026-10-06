@@ -30,6 +30,11 @@ Run the full checks with `python scripts/check.py`. Run just the tests with `pyt
 
 The environment stays in `.venv` and uses the shell prompt name `sketchloop-ai`. Running `python3 install.py` alone prepares it but cannot activate it in the calling terminal. Run `. .venv/bin/activate` afterward, or use the combined command above. Check the selected interpreter with `python -c "import sys; print(sys.prefix)"`, which should point to this repository's `.venv`. Rerunning the installer refreshes the prompt name of an existing environment without removing its packages.
 
+## Try it
+
+Run `sketchloop examples/sketch.png --prompt "modern chair"` in the activated environment. It saves the sketch and four candidates under `runs/` and asks you to pick some by number.
+The images come from a labeled fake backend (deterministic noise), not a real model yet.
+
 ## Using the project environment with Conda
 
 If your terminal shows `(base)`, leave Conda before activating the project environment:

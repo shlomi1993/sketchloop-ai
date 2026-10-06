@@ -8,7 +8,7 @@ version = "0.0.0"
 description = "Modular research infrastructure for iterative sketch-based design with generative AI"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["rich==15.0.0"]
 
 [project.optional-dependencies]
 dev = ["pytest==9.0.2", "ruff==0.16.9"]
