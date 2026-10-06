@@ -13,4 +13,17 @@ The following reading list is preserved from the source proposal (p. 7, §9), wi
 | [OpenCV documentation](https://docs.opencv.org/) | Candidate camera and image-processing toolkit; not mandated. |
 | [Gradio documentation](https://www.gradio.app/docs/) | Candidate research UI toolkit; not mandated. |
 
+## Sources added by research notes
+
+| Reference | Role in this project |
+| --- | --- |
+| [Latent consistency models](https://arxiv.org/abs/2310.04378), Luo et al. (2023), and [LCM-LoRA](https://arxiv.org/abs/2311.05556), Luo et al. (2023) | Few-step sampling for CPU generation. See [first-model options](research/first-model-options.md). |
+| [T2I-Adapter](https://arxiv.org/abs/2302.08453), Mou et al. (2023) | Lightweight sketch conditioning, fallback backend. |
+| [SDXS: Real-time one-step latent diffusion models with image conditions](https://arxiv.org/abs/2403.16627), Song et al. (2024) | One-step sketch ControlNet, CPU speed fallback. |
+| [One-step image translation with text-to-image models](https://arxiv.org/abs/2403.12036), Parmar et al. (2024) | pix2pix-turbo sketch-to-image, GPU-only reference. |
+| [ControlNet v1.1 scribble model card](https://huggingface.co/lllyasviel/control_v11p_sd15_scribble) and [Stable Diffusion v1.5 model card](https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5) | Recommended first backend weights and license (CreativeML OpenRAIL-M). |
+| [Diffusers reproducibility guide](https://huggingface.co/docs/diffusers/main/en/using-diffusers/reusing_seeds) | Seed and determinism limits for replay (R06). |
+| [MLflow backend stores](https://mlflow.org/docs/latest/self-hosting/architecture/backend-store/) | File backend status and default SQLite store. See [store options](research/experiment-store-options.md). |
+| [Streamlit](https://docs.streamlit.io/) and [NiceGUI](https://nicegui.io/documentation) documentation | UI alternatives. See [UI toolkit options](research/ui-toolkit-options.md). |
+
 Before implementing against a tool, read current official documentation and record the version actually selected. Preserve bibliographic provenance without copying private cover-page details or personal retrieval history.

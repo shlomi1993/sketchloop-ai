@@ -2,7 +2,7 @@
 
 ## Current state
 
-T01a is done: typed domain records, the generator contract with capability validation, and a labeled deterministic fake adapter ([design](design/t01a-contracts.md), [ADR 0005](decisions/0005-domain-records-and-generator-contract.md)). T01 is not fully done. Capture, preprocessing, real generation, orchestration, storage, and UI are unimplemented, and no real model has run.
+T01a is done: typed domain records, the generator contract with capability validation, and a labeled deterministic fake adapter ([design](design/t01a-contracts.md), [ADR 0005](decisions/0005-domain-records-and-generator-contract.md)). The T01b runnable increment is implemented: `sketchloop examples/sketch.png --prompt "..."` loads a PNG sketch, generates fake candidates, saves them under `runs/<iteration-id>/`, and records a terminal selection (no persisted record yet). T01 is done: T01b also recorded research notes and the first-model, store, and UI decisions ([ADR 0006](decisions/0006-first-backend-store-and-ui.md)). Capture, preprocessing, real generation, orchestration, storage, and UI are unimplemented, and no real model has run.
 
 In place:
 - Installer (`install.py`), offline checks (`scripts/check.py`: publication guard, syntax, TOML, Markdown links, Ruff lint, pytest), and GitHub Actions CI for Python 3.11/3.12.
@@ -14,11 +14,11 @@ Known hardware: Windows laptop without a GPU, laptop camera or USB webcam. A GPU
 
 ## Next action
 
-Finish T01 (T01b in [ROADMAP.md](ROADMAP.md)): record research findings and the hardware, first-model, and UI decisions. In parallel, the researcher can compare MLflow with a filesystem store. The foundational paper is summarized in [research/sde-sketching-paper.md](research/sde-sketching-paper.md).
+Start T02a in [ROADMAP.md](ROADMAP.md): preprocess a loaded sketch image and show the original and preprocessed sketch in the `sketchloop` command.
 
 ## Open questions
 
-First real model (CPU-feasible or Colab-hosted), UI toolkit, store format, and software license. None blocks T01b. See the roadmap for when each is needed.
+Software license for the repository. The CPU speed target in ADR 0006 is a starting point to adjust after T03 measurements.
 
 ## Validation
 
