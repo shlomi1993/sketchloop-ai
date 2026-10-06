@@ -13,6 +13,15 @@ from sketchloop.preprocessing import preprocess_sketch
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
+    """
+    Parse the sketchloop command-line options.
+
+    Args:
+        argv (list[str] | None): Arguments to parse, or None for the process arguments.
+
+    Returns:
+        argparse.Namespace: Parsed options.
+    """
     parser = argparse.ArgumentParser(
         prog="sketchloop",
         description="Generate alternatives from a sketch and pick one.",
@@ -28,6 +37,16 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def ask_selection(iteration: Iteration, console: Console) -> SelectionEvent:
+    """
+    Ask the person which candidates they choose and record it explicitly.
+
+    Args:
+        iteration (Iteration): Iteration whose candidates were listed.
+        console (Console): Console used for the prompt.
+
+    Returns:
+        SelectionEvent: The recorded selection, possibly of none.
+    """
     # Read space-separated 1-based numbers, where an empty answer is an explicit choice of none.
     try:
         answer = console.input("[bold]Pick candidates by number (space separated), or press Enter for none:[/bold] ").split()
@@ -47,6 +66,13 @@ def ask_selection(iteration: Iteration, console: Console) -> SelectionEvent:
 
 
 def run(args: argparse.Namespace, console: Console) -> None:
+    """
+    Run one round: load and preprocess the sketch, generate candidates, save files, and record the selection.
+
+    Args:
+        args (argparse.Namespace): Parsed command-line options.
+        console (Console): Console used for output and the prompt.
+    """
     # Load the raw sketch and, unless skipped, preprocess it so generation uses the processed image.
     raw_sketch, raw_bytes = load_sketch_file(args.sketch)
     sketch = raw_sketch
