@@ -8,7 +8,9 @@ from sketchloop.cli import main
 EXAMPLE_SKETCH = Path(__file__).resolve().parents[1] / "examples" / "sketch.png"
 
 
-def test_cli_run_writes_files_and_records_selection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_run_writes_files_and_records_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """
     A run on the example sketch stores the sketch and candidates, labels the backend fake, and records the pick.
     """
