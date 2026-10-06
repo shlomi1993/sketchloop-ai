@@ -32,7 +32,7 @@ The environment stays in `.venv` and uses the shell prompt name `sketchloop-ai`.
 
 ## Try it
 
-Run `sketchloop examples/sketch.png --prompt "modern chair"` in the activated environment. It saves the sketch and four candidates under `runs/` and asks you to pick some by number.
+Run `sketchloop examples/sketch-photo.jpg --prompt "modern chair"` in the activated environment. It keeps the raw photo, saves a cropped, contrast-normalized, 512 px grayscale `sketch.png` and four candidates under `runs/`, and asks you to pick some by number. Add `--raw` to generate from the raw image.
 The images come from a labeled fake backend (deterministic noise), not a real model yet.
 
 ## Using the project environment with Conda

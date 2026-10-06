@@ -80,7 +80,7 @@ Use three blocks separated by one blank line, sorted alphabetically within each 
 2. `from package import name` for standard-library and third-party packages.
 3. Project-local imports (`sketchloop` and relative imports), including plain local imports.
 
-Omit empty blocks. Sort multiple imported names alphabetically. `from __future__` imports come first in their own block.
+Use conventional aliases, such as `import numpy as np`. Omit empty blocks. Sort multiple imported names alphabetically. `from __future__` imports come first in their own block.
 
 ```python
 import os

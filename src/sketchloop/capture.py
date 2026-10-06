@@ -1,5 +1,6 @@
+import cv2
 import hashlib
-import struct
+import numpy as np
 
 from pathlib import Path
 from typing import Final
@@ -7,24 +8,27 @@ from typing import Final
 from sketchloop.domain import ColorMode, ImageRef, SketchLoopError
 
 
-# PNG files start with this signature, followed by the IHDR chunk that holds size and color type.
-PNG_SIGNATURE: Final = b"\x89PNG\r\n\x1a\n"
-MODE_BY_COLOR_TYPE: Final[dict[int, ColorMode]] = {0: "L", 2: "RGB", 6: "RGBA"}
+# Supported formats by file signature, with the raw file extension and media type to store them under.
+FORMAT_BY_SIGNATURE: Final = {
+    b"\x89PNG\r\n\x1a\n": (".png", "image/png"),
+    b"\xff\xd8\xff": (".jpg", "image/jpeg")
+}
+MODE_BY_CHANNELS: Final[dict[int, ColorMode]] = {1: "L", 3: "RGB", 4: "RGBA"}
 
 
 class InvalidSketchError(SketchLoopError, ValueError):
     """
-    A sketch file is missing, unreadable, or not a supported PNG.
+    A sketch file is missing, unreadable, or not a supported PNG or JPEG.
     """
     pass
 
 
 def load_sketch_file(path: Path) -> tuple[ImageRef, bytes]:
     """
-    Load a PNG sketch and describe it as an image reference relative to its run folder.
+    Load a PNG or JPEG sketch and describe it as an image reference relative to its run folder.
 
     Args:
-        path (Path): PNG file to load.
+        path (Path): PNG or JPEG file to load.
 
     Returns:
         tuple[ImageRef, bytes]: The image reference and the file's original bytes.
@@ -35,26 +39,24 @@ def load_sketch_file(path: Path) -> tuple[ImageRef, bytes]:
     except OSError as error:
         raise InvalidSketchError(f"Cannot read sketch {path.name}: {error.strerror}. Check the path.") from error
 
-    # Split out the PNG layout: signature, first chunk type, then the IHDR width, height, bit depth, and color type.
-    signature = payload[:8]
-    first_chunk_type = payload[12:16]
-    header_fields = payload[16:26]
+    # Identify the format from the file signature rather than trusting the extension.
+    matches = [file_format for signature, file_format in FORMAT_BY_SIGNATURE.items() if payload.startswith(signature)]
+    if not matches:
+        raise InvalidSketchError(f"Sketch {path.name} is not a PNG or JPEG file. Save it as PNG or JPEG and retry.")
 
-    # Accept only PNG files with a complete IHDR chunk.
-    if signature != PNG_SIGNATURE or first_chunk_type != b"IHDR" or len(payload) < 33:
-        raise InvalidSketchError(f"Sketch {path.name} is not a PNG file. Save it as PNG and retry.")
-
-    # Map the PNG color type to a mode, rejecting palette, gray-alpha, and non-8-bit images.
-    width, height, bit_depth, color_type = struct.unpack(">IIBB", header_fields)
-    if color_type not in MODE_BY_COLOR_TYPE.keys() or bit_depth != 8:
-        raise InvalidSketchError(f"Sketch {path.name} uses an unsupported PNG format. Save it as 8-bit grayscale, RGB, or RGBA.")
+    # Decode from memory, so paths with non-ASCII characters work, and accept only 8-bit images.
+    extension, media_type = matches[0]
+    pixels = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    channels = 0 if pixels is None else 1 if pixels.ndim == 2 else pixels.shape[2]
+    if channels not in MODE_BY_CHANNELS or pixels.dtype != np.uint8:
+        raise InvalidSketchError(f"Sketch {path.name} cannot be decoded as 8-bit gray, RGB, or RGBA. Re-save it as PNG or JPEG.")
 
     image = ImageRef(
-        path="sketch.png",
-        width=width,
-        height=height,
-        mode=MODE_BY_COLOR_TYPE[color_type],
-        media_type="image/png",
+        path=f"sketch-raw{extension}",
+        width=pixels.shape[1],
+        height=pixels.shape[0],
+        mode=MODE_BY_CHANNELS[channels],
+        media_type=media_type,
         sha256=hashlib.sha256(payload).hexdigest()
     )
     return image, payload

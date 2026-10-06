@@ -9,6 +9,7 @@ from sketchloop.capture import load_sketch_file
 from sketchloop.domain import (
     GenerationRequest, Guidance, Iteration, SelectionEvent, SketchLoopError, record_no_selection, select_candidates)
 from sketchloop.fakes import FakeGenerator
+from sketchloop.preprocessing import preprocess_sketch
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -17,11 +18,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         description="Generate alternatives from a sketch and pick one.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument("sketch", type=Path, help="PNG sketch image to start from")
+    parser.add_argument("sketch", type=Path, help="PNG or JPEG sketch image to start from")
     parser.add_argument("--prompt", required=True, help="text guidance for generation")
     parser.add_argument("--candidates", type=int, default=4, help="number of candidates to generate")
     parser.add_argument("--seed", type=int, default=None, help="base seed for reproducible candidates")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="folder for run outputs")
+    parser.add_argument("--raw", action="store_true", help="generate from your original sketch instead of the processed one")
     return parser.parse_args(argv)
 
 
@@ -45,22 +47,35 @@ def ask_selection(iteration: Iteration, console: Console) -> SelectionEvent:
 
 
 def run(args: argparse.Namespace, console: Console) -> None:
-    # Load the sketch and generate candidates with the fake backend.
-    sketch, sketch_bytes = load_sketch_file(args.sketch)
+    # Load the raw sketch and, unless skipped, preprocess it so generation uses the processed image.
+    raw_sketch, raw_bytes = load_sketch_file(args.sketch)
+    sketch = raw_sketch
+    files = {raw_sketch.path: raw_bytes}
+    step_names = "skipped"
+    if not args.raw:
+        processed = preprocess_sketch(raw_bytes)
+        sketch = processed.image
+        files[sketch.path] = processed.payload
+        step_names = ", ".join(step.name for step in processed.steps)
+
+    # Generate candidates with the fake backend.
     guidance = Guidance(prompt=args.prompt)
     request = GenerationRequest(sketch=sketch, guidance=guidance, n_candidates=args.candidates, seed=args.seed)
     output = FakeGenerator().generate(request)
     iteration = Iteration(parent_id=None, request=request, result=output.result)
 
-    # Store the sketch and each candidate image under a new run folder named after the iteration.
+    # Store the raw and processed sketches and each candidate image under a new run folder named after the iteration.
     run_dir: Path = args.runs_dir / iteration.id
-    sketch_file: Path = run_dir / sketch.path
-    sketch_file.parent.mkdir(parents=True, exist_ok=True)
-    sketch_file.write_bytes(sketch_bytes)
-    for path, payload in output.payloads.items():
-        candidate_file: Path = run_dir / path
-        candidate_file.parent.mkdir(parents=True, exist_ok=True)
-        candidate_file.write_bytes(payload)
+    files_to_write: dict[str, bytes] = files | dict(output.payloads)
+    for path, payload in files_to_write.items():
+        target_file: Path = run_dir / path
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        target_file.write_bytes(payload)
+
+    # Show where the raw and generation-input sketches are, and which preprocessing steps ran.
+    console.print(f"Raw sketch: {(run_dir / raw_sketch.path).as_posix()}", markup=False, soft_wrap=True)
+    console.print(f"Generation sketch: {(run_dir / sketch.path).as_posix()}", markup=False, soft_wrap=True)
+    console.print(f"Preprocessing: {step_names}", markup=False, soft_wrap=True)
 
     # Warn clearly that the images are not from a real model, then list them.
     warning = "These images are deterministic noise, not output from a real model."
