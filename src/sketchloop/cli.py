@@ -13,7 +13,7 @@ from sketchloop.domain import (
     GenerationRequest, Guidance, Iteration, SelectionEvent, SketchLoopError, record_no_selection, select_candidates)
 from sketchloop.fakes import FakeGenerator
 from sketchloop.generation import Generator
-from sketchloop.preprocessing import preprocess_sketch
+from sketchloop.preprocessing import ROTATE_CODES, preprocess_sketch
 
 
 class GenerationBackend(StrEnum):
@@ -47,6 +47,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=None, help="base seed for reproducible candidates")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="folder for run outputs")
     parser.add_argument("--raw", action="store_true", help="generate from your original sketch instead of the processed one")
+    parser.add_argument("--rotate", type=int, choices=list(ROTATE_CODES), default=0, help="degrees to turn the sketch clockwise before processing")  # noqa: E501
     parser.add_argument("--backend", type=GenerationBackend, choices=list(GenerationBackend), default=GenerationBackend.FAKE, help="generation backend to use")  # noqa: E501
     parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), help="diffusers mode, by default fast on CPU and quality on a GPU")  # noqa: E501
     args = parser.parse_args(argv)
@@ -58,6 +59,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     # Only the diffusers backend has modes.
     if args.mode is not None and args.backend != GenerationBackend.DIFFUSERS:
         parser.error(f"--mode needs --backend {GenerationBackend.DIFFUSERS}")
+
+    # Rotation is part of preprocessing, which --raw skips.
+    if args.rotate and args.raw:
+        parser.error("--rotate cannot be combined with --raw, which skips preprocessing")
 
     return args
 
@@ -74,15 +79,15 @@ def make_generator(args: argparse.Namespace, console: Console) -> Generator:
         Generator: The generation backend.
     """
     if args.backend == GenerationBackend.FAKE:
-        console.print(f"Using the {args.backend} backend, which makes test images, not real AI output.", markup=False)
+        console.print(f"Using the {args.backend} backend, which makes test images, not real AI output.")
         return FakeGenerator()
 
     # Describe the real model, where it runs, and what the mode means, so slow CPU runs are expected.
     generator = DiffusersSketchGenerator(mode=args.mode)
     steps = next(spec.default for spec in generator.capabilities.controls if spec.name == "steps")
-    model = "Stable Diffusion 1.5 + ControlNet scribble"
-    console.print(f"Using the {args.backend} backend with {model} on {generator.device} in {generator.mode} mode, {steps} steps.",
-                  markup=False)
+    model = "Stable Diffusion 1.5 and ControlNet scribble"
+    device, mode = generator.device.upper(), generator.mode
+    console.print(f"Using the {args.backend} backend with {model} on {device} in {mode} mode, running {steps} steps.")
     return generator
 
 
@@ -129,7 +134,7 @@ def run(args: argparse.Namespace, console: Console) -> None:
     files = {raw_sketch.path: raw_bytes}
     step_names = "skipped"
     if not args.raw:
-        processed = preprocess_sketch(raw_bytes)
+        processed = preprocess_sketch(raw_bytes, args.rotate)
         sketch = processed.image
         files[sketch.path] = processed.payload
         step_names = ", ".join(step.name for step in processed.steps)

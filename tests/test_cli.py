@@ -25,7 +25,7 @@ def test_cli_full_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: p
     assert "FAKE BACKEND" in output, "The output must say the backend is fake"
     assert len(run_dirs) == 1 and (run_dirs[0] / "sketch-raw.jpg").read_bytes() == sketch.read_bytes(), "Raw sketch not kept"
 
-    steps_shown = "Preprocessing: grayscale, correct_perspective, crop_to_drawing" in output
+    steps_shown = "Preprocessing: grayscale, rotate, isolate_paper, extract_strokes, crop_to_drawing" in output
     processed_saved_and_shown = (run_dirs[0] / "sketch.png").is_file() and steps_shown
     assert processed_saved_and_shown, "The processed sketch must be saved and its steps shown"
     assert len(list((run_dirs[0] / "candidates").glob("*.png"))) == 4, "Four candidate PNGs must be written by default"
