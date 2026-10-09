@@ -15,7 +15,7 @@ The imports below cover the first two "Start every session" steps. Read `docs/AR
 
 - Run checks with the project interpreter so they work on every OS: `.venv/Scripts/python.exe scripts/check.py` on Windows, `.venv/bin/python scripts/check.py` elsewhere. On Windows, `python3` may be a Microsoft Store stub, and `make` is often missing.
 - Never append `echo "exit=$?"` to commands. The tool already reports exit codes.
-- Do not use `&&` or `||` to chain shell commands. Run commands separately instead.
+- Do not use `&&`, `||`, or `;` to chain shell commands. Run commands separately instead.
 - Use WebFetch instead of curl for HTTP lookups.
 - Project skills: `/start-task` begins a bounded roadmap task, `/handoff` closes a session by updating `docs/STATUS.md`, `/adr` records a decision, `/commit` checks, privacy-reviews, and commits (user-invoked only), `/bisect` finds the commit that introduced an issue, `/readability` reviews names and clarity (preloaded by `code-reviewer`), and `/audit` reviews the whole repository for exposure risks and simplifications.
 - Before committing, delegate a review of the staged diff to the `privacy-reviewer` subagent in addition to running the checks. It supplements the manual diff review in `docs/PRIVACY.md` and does not replace it.
