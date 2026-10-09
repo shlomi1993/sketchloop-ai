@@ -4,6 +4,21 @@ import numpy as np
 from sketchloop.preprocessing import preprocess_sketch
 
 
+def make_noisy_scene() -> np.ndarray:
+    """
+    Build an upright webcam-like scene with a checkered tablecloth, paper running off the right edge, a hand, and a faint house.
+    """
+    rng = np.random.default_rng(0)
+    rows, columns = np.indices((480, 640))
+    scene = np.where((rows // 20 + columns // 20) % 2 == 0, 40, 90) + rng.integers(-10, 11, (480, 640))
+    scene[60:420, 150:] = 220 + rng.integers(-4, 5, (360, 490))
+    scene = scene.astype(np.uint8)
+    cv2.ellipse(scene, (150, 240), (60, 35), 0, 0, 360, 60, -1)
+    house = np.array([[330, 200], [400, 130], [470, 200], [470, 330], [330, 330]], dtype=np.int32)
+    cv2.polylines(scene, [house], True, 170, 1)
+    return scene
+
+
 def test_preprocessing_crops_to_strokes_resizes_and_records_steps() -> None:
     """
     A light page with one dark off-center rectangle is cropped around it, resized to 512 px, and its steps recorded.
@@ -16,10 +31,10 @@ def test_preprocessing_crops_to_strokes_resizes_and_records_steps() -> None:
     processed = cv2.imdecode(np.frombuffer(result.payload, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
 
     step_names = [step.name for step in result.steps]
-    expected_steps = ["grayscale", "correct_perspective", "crop_to_drawing", "normalize_contrast", "resize"]
+    expected_steps = ["grayscale", "rotate", "isolate_paper", "extract_strokes", "crop_to_drawing", "thicken_strokes", "resize"]
     assert step_names == expected_steps, f"Unexpected steps {step_names}"
 
-    crop = result.steps[2].params
+    crop = result.steps[4].params
     crop_hugs_strokes = crop["found"] and 480 <= crop["x"] < 500 and 80 <= crop["y"] < 100
     assert crop_hugs_strokes, f"Crop must hug the strokes, got {crop}"
 
@@ -40,10 +55,37 @@ def test_perspective_straightens_paper() -> None:
     _, encoded = cv2.imencode(".png", photo)
 
     result = preprocess_sketch(encoded.tobytes())
-    perspective = result.steps[1].params
+    paper = result.steps[2].params
 
-    found_paper = result.steps[1].name == "correct_perspective" and perspective["found"]
-    assert found_paper, f"The paper outline must be found, got {dict(perspective)}"
+    found_corners = result.steps[2].name == "isolate_paper" and paper["corners_found"]
+    assert found_corners, f"The paper corners must be found, got {dict(paper)}"
 
-    size_matches_edges = abs(perspective["width"] - 581) <= 6 and abs(perspective["height"] - 463) <= 6
-    assert size_matches_edges, f"Output must span the paper's longer edges, got {dict(perspective)}"
+    size_matches_edges = abs(paper["width"] - 581) <= 6 and abs(paper["height"] - 463) <= 6
+    assert size_matches_edges, f"Output must span the paper's longer edges, got {dict(paper)}"
+
+
+def test_noisy_capture() -> None:
+    """
+    An upside-down noisy capture yields only the upright, faint house drawing, without the hand or the tablecloth.
+    """
+    _, encoded = cv2.imencode(".png", np.rot90(make_noisy_scene(), 2))
+
+    result = preprocess_sketch(encoded.tobytes(), rotation=180)
+    processed = cv2.imdecode(np.frombuffer(result.payload, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    dark_rows, dark_columns = np.nonzero(processed < 128)
+
+    rotate_recorded = result.steps[1].name == "rotate" and result.steps[1].params["degrees_clockwise"] == 180
+    assert rotate_recorded, f"The rotation must be recorded second, got {result.steps}"
+
+    house_aspect_ratio = 141 / 201
+    aspect_ratio = result.image.width / result.image.height
+    frames_only_house = abs(aspect_ratio - house_aspect_ratio) < 0.1
+    assert frames_only_house, f"The crop must frame only the house, got aspect ratio {aspect_ratio:.2f}"
+
+    roof_columns = dark_columns[dark_rows == dark_rows.min()]
+    floor_columns = dark_columns[dark_rows == dark_rows.max()]
+    is_upright = abs(roof_columns.mean() - result.image.width / 2) < 30 and np.ptp(floor_columns) > result.image.width / 2
+    assert is_upright, f"The roof must be on top, got top row columns {roof_columns.min()}-{roof_columns.max()}"
+
+    dark_share = len(dark_rows) / processed.size
+    assert dark_share < 0.15, f"Only thin strokes may remain, not the hand, got {dark_share:.0%} dark pixels"
