@@ -48,7 +48,19 @@ The environment stays in `.venv` and uses the shell prompt name `sketchloop-ai`.
 ## Try it
 
 Run `sketchloop examples/sketch-photo.jpg --prompt "modern chair"` in the activated environment. It keeps the raw photo, saves a cropped, contrast-normalized, 512 px grayscale `sketch.png` and four candidates under `runs/`, and asks you to pick some by number. Add `--raw` to generate from the raw image. Run `sketchloop --camera --prompt "modern chair"` to take the sketch from your webcam instead: a preview window opens, Space captures (saved as `sketch-raw.png`), and Esc cancels. Use `--camera-index 1` for a second camera.
-The images come from a labeled fake backend (deterministic noise), not a real model yet.
+By default the images come from a labeled fake backend (deterministic noise).
+
+## Real model
+
+Generate real candidates with Stable Diffusion 1.5 and the ControlNet scribble model (no GPU needed):
+
+```sh
+pip install -e ".[generation]"
+python scripts/download_models.py
+sketchloop examples/sketch-photo.jpg --prompt "modern chair" --backend diffusers
+```
+
+The download script fetches about 6 GB into the ignored `models/` folder and skips files already present. The backend uses CUDA, then Apple MPS, then the CPU. `--mode fast` (4 steps with LCM-LoRA, no negative prompt) is the default on CPU, and `--mode quality` (20 steps) the default on a GPU. Run the real-model test with `python -m pytest -m model`, since default checks skip it.
 
 ## Using the project environment with Conda
 
