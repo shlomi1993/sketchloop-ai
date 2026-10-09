@@ -45,6 +45,7 @@ For durable interface, storage, dependency, or scope decisions, add an ADR using
 - Put a one-line comment above each logical block (an `if`, `for`, `try`, or `with` block, or a group of statements doing one step) saying what it does or why. Skip trivial one-liners.
 - In tests, request fixtures used only for their side effects with `@pytest.mark.usefixtures("name")`, not as unused parameters.
 - In tests, give every `assert` a short message that says what went wrong, for example `assert seeds == [7, 8], f"Expected seed + index, got {seeds}"`.
+- Give each dataclass field a short inline comment saying what it holds, for example `revision: str  # Pinned commit SHA to download`.
 - Define helpers above the functions that use them, both module functions and methods. Split long functions into helpers.
 - Name functions and methods with verbs that say what they do (for example `identify_backend`, `build_pipeline_kwargs`).
 - Use self-explanatory names. Avoid single letters and abbreviations except conventional loop indices, and include units where they matter (for example `timeout_seconds`).
