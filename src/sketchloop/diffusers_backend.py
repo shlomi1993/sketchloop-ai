@@ -254,9 +254,6 @@ class DiffusersSketchGenerator:
     def capabilities(self) -> GeneratorCapabilities:
         """
         Return the backend's capabilities in the current mode.
-
-        Returns:
-            GeneratorCapabilities: Supported controls and limits.
         """
         return self._capabilities
 

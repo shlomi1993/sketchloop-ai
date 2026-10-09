@@ -174,9 +174,6 @@ class BackendIdentity:
     def is_fake(self) -> bool:
         """
         Tell whether the result came from the test-only fake backend.
-
-        Returns:
-            bool: True when execution is fake.
         """
         return self.execution == "fake"
 
@@ -269,9 +266,6 @@ class SelectionEvent:
     def is_no_selection(self) -> bool:
         """
         Tell whether the person explicitly selected nothing.
-
-        Returns:
-            bool: True when no candidate IDs were selected.
         """
         return not self.selected_candidate_ids
 
@@ -308,11 +302,5 @@ def select_candidates(iteration: Iteration, candidate_ids: Sequence[str]) -> Sel
 def record_no_selection(iteration: Iteration) -> SelectionEvent:
     """
     Record that the person chose none of the iteration's candidates.
-
-    Args:
-        iteration (Iteration): Iteration whose candidates were shown.
-
-    Returns:
-        SelectionEvent: A selection with no candidate IDs.
     """
     return SelectionEvent(iteration_id=iteration.id, selected_candidate_ids=())

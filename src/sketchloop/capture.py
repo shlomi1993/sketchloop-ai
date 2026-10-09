@@ -125,12 +125,6 @@ def raw_image_ref(pixels: np.ndarray, payload: bytes, extension: str, media_type
 def open_webcam(camera_index: int) -> VideoSource:
     """
     Open a camera with the native OpenCV backend: DirectShow on Windows, AVFoundation on macOS, the default elsewhere.
-
-    Args:
-        camera_index (int): Camera index, 0 for the default camera.
-
-    Returns:
-        VideoSource: The opened (or failed-to-open) camera.
     """
     return cv2.VideoCapture(camera_index, CAMERA_BACKEND_BY_PLATFORM.get(sys.platform, cv2.CAP_ANY))
 

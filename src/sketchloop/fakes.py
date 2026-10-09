@@ -34,9 +34,6 @@ class FakeGenerator:
     def capabilities(self) -> GeneratorCapabilities:
         """
         Return the fake backend's capabilities.
-
-        Returns:
-            GeneratorCapabilities: Supported controls and limits.
         """
         return self._capabilities
 
