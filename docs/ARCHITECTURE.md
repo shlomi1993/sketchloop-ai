@@ -45,7 +45,7 @@ Later contracts, still proposals:
 
 - `CaptureSource.capture()` returns a captured image and metadata (T02).
 - `Preprocessor.process(capture, config)` returns processed image(s) and ordered transformation metadata (T02).
-- `Evaluator.evaluate(candidates, context)` returns scores/filter decisions without mutating candidates; no-op evaluation is valid (T04).
+- `Evaluator.evaluate(candidates, payloads, request)` returns scores by candidate ID without mutating candidates, and `NoOpEvaluator` gives none. Implemented in T04 ([ADR 0010](decisions/0010-sessions-and-evaluator.md)).
 - `ExperimentStore` creates/loads runs, stores artifacts, appends iterations and selection events, and reconstructs replay requests.
 - An application service runs an iteration and records explicit selection separately. Candidate IDs must belong to the iteration being selected.
 
