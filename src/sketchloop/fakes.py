@@ -60,7 +60,7 @@ class FakeGenerator:
             seed = (request.seed or 0) + index
             payload = self._render(request, controls, index, seed)
             candidate_id = uuid.uuid4().hex
-            image = ImageRef(path=f"candidates/{candidate_id}.png", width=self._size[0], height=self._size[1], mode="L",
+            image = ImageRef(path=f"candidates/candidate-{index + 1}.png", width=self._size[0], height=self._size[1], mode="L",
                              media_type="image/png", sha256=hashlib.sha256(payload).hexdigest())
             candidates.append(Candidate(id=candidate_id, index=index, image=image, seed=seed))
             payloads[image.path] = payload
