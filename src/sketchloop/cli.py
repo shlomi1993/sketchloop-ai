@@ -5,7 +5,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from sketchloop.capture import load_sketch_file
+from sketchloop.capture import capture_from_camera, load_sketch_file
 from sketchloop.domain import (
     GenerationRequest, Guidance, Iteration, SelectionEvent, SketchLoopError, record_no_selection, select_candidates)
 from sketchloop.fakes import FakeGenerator
@@ -27,13 +27,21 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         description="Generate alternatives from a sketch and pick one.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument("sketch", type=Path, help="PNG or JPEG sketch image to start from")
+    parser.add_argument("sketch", type=Path, nargs="?", help="PNG or JPEG sketch image to start from")
+    parser.add_argument("--camera", action="store_true", help="capture the sketch from a webcam instead of a file")
+    parser.add_argument("--camera-index", type=int, default=0, help="webcam to use with --camera, 0 for the default")
     parser.add_argument("--prompt", required=True, help="text guidance for generation")
     parser.add_argument("--candidates", type=int, default=4, help="number of candidates to generate")
     parser.add_argument("--seed", type=int, default=None, help="base seed for reproducible candidates")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="folder for run outputs")
     parser.add_argument("--raw", action="store_true", help="generate from your original sketch instead of the processed one")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+
+    # Take the sketch from exactly one source.
+    if (args.sketch is None) == (not args.camera):
+        parser.error("give exactly one of a sketch file or --camera")
+
+    return args
 
 
 def ask_selection(iteration: Iteration, console: Console) -> SelectionEvent:
@@ -67,14 +75,14 @@ def ask_selection(iteration: Iteration, console: Console) -> SelectionEvent:
 
 def run(args: argparse.Namespace, console: Console) -> None:
     """
-    Run one round: load and preprocess the sketch, generate candidates, save files, and record the selection.
+    Run one round: load or capture and preprocess the sketch, generate candidates, save files, and record the selection.
 
     Args:
         args (argparse.Namespace): Parsed command-line options.
         console (Console): Console used for output and the prompt.
     """
-    # Load the raw sketch and, unless skipped, preprocess it so generation uses the processed image.
-    raw_sketch, raw_bytes = load_sketch_file(args.sketch)
+    # Load or capture the raw sketch and, unless skipped, preprocess it so generation uses the processed image.
+    raw_sketch, raw_bytes = capture_from_camera(args.camera_index) if args.camera else load_sketch_file(args.sketch)
     sketch = raw_sketch
     files = {raw_sketch.path: raw_bytes}
     step_names = "skipped"
