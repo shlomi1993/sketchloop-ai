@@ -38,12 +38,15 @@ For durable interface, storage, dependency, or scope decisions, add an ADR using
 
 - Type hints on every function and method parameter and return value, including helpers and tests. Use `-> None` when nothing is returned. Implicit `self` and `cls` need no annotation.
 - Target 120 characters per line. Up to 130 is fine when it keeps a statement on one line and the file shorter.
+- `argparse` `add_argument` calls stay on one line even past the limit, marked `# noqa: E501`, because one option per line reads best.
 - Prefer single-line statements, calls, and collections unless one line is hard to read. Do not wrap short calls or add trailing commas just to force multiline formatting.
 - Keep log strings and error messages on one line. Shorten redundant wording instead of splitting a message across string literals, but keep the cause and recovery action.
 - Add a blank line after `return` or `raise` when another statement follows, including after a guard clause. Add a blank line before a comment unless it is the first line of a block. No extra blank line is needed at the end of a function or file.
 - Put a one-line comment above each logical block (an `if`, `for`, `try`, or `with` block, or a group of statements doing one step) saying what it does or why. Skip trivial one-liners.
 - In tests, request fixtures used only for their side effects with `@pytest.mark.usefixtures("name")`, not as unused parameters.
 - In tests, give every `assert` a short message that says what went wrong, for example `assert seeds == [7, 8], f"Expected seed + index, got {seeds}"`.
+- Define helpers above the functions that use them, both module functions and methods. Split long functions into helpers.
+- Name functions and methods with verbs that say what they do (for example `identify_backend`, `build_pipeline_kwargs`).
 - Use self-explanatory names. Avoid single letters and abbreviations except conventional loop indices, and include units where they matter (for example `timeout_seconds`).
 
 ```python
