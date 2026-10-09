@@ -4,7 +4,22 @@ Modular Python research infrastructure for iterative design using physical sketc
 
 The intended loop is **draw → capture → preprocess → generate alternatives → inspect and select → revise → repeat**. Experiment history makes configurations, outputs, timings, and relationships between iterations available for research and replay.
 
-**Current state:** development environment and project documentation only. Camera capture, generation, experiment storage, and the user interface are not implemented yet.
+## Progress
+
+| Task | What you can run | Status |
+| --- | --- | --- |
+| T01 | `sketchloop examples/sketch.png --prompt "..."` with fake candidates | ✅ Done |
+| T02a | Load PNG or JPEG and preprocess the sketch (`--raw` to skip) | ✅ Done |
+| T02b | `sketchloop --camera` captures the sketch from a webcam | ✅ Done |
+| T03 | Real AI candidates from SD 1.5 with ControlNet scribble | ⏳ Next |
+| T04 | Several rounds in one session | Planned |
+| T05 | Reopen and rerun an earlier session | Planned |
+| T06 | A simple window instead of the terminal | Planned |
+| T07 | Switch model, camera, or storage through a setting | Planned |
+| T08 | Timing per stage | Planned |
+| T09 | Full demo and evaluation report | Planned |
+
+Details are in the [roadmap](docs/ROADMAP.md) and [current status](docs/STATUS.md).
 
 ## Start here
 
