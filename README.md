@@ -32,7 +32,7 @@ The environment stays in `.venv` and uses the shell prompt name `sketchloop-ai`.
 
 ## Try it
 
-Run `sketchloop examples/sketch-photo.jpg --prompt "modern chair"` in the activated environment. It keeps the raw photo, saves a cropped, contrast-normalized, 512 px grayscale `sketch.png` and four candidates under `runs/`, and asks you to pick some by number. Add `--raw` to generate from the raw image.
+Run `sketchloop examples/sketch-photo.jpg --prompt "modern chair"` in the activated environment. It keeps the raw photo, saves a cropped, contrast-normalized, 512 px grayscale `sketch.png` and four candidates under `runs/`, and asks you to pick some by number. Add `--raw` to generate from the raw image. Run `sketchloop --camera --prompt "modern chair"` to take the sketch from your webcam instead: a preview window opens, Space captures (saved as `sketch-raw.png`), and Esc cancels. Use `--camera-index 1` for a second camera.
 The images come from a labeled fake backend (deterministic noise), not a real model yet.
 
 ## Using the project environment with Conda
