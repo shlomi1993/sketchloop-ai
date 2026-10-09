@@ -350,7 +350,7 @@ class DiffusersSketchGenerator:
 
             payload, image_height, image_width = encode_rgb_png(image)
             candidate_id = uuid.uuid4().hex
-            image_ref = ImageRef(path=f"candidates/{candidate_id}.png", width=image_width, height=image_height, mode="RGB",
+            image_ref = ImageRef(path=f"candidates/candidate-{index + 1}.png", width=image_width, height=image_height, mode="RGB",
                                  media_type="image/png", sha256=hashlib.sha256(payload).hexdigest())
             candidates.append(Candidate(id=candidate_id, index=index, image=image_ref, seed=seed))
             payloads[image_ref.path] = payload

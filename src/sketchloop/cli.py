@@ -1,6 +1,8 @@
 import argparse
 import time
+import uuid
 
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from rich.console import Console
@@ -120,6 +122,13 @@ def ask_selection(iteration: Iteration, console: Console) -> SelectionEvent:
     return select_candidates(iteration, [candidates[int(number) - 1].id for number in answer])
 
 
+def make_run_folder_name() -> str:
+    """
+    Name a run folder by local date and time plus a short random suffix, so folders sort by time and never clash.
+    """
+    return f"{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
+
+
 def run(args: argparse.Namespace, console: Console) -> None:
     """
     Run one round: load or capture and preprocess the sketch, generate candidates, save files, and record the selection.
@@ -148,8 +157,8 @@ def run(args: argparse.Namespace, console: Console) -> None:
     elapsed_seconds = time.perf_counter() - started
     iteration = Iteration(parent_id=None, request=request, result=output.result)
 
-    # Store the raw and processed sketches and each candidate image under a new run folder named after the iteration.
-    run_dir: Path = args.runs_dir / iteration.id
+    # Store the raw and processed sketches and each candidate image under a new, time-named run folder.
+    run_dir: Path = args.runs_dir / make_run_folder_name()
     files_to_write: dict[str, bytes] = files | dict(output.payloads)
     for path, payload in files_to_write.items():
         target_file: Path = run_dir / path

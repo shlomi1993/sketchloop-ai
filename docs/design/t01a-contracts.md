@@ -95,7 +95,7 @@ class Generator(Protocol):
 | Seed given without `supports_seed`, or negative prompt given without `supports_negative_prompt` | `unsupported_feature` |
 | `n_candidates > max_candidates` | `too_many_candidates` |
 
-`generate` is synchronous so it fits both in-process and remote (Colab) backends. It must call `validate_request` first. For now the adapter builds candidates and uses the path `candidates/<candidate id><ext>`. It does not write storage, score, or select.
+`generate` is synchronous so it fits both in-process and remote (Colab) backends. It must call `validate_request` first. For now the adapter builds candidates and uses the path `candidates/candidate-<index + 1><ext>`, and the CLI names run folders `<YYYYMMDD-HHMMSS>-<6 hex>` in local time. It does not write storage, score, or select.
 
 Paper parameters map as follows: `steps`, `guidance_scale`, and `strength` are controls. Batch size is `n_candidates`. Seed is `seed`. ControlNet input and CLIP filtering are deferred.
 
