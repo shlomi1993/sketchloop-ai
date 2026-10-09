@@ -8,10 +8,26 @@ version = "0.0.0"
 description = "Modular research infrastructure for iterative sketch-based design with generative AI"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["numpy>=2", "opencv-python==5.0.0.93", "rich==15.0.0"]
+dependencies = [
+    "numpy>=2",
+    "opencv-python==5.0.0.93",
+    "rich==15.0.0",
+]
 
 [project.optional-dependencies]
-dev = ["pytest==9.0.2", "ruff==0.16.9"]
+dev = [
+    "pytest==9.0.2",
+    "ruff==0.16.9",
+]
+generation = [
+    "accelerate==1.15.0",
+    "diffusers==0.40.0",
+    "huggingface_hub==1.33.0",
+    "peft==0.21.2",
+    "safetensors==0.8.0",
+    "torch==2.14.1",
+    "transformers==5.18.0",
+]
 
 [project.scripts]
 sketchloop = "sketchloop.cli:main"
@@ -19,7 +35,8 @@ sketchloop = "sketchloop.cli:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["scripts"]
-addopts = "--import-mode=importlib --strict-markers"
+addopts = "--import-mode=importlib --strict-markers -m \"not model\""
+markers = ["model: runs a real generative model, needs the generation extra and downloaded weights"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

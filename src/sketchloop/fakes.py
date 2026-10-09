@@ -40,12 +40,13 @@ class FakeGenerator:
         """
         return self._capabilities
 
-    def generate(self, request: GenerationRequest) -> GenerationOutput:
+    def generate(self, request: GenerationRequest, sketch_payload: bytes) -> GenerationOutput:
         """
         Validate the request and render deterministic grayscale images derived from it.
 
         Args:
             request (GenerationRequest): Request to generate from.
+            sketch_payload (bytes): Encoded sketch bytes, unused because the fake derives images from the request alone.
 
         Returns:
             GenerationOutput: Candidates and their image bytes.
