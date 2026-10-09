@@ -16,6 +16,10 @@ STROKE_CONTRAST: Final = 64
 CROP_MARGIN_RATIO: Final = 0.05
 TARGET_LONG_SIDE_PIXELS: Final = 512
 
+# A paper outline counts only if it covers this share of the image but does not fill it, which would mean no visible edge.
+MIN_PAPER_AREA_RATIO: Final = 0.2
+MAX_PAPER_AREA_RATIO: Final = 0.95
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PreprocessingStep:
@@ -57,8 +61,12 @@ def preprocess_sketch(payload: bytes) -> PreprocessedSketch:
 
     steps = [PreprocessingStep(name="grayscale", params={})]
 
+    # Straighten a photographed sheet of paper into a rectangle, keeping the image when no paper outline is found.
+    flattened, perspective_params = correct_perspective(gray)
+    steps.append(PreprocessingStep(name="correct_perspective", params=perspective_params))
+
     # Crop to the dark strokes plus a margin, keeping the full image when no strokes stand out from the paper.
-    cropped, crop_params = crop_to_drawing(gray)
+    cropped, crop_params = crop_to_drawing(flattened)
     steps.append(PreprocessingStep(name="crop_to_drawing", params=crop_params))
 
     # Stretch the remaining intensities to the full 0-255 range.
@@ -90,6 +98,47 @@ def preprocess_sketch(payload: bytes) -> PreprocessedSketch:
         sha256=hashlib.sha256(processed).hexdigest()
     )
     return PreprocessedSketch(image=image, payload=processed, steps=tuple(steps))
+
+
+def correct_perspective(gray: np.ndarray) -> tuple[np.ndarray, dict[str, ControlValue]]:
+    """
+    Warp the largest light four-cornered region (the paper) to a rectangle, or keep the image if none is found.
+
+    Args:
+        gray (np.ndarray): Grayscale image.
+
+    Returns:
+        tuple[np.ndarray, dict[str, ControlValue]]: The straightened image and the perspective parameters used.
+    """
+    # Separate the light paper from a darker background and take the largest outer outline.
+    height, width = gray.shape
+    _, paper_mask = cv2.threshold(cv2.GaussianBlur(gray, (5, 5), 0), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    contours, _ = cv2.findContours(paper_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    paper = max(contours, key=cv2.contourArea, default=None)
+    not_found: dict[str, ControlValue] = {"found": False, "width": width, "height": height}
+    area_ratio = 0.0 if paper is None else cv2.contourArea(paper) / (width * height)
+    if not MIN_PAPER_AREA_RATIO <= area_ratio <= MAX_PAPER_AREA_RATIO:
+        return gray, not_found
+
+    # Simplify the outline and accept it only as a convex quadrilateral.
+    corners = cv2.approxPolyDP(paper, 0.02 * cv2.arcLength(paper, True), True)
+    if len(corners) != 4 or not cv2.isContourConvex(corners):
+        return gray, not_found
+
+    # Order corners as top-left, top-right, bottom-right, bottom-left using coordinate sums and differences.
+    points = corners.reshape(4, 2).astype(np.float32)
+    sums, differences = points.sum(axis=1), np.diff(points, axis=1).ravel()
+    top_left, bottom_right = points[np.argmin(sums)], points[np.argmax(sums)]
+    top_right, bottom_left = points[np.argmin(differences)], points[np.argmax(differences)]
+    source = np.array([top_left, top_right, bottom_right, bottom_left], dtype=np.float32)
+
+    # Size the output by the longer of each pair of opposite edges, then warp the paper onto it.
+    out_width = round(max(np.linalg.norm(top_right - top_left), np.linalg.norm(bottom_right - bottom_left)))
+    out_height = round(max(np.linalg.norm(bottom_left - top_left), np.linalg.norm(bottom_right - top_right)))
+    target = np.array([[0, 0], [out_width - 1, 0], [out_width - 1, out_height - 1], [0, out_height - 1]], dtype=np.float32)
+    warped = cv2.warpPerspective(gray, cv2.getPerspectiveTransform(source, target), (out_width, out_height))
+    corner_text = " ".join(f"{round(float(x))},{round(float(y))}" for x, y in source)
+    return warped, {"found": True, "corners": corner_text, "width": out_width, "height": out_height}
 
 
 def crop_to_drawing(gray: np.ndarray) -> tuple[np.ndarray, dict[str, ControlValue]]:
