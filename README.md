@@ -12,8 +12,8 @@ The intended loop is **draw → capture → preprocess → generate alternatives
 | T02a | Load PNG or JPEG and preprocess the sketch (`--raw` to skip) | ✅ Done |
 | T02b | `sketchloop --camera` captures the sketch from a webcam | ✅ Done |
 | T03 | `--backend diffusers` makes real AI candidates with SD 1.5 and ControlNet scribble | ✅ Done |
-| T04 | Several rounds in one session | ⏳ Next |
-| T05 | Reopen and rerun an earlier session | Planned |
+| T04 | Several rounds in one session | ✅ Done |
+| T05 | Reopen and rerun an earlier session | ⏳ Next |
 | T06 | A simple window instead of the terminal | Planned |
 | T07 | Switch model, camera, or storage through a setting | Planned |
 | T08 | Timing per stage | Planned |
@@ -48,6 +48,7 @@ The environment stays in `.venv` and uses the shell prompt name `sketchloop-ai`.
 ## Try it
 
 Run `sketchloop examples/sketch-photo.jpg --prompt "modern chair"` in the activated environment. It keeps the raw photo, saves a cropped, contrast-normalized, 512 px grayscale `sketch.png` and four candidates under `runs/`, and asks you to pick some by number. Add `--raw` to generate from the raw image. Run `sketchloop --camera --prompt "modern chair"` to take the sketch from your webcam instead: a preview window opens, Space captures (saved as `sketch-raw.png`), and Esc cancels. Use `--camera-index 1` for a second camera.
+After each pick, a menu starts the next round: Enter repeats with the same sketch and prompt, `p` asks for a new prompt, `c` recaptures (with `--camera`), `f <path>` loads another sketch file, and `q` quits with a summary. Each round is saved under `runs/<session>/round-<n>/`, and the model stays loaded between rounds.
 By default the images come from a labeled fake backend (deterministic noise).
 
 ## Real model

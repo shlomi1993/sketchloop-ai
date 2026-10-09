@@ -1,8 +1,5 @@
 import argparse
-import time
-import uuid
 
-from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from rich.console import Console
@@ -11,11 +8,11 @@ from rich.table import Table
 
 from sketchloop.capture import capture_from_camera, load_sketch_file
 from sketchloop.diffusers_backend import DiffusersSketchGenerator, GenerationMode
-from sketchloop.domain import (
-    GenerationRequest, Guidance, Iteration, SelectionEvent, SketchLoopError, record_no_selection, select_candidates)
+from sketchloop.domain import Guidance, Iteration, SelectionEvent, SketchLoopError, record_no_selection, select_candidates
 from sketchloop.fakes import FakeGenerator
 from sketchloop.generation import Generator
-from sketchloop.preprocessing import ROTATE_CODES, preprocess_sketch
+from sketchloop.preprocessing import ROTATE_CODES
+from sketchloop.session import RoundOutcome, SketchSession
 
 
 class GenerationBackend(StrEnum):
@@ -24,6 +21,17 @@ class GenerationBackend(StrEnum):
     """
     FAKE = "fake"
     DIFFUSERS = "diffusers"
+
+
+class NextStep(StrEnum):
+    """
+    Menu choices after a round: what to change before the next one, or quit.
+    """
+    REPEAT = ""
+    PROMPT = "p"
+    RECAPTURE = "c"
+    FILE = "f"
+    QUIT = "q"
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -122,78 +130,157 @@ def ask_selection(iteration: Iteration, console: Console) -> SelectionEvent:
     return select_candidates(iteration, [candidates[int(number) - 1].id for number in answer])
 
 
-def make_run_folder_name() -> str:
+def describe_selection(outcome: RoundOutcome, selection: SelectionEvent) -> str:
     """
-    Name a run folder by local date and time plus a short random suffix, so folders sort by time and never clash.
+    Turn a selection into the candidate numbers shown in the table, such as "1, 3", or "none" when nothing was picked.
     """
-    return f"{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
+    selected_ids = selection.selected_candidate_ids
+    chosen = [str(candidate.index + 1) for candidate in outcome.iteration.result.candidates if candidate.id in selected_ids]
+    return ", ".join(chosen) or "none"
+
+
+def show_round(outcome: RoundOutcome, console: Console) -> None:
+    """
+    Show a round's sketches, preprocessing steps, timing, and candidates, with scores when the evaluator gave any.
+
+    Args:
+        outcome (RoundOutcome): The round to show.
+        console (Console): Console used for output.
+    """
+    # Show where the raw and generation-input sketches are, which preprocessing steps ran, and how long generation took.
+    sketch = outcome.iteration.request.sketch
+    console.rule(f"Round {outcome.number}")
+    console.print(f"Raw sketch: {(outcome.folder / outcome.raw_sketch.path).as_posix()}", markup=False, soft_wrap=True)
+    console.print(f"Generation sketch: {(outcome.folder / sketch.path).as_posix()}", markup=False, soft_wrap=True)
+    console.print(f"Preprocessing: {', '.join(step.name for step in outcome.steps) or 'skipped'}", soft_wrap=True)
+    console.print(f"Generation time: {outcome.elapsed_seconds:.1f} s")
+
+    # Warn clearly when the images are not from a real model.
+    if outcome.iteration.result.backend.is_fake:
+        warning = "These images are deterministic noise, not output from a real model."
+        console.print(Panel(warning, title="FAKE BACKEND", style="yellow"))
+
+    # List the candidates, adding a score column only when the evaluator gave scores.
+    table = Table()
+    table.add_column("#", justify="right")
+    table.add_column("Candidate image", overflow="fold")
+    if outcome.scores:
+        table.add_column("Score", justify="right")
+
+    for candidate in outcome.iteration.result.candidates:
+        cells = [str(candidate.index + 1), (outcome.folder / candidate.image.path).as_posix()]
+        if outcome.scores:
+            score = outcome.scores.get(candidate.id)
+            cells.append("" if score is None else f"{score:.3f}")
+
+        table.add_row(*cells)
+    console.print(table)
+
+
+def read_answer(console: Console, question: str) -> str | None:
+    """
+    Read one stripped line of input, or None at the end of input.
+    """
+    try:
+        return console.input(question).strip()
+    except EOFError:
+        return None
+
+
+def ask_next_step(console: Console, can_recapture: bool) -> tuple[NextStep, str] | None:
+    """
+    Ask what to change for the next round, re-asking with a hint on invalid input.
+
+    Args:
+        console (Console): Console used for the prompt.
+        can_recapture (bool): Whether the session uses a camera, so recapturing is offered.
+
+    Returns:
+        tuple[NextStep, str] | None: The change and its value (a prompt or file path), or None to quit.
+    """
+    recapture = "c = recapture, " if can_recapture else ""
+    choices = f"Enter = again, p = new prompt, {recapture}f <path> = new file, q = quit"
+    while True:
+        # Quit on end of input or q.
+        answer = read_answer(console, f"[bold]Next ({choices}):[/bold] ")
+        if answer is None or answer == NextStep.QUIT:
+            return None
+
+        # Repeat, recapture, or load a file, when that choice is available.
+        command, _, value = answer.partition(" ")
+        is_available = answer == NextStep.REPEAT or (answer == NextStep.RECAPTURE and can_recapture)
+        if is_available or (command == NextStep.FILE and value.strip()):
+            return NextStep(command), value.strip()
+
+        # Ask for the new prompt, quitting at the end of input and re-asking the menu when it is empty.
+        if answer == NextStep.PROMPT:
+            prompt = read_answer(console, "[bold]New prompt:[/bold] ")
+            if prompt is None:
+                return None
+
+            if prompt:
+                return NextStep.PROMPT, prompt
+
+        console.print(f"Not a choice. Use: {choices}.")
+
+
+def print_summary(session: SketchSession, console: Console) -> None:
+    """
+    Print the session folder, the number of rounds, and each round's selection.
+
+    Args:
+        session (SketchSession): Session to summarize.
+        console (Console): Console used for output.
+    """
+    console.rule("Session summary")
+    console.print(f"Session folder: {session.folder.as_posix()}", markup=False, soft_wrap=True)
+    console.print(f"Rounds: {len(session.rounds)}")
+    for outcome in session.rounds:
+        console.print(f"Round {outcome.number} selected: {describe_selection(outcome, session.selections[outcome.iteration.id])}")
 
 
 def run(args: argparse.Namespace, console: Console) -> None:
     """
-    Run one round: load or capture and preprocess the sketch, generate candidates, save files, and record the selection.
+    Run manual rounds until the person quits: generate, show candidates, record the selection, and apply the next change.
 
     Args:
-        args (argparse.Namespace): Parsed command-line options.
-        console (Console): Console used for output and the prompt.
+        args (argparse.Namespace): Parsed command-line options, applied to every round.
+        console (Console): Console used for output and prompts.
     """
-    # Load or capture the raw sketch and, unless skipped, preprocess it so generation uses the processed image.
-    raw_sketch, raw_bytes = capture_from_camera(args.camera_index) if args.camera else load_sketch_file(args.sketch)
-    sketch = raw_sketch
-    files = {raw_sketch.path: raw_bytes}
-    step_names = "skipped"
-    if not args.raw:
-        processed = preprocess_sketch(raw_bytes, args.rotate)
-        sketch = processed.image
-        files[sketch.path] = processed.payload
-        step_names = ", ".join(step.name for step in processed.steps)
+    # Load or capture the first sketch, then create the backend once so a real model stays loaded between rounds.
+    raw_sketch, raw_payload = capture_from_camera(args.camera_index) if args.camera else load_sketch_file(args.sketch)
+    session = SketchSession(make_generator(args, console), args.runs_dir)
+    prompt = args.prompt
+    while True:
 
-    # Generate candidates with the chosen backend and time the call, which includes a first model load.
-    guidance = Guidance(prompt=args.prompt)
-    request = GenerationRequest(sketch=sketch, guidance=guidance, n_candidates=args.candidates, seed=args.seed)
-    generator = make_generator(args, console)
-    started = time.perf_counter()
-    output = generator.generate(request, files[sketch.path])
-    elapsed_seconds = time.perf_counter() - started
-    iteration = Iteration(parent_id=None, request=request, result=output.result)
+        # Run a round with the current sketch and prompt, then record the person's explicit choice.
+        guidance = Guidance(prompt=prompt)
+        outcome = session.run_round(raw_sketch, raw_payload, guidance, rotation=args.rotate, use_raw=args.raw,
+                                    n_candidates=args.candidates, seed=args.seed)
+        show_round(outcome, console)
+        selection = ask_selection(outcome.iteration, console)
+        session.record_selection(selection)
+        console.print(f"Selected: {describe_selection(outcome, selection)}", style="green")
 
-    # Store the raw and processed sketches and each candidate image under a new, time-named run folder.
-    run_dir: Path = args.runs_dir / make_run_folder_name()
-    files_to_write: dict[str, bytes] = files | dict(output.payloads)
-    for path, payload in files_to_write.items():
-        target_file: Path = run_dir / path
-        target_file.parent.mkdir(parents=True, exist_ok=True)
-        target_file.write_bytes(payload)
+        # Stop when the person quits, otherwise apply the requested change before the next round.
+        next_step = ask_next_step(console, args.camera)
+        if next_step is None:
+            break
 
-    # Show where the raw and generation-input sketches are, and which preprocessing steps ran.
-    console.print(f"Raw sketch: {(run_dir / raw_sketch.path).as_posix()}", markup=False, soft_wrap=True)
-    console.print(f"Generation sketch: {(run_dir / sketch.path).as_posix()}", markup=False, soft_wrap=True)
-    console.print(f"Preprocessing: {step_names}", markup=False, soft_wrap=True)
-    console.print(f"Generation time: {elapsed_seconds:.1f} s", markup=False)
+        step, value = next_step
+        if step == NextStep.PROMPT:
+            prompt = value
+        elif step == NextStep.RECAPTURE:
+            raw_sketch, raw_payload = capture_from_camera(args.camera_index)
+        elif step == NextStep.FILE:
+            raw_sketch, raw_payload = load_sketch_file(Path(value))
 
-    # Warn clearly when the images are not from a real model, then list them.
-    if output.result.backend.is_fake:
-        warning = "These images are deterministic noise, not output from a real model."
-        console.print(Panel(warning, title="FAKE BACKEND", style="yellow"))
-
-    table = Table()
-    table.add_column("#", justify="right")
-    table.add_column("Candidate image", overflow="fold")
-    for candidate in iteration.result.candidates:
-        table.add_row(str(candidate.index + 1), (run_dir / candidate.image.path).as_posix())
-    console.print(table)
-
-    # Record the person's explicit choice and summarize the run.
-    selection = ask_selection(iteration, console)
-    selected_ids = selection.selected_candidate_ids
-    chosen = [str(candidate.index + 1) for candidate in iteration.result.candidates if candidate.id in selected_ids]
-    console.print(f"Run folder: {run_dir.as_posix()}", markup=False, soft_wrap=True)
-    console.print(f"Selected: {', '.join(chosen) if chosen else 'none'}", style="green", markup=False)
+    print_summary(session, console)
 
 
 def main(argv: list[str] | None = None) -> int:
     """
-    Run one sketchloop round from the command line and report errors in one line.
+    Run a sketchloop session from the command line and report errors in one line.
 
     Args:
         argv (list[str] | None, optional): Command-line arguments. Defaults to the process arguments.
