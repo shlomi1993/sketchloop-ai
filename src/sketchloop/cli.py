@@ -1,15 +1,27 @@
 import argparse
+import time
 
+from enum import StrEnum
 from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
 from sketchloop.capture import capture_from_camera, load_sketch_file
+from sketchloop.diffusers_backend import DiffusersSketchGenerator, GenerationMode
 from sketchloop.domain import (
     GenerationRequest, Guidance, Iteration, SelectionEvent, SketchLoopError, record_no_selection, select_candidates)
 from sketchloop.fakes import FakeGenerator
+from sketchloop.generation import Generator
 from sketchloop.preprocessing import preprocess_sketch
+
+
+class GenerationBackend(StrEnum):
+    """
+    Generation backends the command can use.
+    """
+    FAKE = "fake"
+    DIFFUSERS = "diffusers"
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -35,13 +47,43 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=None, help="base seed for reproducible candidates")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="folder for run outputs")
     parser.add_argument("--raw", action="store_true", help="generate from your original sketch instead of the processed one")
+    parser.add_argument("--backend", type=GenerationBackend, choices=list(GenerationBackend), default=GenerationBackend.FAKE, help="generation backend to use")  # noqa: E501
+    parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), help="diffusers mode, by default fast on CPU and quality on a GPU")  # noqa: E501
     args = parser.parse_args(argv)
 
     # Take the sketch from exactly one source.
     if (args.sketch is None) == (not args.camera):
         parser.error("give exactly one of a sketch file or --camera")
 
+    # Only the diffusers backend has modes.
+    if args.mode is not None and args.backend != GenerationBackend.DIFFUSERS:
+        parser.error(f"--mode needs --backend {GenerationBackend.DIFFUSERS}")
+
     return args
+
+
+def make_generator(args: argparse.Namespace, console: Console) -> Generator:
+    """
+    Create the chosen generation backend and print which backend, device, and mode it uses.
+
+    Args:
+        args (argparse.Namespace): Parsed command-line options.
+        console (Console): Console used for output.
+
+    Returns:
+        Generator: The generation backend.
+    """
+    if args.backend == GenerationBackend.FAKE:
+        console.print(f"Using the {args.backend} backend, which makes test images, not real AI output.", markup=False)
+        return FakeGenerator()
+
+    # Describe the real model, where it runs, and what the mode means, so slow CPU runs are expected.
+    generator = DiffusersSketchGenerator(mode=args.mode)
+    steps = next(spec.default for spec in generator.capabilities.controls if spec.name == "steps")
+    model = "Stable Diffusion 1.5 + ControlNet scribble"
+    console.print(f"Using the {args.backend} backend with {model} on {generator.device} in {generator.mode} mode, {steps} steps.",
+                  markup=False)
+    return generator
 
 
 def ask_selection(iteration: Iteration, console: Console) -> SelectionEvent:
@@ -92,10 +134,13 @@ def run(args: argparse.Namespace, console: Console) -> None:
         files[sketch.path] = processed.payload
         step_names = ", ".join(step.name for step in processed.steps)
 
-    # Generate candidates with the fake backend.
+    # Generate candidates with the chosen backend and time the call, which includes a first model load.
     guidance = Guidance(prompt=args.prompt)
     request = GenerationRequest(sketch=sketch, guidance=guidance, n_candidates=args.candidates, seed=args.seed)
-    output = FakeGenerator().generate(request)
+    generator = make_generator(args, console)
+    started = time.perf_counter()
+    output = generator.generate(request, files[sketch.path])
+    elapsed_seconds = time.perf_counter() - started
     iteration = Iteration(parent_id=None, request=request, result=output.result)
 
     # Store the raw and processed sketches and each candidate image under a new run folder named after the iteration.
@@ -110,10 +155,13 @@ def run(args: argparse.Namespace, console: Console) -> None:
     console.print(f"Raw sketch: {(run_dir / raw_sketch.path).as_posix()}", markup=False, soft_wrap=True)
     console.print(f"Generation sketch: {(run_dir / sketch.path).as_posix()}", markup=False, soft_wrap=True)
     console.print(f"Preprocessing: {step_names}", markup=False, soft_wrap=True)
+    console.print(f"Generation time: {elapsed_seconds:.1f} s", markup=False)
 
-    # Warn clearly that the images are not from a real model, then list them.
-    warning = "These images are deterministic noise, not output from a real model."
-    console.print(Panel(warning, title="FAKE BACKEND", style="yellow"))
+    # Warn clearly when the images are not from a real model, then list them.
+    if output.result.backend.is_fake:
+        warning = "These images are deterministic noise, not output from a real model."
+        console.print(Panel(warning, title="FAKE BACKEND", style="yellow"))
+
     table = Table()
     table.add_column("#", justify="right")
     table.add_column("Candidate image", overflow="fold")

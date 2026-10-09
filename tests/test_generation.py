@@ -11,6 +11,7 @@ from sketchloop.generation import ControlSpec, GenerationOutput, GeneratorCapabi
 
 
 SKETCH = ImageRef(path="sketches/s1.png", width=8, height=8, mode="L", media_type="image/png", sha256="a" * 64)
+SKETCH_BYTES = b"unused by the fake"
 
 
 def make_request(controls: dict[str, ControlValue] | None = None, sketch: ImageRef = SKETCH, **changes: Any) -> GenerationRequest:
@@ -34,9 +35,11 @@ def test_fake_loop_generates_selects_and_builds_child_iteration() -> None:
     # The fake must be deterministic per request yet sensitive to the seed.
     generator = FakeGenerator()
     request = make_request(n_candidates=2, seed=7)
-    output = generator.generate(request)
-    assert payloads_of(FakeGenerator().generate(request)) == payloads_of(output), "Same request must give same images"
-    assert payloads_of(generator.generate(dataclasses.replace(request, seed=9))) != payloads_of(output), "Seed must change images"
+    output = generator.generate(request, SKETCH_BYTES)
+    repeated = FakeGenerator().generate(request, SKETCH_BYTES)
+    assert payloads_of(repeated) == payloads_of(output), "Same request must give same images"
+    reseeded = generator.generate(dataclasses.replace(request, seed=9), SKETCH_BYTES)
+    assert payloads_of(reseeded) != payloads_of(output), "Seed must change images"
 
     # Check the recorded provenance: checksums, per-candidate seeds, and the fake label.
     parent = Iteration(parent_id=None, request=request, result=output.result)
@@ -55,7 +58,7 @@ def test_fake_loop_generates_selects_and_builds_child_iteration() -> None:
     # Select a candidate and continue from it to show lineage across rounds.
     selection = select_candidates(parent, [second.id])
     child_request = make_request({"steps": 20}, sketch=second.image)
-    child_result = generator.generate(child_request).result
+    child_result = generator.generate(child_request, SKETCH_BYTES).result
     child = Iteration(parent_id=selection.iteration_id, request=child_request, result=child_result)
     assert child.parent_id == parent.id, "Child must link to its parent iteration"
     assert child.result.effective.controls["steps"] == 20, "Requested control must override the default"
@@ -76,7 +79,7 @@ def test_every_unsupported_setting_is_reported_together() -> None:
     guidance = Guidance(prompt="chair", negative_prompt="", controls=invalid)
     request = GenerationRequest(sketch=SKETCH, guidance=guidance, n_candidates=9, seed=0)
     with pytest.raises(UnsupportedConfigurationError) as raised:
-        FakeGenerator(capabilities).generate(request)
+        FakeGenerator(capabilities).generate(request, SKETCH_BYTES)
 
     # Request-level issues come first, then controls in name order.
     expected = [
@@ -98,8 +101,8 @@ def test_select_candidates_rejects_foreign_and_duplicate_ids() -> None:
     """
     # Take a foreign ID from a second generation, since its candidates get fresh IDs.
     request = make_request(n_candidates=2)
-    iteration = Iteration(parent_id=None, request=request, result=FakeGenerator().generate(request).result)
-    own, foreign = iteration.result.candidates[0].id, FakeGenerator().generate(request).result.candidates[0].id
+    iteration = Iteration(parent_id=None, request=request, result=FakeGenerator().generate(request, SKETCH_BYTES).result)
+    own, foreign = iteration.result.candidates[0].id, FakeGenerator().generate(request, SKETCH_BYTES).result.candidates[0].id
 
     # Each error must name the offending ID so the person knows what to fix.
     for candidate_ids, offender in [([foreign], foreign), ([own, own], own)]:
@@ -121,6 +124,6 @@ def test_iteration_rejects_fewer_candidates_than_requested() -> None:
     An iteration must reject a result with fewer candidates than requested.
     """
     # Pair a two-candidate result with a three-candidate request to mimic a backend that returned too few.
-    result = FakeGenerator().generate(make_request(n_candidates=2)).result
+    result = FakeGenerator().generate(make_request(n_candidates=2), SKETCH_BYTES).result
     with pytest.raises(InvalidRecordError, match="2 candidates but 3"):
         Iteration(parent_id=None, request=make_request(n_candidates=3), result=result)
