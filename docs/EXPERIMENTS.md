@@ -2,6 +2,8 @@
 
 Status: proposed implementation contract derived from R06; exact serialization is decided during T01/T05. This document adds engineering detail to the source requirement and does not describe an implemented store. The first in-memory records for guidance, generation, candidates, iterations, and selection are specified in [the T01a design](design/t01a-contracts.md).
 
+The proposed on-disk records (`session.json` and `round.json`), loading checks, and the `show` and `rerun` subcommands are specified in [the T05 design](design/t05-records.md) and [ADR 0011](decisions/0011-session-records-and-subcommands.md), which was accepted and implemented in T05.
+
 ## Minimum information
 
 | Record | Fields to preserve |
@@ -37,6 +39,6 @@ Restoring conditions is required. Bit-for-bit regeneration is not universally gu
 
 Use synthetic or authorized sketches to exercise capture/preprocessing, multiple candidates, selection, revised input and a second iteration, save/load, and rerun. Test missing/corrupt artifacts, unsupported controls, failed generation, interrupted persistence, and invalid lineage. Separate camera/model integration tests from default offline checks.
 
-Measure capture, processing, generation, evaluation, persistence, and total response time. State image size, batch size, configuration, hardware/runtime, warm-up treatment, number of runs, and distribution (for example median and p95). The brief gives no fixed latency threshold. Establish a measured baseline before setting targets or claiming real-time behavior.
+Measure capture, processing, generation, evaluation, persistence, and total response time. State image size, batch size, configuration, hardware/runtime, warm-up treatment, number of runs, and distribution, for example median and p95. The brief gives no fixed latency threshold. Establish a measured baseline before setting targets or claiming real-time behavior.
 
 Human interpretation and automated similarity measure different things. Record score semantics; do not use CLIP similarity as a universal design-quality score. Model comparisons and formal user studies remain optional extensions.
