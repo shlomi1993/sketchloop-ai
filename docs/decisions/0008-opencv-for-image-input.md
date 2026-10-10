@@ -4,7 +4,7 @@ Status: accepted, amended in T02b (GUI build instead of headless)
 
 ## Context
 
-T02a needs to decode PNG and JPEG sketches and preprocess them (grayscale, crop to the drawing, contrast, resize), and T02b needs webcam capture (R01). The standard-library PNG parser from T01b could not decode pixels or read JPEG. OpenCV was already the candidate toolkit in `docs/ARCHITECTURE.md` and `docs/REFERENCES.md`.
+T02a needs to decode PNG and JPEG sketches and preprocess them with grayscale, crop to the drawing, contrast, and resize, and T02b needs webcam capture (R01). The standard-library PNG parser from T01b could not decode pixels or read JPEG. OpenCV was already the candidate toolkit in `docs/ARCHITECTURE.md` and `docs/REFERENCES.md`.
 
 ## Decision
 

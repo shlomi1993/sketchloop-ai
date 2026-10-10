@@ -23,7 +23,7 @@ Which toolkit should provide the T06 interface (R07): camera preview, prompt and
 - Verified: dependency weight. Gradio pulls FastAPI, uvicorn, pandas, numpy, pillow, huggingface-hub, and others. Streamlit pulls pandas, pyarrow, altair, and pydeck. NiceGUI pulls FastAPI, uvicorn, and socket.io.
 - Inference: Gradio's browser webcam plus a Colab share link would let a laptop camera feed a model running on Colab with no extra networking code. This could settle the remote-execution question simply, but it must be tried.
 - Inference: Streamlit's rerun model makes long generation calls and multi-round state (selected candidate, lineage) awkward without careful session state.
-- Inference: a plain local page (FastAPI plus hand-written HTML and JavaScript) is the most controllable but means owning front-end code, which goes against the owner's preference for small solutions.
+- Inference: a plain local page built from FastAPI plus hand-written HTML and JavaScript is the most controllable but means owning front-end code, which goes against the owner's preference for small solutions.
 
 ## Options compared
 

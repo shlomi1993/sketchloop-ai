@@ -10,11 +10,11 @@ T01a needs the first typed contracts for images, guidance, generation results, i
 
 Adopt [the T01a design](../design/t01a-contracts.md), standard library only, Python 3.11+:
 
-- `sketchloop.domain`: frozen, keyword-only dataclasses validated on construction, `Literal` enumerations, `uuid4` hex IDs created where records are built, `SketchLoopError` with `InvalidRecordError`, `InvalidSelectionError`, and `UnsupportedConfigurationError` (which lists every problem). Records reference images through `ImageRef` (relative path, size, mode, media type, SHA-256). An `Iteration` holds a request, its result, and an optional parent. Selection is a separate `SelectionEvent` from `select_candidates` or `record_no_selection`.
+- `sketchloop.domain`: frozen, keyword-only dataclasses validated on construction, `Literal` enumerations, `uuid4` hex IDs created where records are built, `SketchLoopError` with `InvalidRecordError`, `InvalidSelectionError`, and `UnsupportedConfigurationError` (which lists every problem). Records reference images through `ImageRef`, which holds a relative path, size, mode, media type, and SHA-256. An `Iteration` holds a request, its result, and an optional parent. Selection is a separate `SelectionEvent` from `select_candidates` or `record_no_selection`.
 - `sketchloop.generation`: `ControlSpec`, `GeneratorCapabilities`, `request_issues`, `validate_request`, and a synchronous `Generator` protocol returning a result plus transient image bytes.
 - `sketchloop.fakes`: a deterministic `FakeGenerator` producing PGM bytes and identifying itself with `execution="fake"`.
 
-Alternatives considered: Pydantic or attrs (a dependency without a concrete need), `TypedDict` or `NamedTuple` (mutable or positional and unvalidated), bytes inside candidates (records stop being serializable), and a fuller first slice with iteration status, failures, retries, and conditioning (deferred by the owner to T03 and T05).
+Alternatives considered: Pydantic or attrs would add a dependency without a concrete need. `TypedDict` or `NamedTuple` are mutable or positional and unvalidated. Bytes inside candidates would stop records being serializable. The owner deferred a fuller first slice with iteration status, failures, retries, and conditioning to T03 and T05.
 
 ## Consequences
 

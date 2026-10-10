@@ -11,11 +11,11 @@ python3 install.py && . .venv/bin/activate
 python scripts/check.py
 ```
 
-The installer uses the Python interpreter that launches it to create `.venv`. It also works when invoked by path from another directory. Existing valid environments are reused; existing incomplete directories are not deleted or overwritten. To change Python versions, move the old environment aside and rerun with the desired interpreter. Installation stops on any failed command and reports success only after `pip check` and two readiness tests pass (editable package import and temporary artifact read/write). It does not run the full suite or download models. Initial dependency installation requires network access or cached packages. If creation fails because `venv`/`ensurepip` is unavailable, install your operating system's Python venv support and move the partial environment aside before retrying.
+The installer uses the Python interpreter that launches it to create `.venv`. It also works when invoked by path from another directory. Existing valid environments are reused; existing incomplete directories are not deleted or overwritten. To change Python versions, move the old environment aside and rerun with the desired interpreter. Installation stops on any failed command and reports success only after `pip check` and two readiness tests pass, covering editable package import and temporary artifact read/write. It does not run the full suite or download models. Initial dependency installation requires network access or cached packages. If creation fails because `venv`/`ensurepip` is unavailable, install your operating system's Python venv support and move the partial environment aside before retrying.
 
 On Windows, run `py -3 install.py` and activate with `.venv\Scripts\Activate.ps1`. Alternatively invoke `.venv/bin/python` or `.venv\Scripts\python.exe` directly. Checks run offline once the development dependencies are installed.
 
-For a library-only editable install without testing tools (requires the build backend unless cached):
+For a library-only editable install without testing tools, which requires the build backend unless cached:
 
 ```sh
 python -m pip install -e .
