@@ -30,9 +30,11 @@ def run_two_rounds(runs_dir: Path) -> SketchSession:
 
 def test_records_round_trip(tmp_path: Path) -> None:
     """
-    Two rounds and a failed third load back with equal iterations, steps, selections, lineage, and checksums.
+    Two rounds and a failed third save their files and load back with equal iterations, steps, selections, lineage, and checksums.
     """
     session = run_two_rounds(tmp_path)
+    round1_folder = session.folder / "round-1"
+    round1_files = sorted(path.relative_to(round1_folder).as_posix() for path in round1_folder.rglob("*.*"))
     raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
     with pytest.raises(UnsupportedConfigurationError):
         session.run_round(raw_sketch, raw_payload, Guidance(prompt="vase"), n_candidates=99)
@@ -41,6 +43,11 @@ def test_records_round_trip(tmp_path: Path) -> None:
     saved = load_session(session.folder)
     round1, round2, round3 = saved.rounds
     outcomes = session.rounds
+
+    # Round 1 holds its sketches, candidates, and record, and the raw round 2 writes no processed sketch.
+    expected_files = ["candidates/candidate-1.png", "candidates/candidate-2.png", "round.json", "sketch-raw.jpg", "sketch.png"]
+    assert round1_files == expected_files, f"Round 1 must hold the sketches, candidates, and record, got {round1_files}"
+    assert not (session.folder / "round-2" / "sketch.png").exists(), "A raw round must skip preprocessing"
 
     # The saved records reload into the same iterations, preprocessing steps, and round-to-round lineage.
     iterations_equal = [round1.iteration, round2.iteration] == [outcome.iteration for outcome in outcomes]
