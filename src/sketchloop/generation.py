@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import Literal, Protocol, TypeAlias, get_args
 
 from sketchloop.domain import (ControlValue, GenerationRequest, GenerationResult, InvalidRecordError, IssueCode,
-                               UnsupportedConfigurationError, ValidationIssue, _require)
+                               UnsupportedConfigurationError, ValidationIssue, require)
 
 ControlKind: TypeAlias = Literal["int", "float", "bool", "choice"]
 
@@ -28,16 +28,16 @@ class ControlSpec:
 
     def __post_init__(self) -> None:
         # Only numeric controls may have bounds, and the bounds must be ordered.
-        _require(self.kind in get_args(ControlKind), f"Control {self.name} kind must be int, float, bool, or choice.")
+        require(self.kind in get_args(ControlKind), f"Control {self.name} kind must be int, float, bool, or choice.")
         numeric = self.kind in ("int", "float")
         has_bounds = self.minimum is not None or self.maximum is not None
-        _require(numeric or not has_bounds, f"Control {self.name} may have bounds only if it is an int or float.")
+        require(numeric or not has_bounds, f"Control {self.name} may have bounds only if it is an int or float.")
         bounds_ordered = self.minimum is None or self.maximum is None or self.minimum <= self.maximum
-        _require(bounds_ordered, f"Control {self.name} minimum must not exceed its maximum.")
+        require(bounds_ordered, f"Control {self.name} minimum must not exceed its maximum.")
 
         # Choice controls, and only they, need a list of distinct options.
-        _require((self.kind == "choice") == bool(self.choices), f"Control {self.name} needs choices exactly when a choice.")
-        _require(len(set(self.choices)) == len(self.choices), f"Control {self.name} choices must be unique.")
+        require((self.kind == "choice") == bool(self.choices), f"Control {self.name} needs choices exactly when a choice.")
+        require(len(set(self.choices)) == len(self.choices), f"Control {self.name} choices must be unique.")
 
         # A default must pass the same checks as a value the person supplies.
         problem = None if self.default is None else _control_problem(self, self.default)
@@ -58,11 +58,11 @@ class GeneratorCapabilities:
     def __post_init__(self) -> None:
         # Duplicate names would make request validation ambiguous.
         names = [spec.name for spec in self.controls]
-        _require(len(set(names)) == len(names), f"Control names must be unique, got {names}.")
+        require(len(set(names)) == len(names), f"Control names must be unique, got {names}.")
 
         # Exclude bool explicitly, since it is a subclass of int.
         valid_limit = isinstance(self.max_candidates, int) and not isinstance(self.max_candidates, bool)
-        _require(valid_limit and self.max_candidates >= 1, "max_candidates must be an int >= 1.")
+        require(valid_limit and self.max_candidates >= 1, "max_candidates must be an int >= 1.")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -77,11 +77,11 @@ class GenerationOutput:
         # Freeze the payloads, then require exactly one payload per candidate image.
         object.__setattr__(self, "payloads", MappingProxyType(dict(self.payloads)))
         images = {candidate.image.path: candidate.image for candidate in self.result.candidates}
-        _require(set(self.payloads) == set(images), "Payload keys must equal the candidate image paths.")
+        require(set(self.payloads) == set(images), "Payload keys must equal the candidate image paths.")
 
         # Catch a backend whose bytes do not match the checksum it recorded.
         for path, payload in self.payloads.items():
-            _require(hashlib.sha256(payload).hexdigest() == images[path].sha256, f"Payload {path} fails its checksum.")
+            require(hashlib.sha256(payload).hexdigest() == images[path].sha256, f"Payload {path} fails its checksum.")
 
 
 class Generator(Protocol):
