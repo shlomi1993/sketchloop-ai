@@ -89,11 +89,13 @@ def test_damaged_candidate_listed(tmp_path: Path, damage: str, problem: str) -> 
 @pytest.mark.parametrize(("file_name", "edit", "message"), [
     ("round-1/round.json", lambda data: data["input"]["raw_sketch"].update(path="../x.png"), "outside its round folder"),
     ("session.json", lambda data: data.update(schema_version=2), "schema version 2"),
-    ("round-2/round.json", lambda data: data.update(parent_id="0" * 32), "does not link to round-1")
+    ("round-2/round.json", lambda data: data.update(parent_id="0" * 32), "does not link to round-1"),
+    ("round-1/round.json", lambda data: data.update(started_at="2026-10-09T11:25:02"), "timezone-aware"),
+    ("round-1/round.json", lambda data: data["evaluation"].update(scores={"x": float("nan")}), "finite")
 ])
 def test_invalid_records_rejected(tmp_path: Path, file_name: str, edit: Callable[[dict], None], message: str) -> None:
     """
-    Path traversal, an unknown schema version, and broken lineage each refuse to load.
+    Path traversal, an unknown schema version, broken lineage, a time without timezone, and a NaN score refuse to load.
     """
     session = run_two_rounds(tmp_path)
     record_file = session.folder / file_name
@@ -143,13 +145,17 @@ def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
 
 
 # Build each path from pieces so this file never contains a literal home path for the publication guard to flag.
-@pytest.mark.parametrize("path", ["C:" + "\\Users\\someone\\models\\unet.bin", "/" + "home/someone/.cache/unet.bin"])
-def test_failure_message_hides_paths(path: str) -> None:
+@pytest.mark.parametrize(("message", "expected"), [
+    ("Cannot open '" + "C:" + "\\Users\\some one\\unet.bin': denied", "Cannot open '<path>': denied"),
+    ("Cannot open \"/" + "home/someone/unet.bin\": denied", "Cannot open \"<path>\": denied"),
+    ("Cannot open /" + "Volumes/Data/unet.bin now", "Cannot open <path> now"),
+    ("See https://huggingface.co/models or models/unet.bin", "See https://huggingface.co/models or models/unet.bin")
+], ids=["windows-with-space", "posix-quoted", "posix-unquoted", "url-and-relative"])
+def test_failure_message_hides_paths(message: str, expected: str) -> None:
     """
-    A saved failure message replaces absolute paths, which can name the user, with a placeholder.
+    A saved failure message replaces absolute paths, which can name the user, and keeps URLs and relative paths.
     """
-    failure = describe_failure("generation", OSError(f"Cannot open '{path}': access denied\nsecond line"))
+    failure = describe_failure("generation", OSError(f"{message}\nsecond line"))
 
-    # Only the first line is kept, with the path replaced.
-    expected = "Cannot open '<path>': access denied"
+    # Only the first line is kept, with each absolute path replaced.
     assert failure.message == expected and failure.error == "OSError", f"Unexpected failure record {failure}"
