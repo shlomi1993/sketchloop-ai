@@ -18,11 +18,11 @@ Rerun a diffusers round with `sketchloop rerun` on the laptop to see the reporte
 
 ## Open questions
 
-Software license for the repository. Follow-up: make the data folder configurable instead of `runs/` in the repository. The one-minute CPU target in ADR 0006 is not met: one fast-mode image takes about 35-60 s of sampling and about 100 s in total on the laptop CPU.
+Software license for the repository. The one-minute CPU target in ADR 0006 is not met: one fast-mode image takes about 35-60 s of sampling and about 100 s in total on the laptop CPU.
 
 ## Validation
 
-On Windows 11 with Python 3.12, `.venv\Scripts\python.exe scripts/check.py` passes all checks and 47 tests, and `python -m pytest -m model` passes the real-model test in about 75 s. The installer was verified earlier on Python 3.14 in a fresh copy, but not rerun on Windows. The owner captured a real sketch with the laptop webcam through `sketchloop --camera` on 2026-10-08, and the full flow completed. The owner ran the diffusers backend on the laptop CPU on 2026-10-09.
+On Windows 11 with Python 3.12, `.venv\Scripts\python.exe scripts/check.py` passes all checks and 54 tests, and `python -m pytest -m model` passes the real-model test in about 75 s. The installer was verified earlier on Python 3.14 in a fresh copy, but not rerun on Windows. The owner captured a real sketch with the laptop webcam through `sketchloop --camera` on 2026-10-08, and the full flow completed. The owner ran the diffusers backend on the laptop CPU on 2026-10-09.
 
 ## Handoff discipline
 
