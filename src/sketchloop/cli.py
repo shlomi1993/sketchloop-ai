@@ -3,10 +3,10 @@ import argparse
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import Final
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from typing import Final
 
 from sketchloop.capture import capture_from_camera, load_sketch_file
 from sketchloop.diffusers_backend import DiffusersSketchGenerator, GenerationMode
@@ -294,7 +294,6 @@ def run_session(args: argparse.Namespace, console: Console) -> None:
     session = SketchSession(make_generator(args.backend, args.mode, console), args.runs_dir)
     prompt = args.prompt
     while True:
-
         # Run a round with the current sketch and prompt, then record the person's explicit choice.
         guidance = Guidance(prompt=prompt)
         outcome = session.run_round(raw_sketch, raw_payload, guidance, rotation=args.rotate, use_raw=args.raw,
@@ -329,7 +328,7 @@ def format_controls(controls: Mapping[str, object]) -> str:
 
 def print_session_header(saved: SavedSession, console: Console) -> None:
     """
-    Print a saved session's ID, creation time, code revision, Python, platform, installed packages, and rerun link.
+    Print a saved session's ID, creation time, Python, platform, installed packages, and rerun link.
 
     Args:
         saved (SavedSession): Loaded session.
@@ -361,9 +360,8 @@ def print_candidates(record: RoundRecord, console: Console) -> None:
     selected_ids = record.selection.selected_candidate_ids if record.selection else ()
     for candidate in record.iteration.result.candidates:
         score = record.scores.get(candidate.id)
-        cells = [str(candidate.index + 1), format_value(candidate.seed), "" if score is None else f"{score:.3f}",
-                 "yes" if candidate.id in selected_ids else "", candidate.image.path]
-        table.add_row(*cells)
+        table.add_row(str(candidate.index + 1), format_value(candidate.seed), "" if score is None else f"{score:.3f}",
+                      "yes" if candidate.id in selected_ids else "", candidate.image.path)
     console.print(table)
 
 

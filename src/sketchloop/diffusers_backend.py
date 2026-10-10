@@ -1,6 +1,5 @@
 import cv2
 import hashlib
-import importlib.metadata
 import numpy as np
 import random
 import uuid
@@ -12,7 +11,7 @@ from typing import Any, Final, Protocol
 
 from sketchloop.capture import InvalidSketchError
 from sketchloop.domain import (BackendIdentity, Candidate, ControlValue, EffectiveSettings, GenerationRequest,
-                               GenerationResult, ImageRef, SketchLoopError, Unavailable)
+                               GenerationResult, ImageRef, SketchLoopError, first_line)
 from sketchloop.generation import ControlSpec, GenerationOutput, GeneratorCapabilities, validate_request
 from sketchloop.preprocessing import STROKE_CONTRAST
 
@@ -195,37 +194,6 @@ def local_revision(folder: Path) -> str:
     return metadata.read_text(encoding="utf-8").split("\n", 1)[0][:12] if metadata else "unknown-revision"
 
 
-def package_version(name: str) -> str | Unavailable:
-    """
-    Return an installed package's version, or why it is unavailable.
-
-    Args:
-        name (str): Distribution name.
-
-    Returns:
-        str | Unavailable: The version, or Unavailable when the package is not installed.
-    """
-    try:
-        return importlib.metadata.version(name)
-    except importlib.metadata.PackageNotFoundError:
-        return Unavailable(f"{name} is not installed")
-
-
-def first_line(error: BaseException) -> str:
-    """
-    Summarize an exception on one line for a user-facing error.
-
-    Args:
-        error (BaseException): The exception to summarize.
-
-    Returns:
-        str: The first line of its message, ending with a period, or its type name when the message is empty.
-    """
-    lines = str(error).strip().splitlines()
-    text = lines[0].strip() if lines else type(error).__name__
-    return text if text.endswith(".") else f"{text}."
-
-
 class DiffusersSketchGenerator:
     """
     Stable Diffusion 1.5 with the ControlNet v1.1 scribble model, loaded lazily from local folders.
@@ -303,7 +271,7 @@ class DiffusersSketchGenerator:
 
             pipeline.to(self.device)
         except Exception as error:
-            message = f"Cannot load the diffusers models: {first_line(error)} Rerun scripts/download_models.py."
+            message = f"Cannot load the diffusers models: {first_line(error).rstrip('.')}. Rerun scripts/download_models.py."
             raise GenerationBackendError(message) from error
 
         # Seed a fresh CPU generator per candidate, which Diffusers recommends for reproducibility across devices.
@@ -345,7 +313,7 @@ class DiffusersSketchGenerator:
             try:
                 image = self._runner(seed, **pipeline_kwargs)
             except Exception as error:
-                message = f"Diffusers generation failed: {first_line(error)} Free memory and retry."
+                message = f"Diffusers generation failed: {first_line(error).rstrip('.')}. Free memory and retry."
                 raise GenerationBackendError(message) from error
 
             payload, image_height, image_width = encode_rgb_png(image)
@@ -365,13 +333,16 @@ class DiffusersSketchGenerator:
 
     def _collect_effective_settings(self, request: GenerationRequest, controls: dict[str, ControlValue],
                             candidates: list[Candidate], resolution: str) -> EffectiveSettings:
-        # Combine the controls with the mode, device, scheduler, seeds, and library versions actually used.
+        # Combine the controls with the mode, device, scheduler, and seeds actually used. session.json records library versions.
         dtype = "float16" if self.device == TorchDevice.CUDA else "float32"
-        settings: dict[str, ControlValue | Unavailable] = {
-            "mode": self.mode.value, "device": self.device.value, "dtype": dtype,
-            "scheduler": MODE_SETTINGS[self.mode].scheduler, "resolution": resolution,
-            "seeds": " ".join(str(candidate.seed) for candidate in candidates), "safety_checker": False,
-            "diffusers_version": package_version("diffusers"), "torch_version": package_version("torch")
+        settings: dict[str, ControlValue] = {
+            "mode": self.mode.value,
+            "device": self.device.value,
+            "dtype": dtype,
+            "scheduler": MODE_SETTINGS[self.mode].scheduler,
+            "resolution": resolution,
+            "seeds": " ".join(str(candidate.seed) for candidate in candidates),
+            "safety_checker": False,
         }
         return EffectiveSettings(prompt=request.guidance.prompt, negative_prompt=request.guidance.negative_prompt,
                                  controls=controls | settings)

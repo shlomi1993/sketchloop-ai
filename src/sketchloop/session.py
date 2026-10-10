@@ -1,7 +1,7 @@
 import time
 import uuid
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from functools import partial
@@ -10,7 +10,7 @@ from pathlib import Path
 from sketchloop.domain import (SCHEMA_VERSION, GenerationRequest, Guidance, ImageRef, InvalidSelectionError, Iteration,
                                SelectionEvent)
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
-from sketchloop.experiments import (ROUND_FILE, SESSION_FILE, FailureStage, RerunLink, RoundFailure, RoundRecord, SessionRecord,
+from sketchloop.experiments import (ROUND_FILE, SESSION_FILE, FailureStage, RerunLink, RoundRecord, SessionRecord,
                                     collect_environment, describe_failure, round_to_dict, session_to_dict, write_json_atomic)
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, preprocess_sketch
@@ -95,15 +95,6 @@ class SketchSession:
         timings["preprocessing"] = time.perf_counter() - started
         return processed.image, processed.payload, processed.steps
 
-    def _save_failed_round(self, folder: Path, draft: Callable[..., RoundRecord], files: Mapping[str, bytes],
-                           failure: RoundFailure, steps: tuple[PreprocessingStep, ...],
-                           request: GenerationRequest | None, timings: dict[str, float]) -> None:
-        # Keep the sketches made so far and a failed record, so the attempt stays visible in the session.
-        write_files(folder, files)
-        failed = draft(status="failed", steps=steps, request=request, iteration=None, timings_seconds=timings, evaluator=None,
-                       scores={}, selection=None, failure=failure)
-        write_json_atomic(folder / ROUND_FILE, round_to_dict(failed))
-
     def run_round(self, raw_sketch: ImageRef, raw_payload: bytes, guidance: Guidance, *, rotation: int = 0,
                   use_raw: bool = False, n_candidates: int = 1, seed: int | None = None,
                   reuse: PreprocessedSketch | None = None) -> RoundOutcome:
@@ -155,9 +146,11 @@ class SketchSession:
             scores = self.evaluator.evaluate(output.result.candidates, output.payloads, request)
             timings["evaluation"] = time.perf_counter() - started
         except Exception as error:
-            # Record the failed round with the sketches made so far, then let the caller report the error.
-            files ={raw_sketch.path: raw_payload} | ({request.sketch.path: sketch_payload} if request else {})
-            self._save_failed_round(folder, draft, files, describe_failure(stage, error), steps, request, timings)
+            # Keep the sketches made so far and a failed record, so the attempt stays visible, then let the caller report it.
+            write_files(folder, {raw_sketch.path: raw_payload} | ({request.sketch.path: sketch_payload} if request else {}))
+            failed = draft(status="failed", steps=steps, request=request, iteration=None, timings_seconds=timings,
+                           evaluator=None, scores={}, selection=None, failure=describe_failure(stage, error))
+            write_json_atomic(folder / ROUND_FILE, round_to_dict(failed))
             raise
 
         # Store the raw and processed sketches and the candidates, then the record without a selection.
