@@ -2,7 +2,7 @@
 
 Status: implemented. Decision record: [ADR 0005](../decisions/0005-domain-records-and-generator-contract.md).
 
-Serves T01a in [ROADMAP.md](../ROADMAP.md): R02 (uniform generator layer, substitutable test adapter), R03 (explicit feedback for unsupported controls), R04 (multiple candidates, explicit selection), and R08 (typed, replaceable interfaces). Impact: High, because later boundaries reuse these records. Standard library only, Python 3.11+.
+Serves T01a in [ROADMAP.md](../ROADMAP.md): R02 asks for a uniform generator layer and a substitutable test adapter, R03 for explicit feedback on unsupported controls, R04 for multiple candidates and explicit selection, and R08 for typed, replaceable interfaces. Impact: High, because later boundaries reuse these records. Standard library only, Python 3.11+.
 
 ## Conventions
 
@@ -89,7 +89,7 @@ class Generator(Protocol):
 | Rule | Code |
 | --- | --- |
 | Control name not declared | `unknown_control` |
-| Wrong value type (`bool` is never an `int` or `float`, an `int` is accepted for `float`) | `wrong_type` |
+| Wrong value type, where `bool` is never an `int` or `float` and an `int` is accepted for `float` | `wrong_type` |
 | Value outside inclusive bounds | `out_of_range` |
 | Choice not allowed | `invalid_choice` |
 | Seed given without `supports_seed`, or negative prompt given without `supports_negative_prompt` | `unsupported_feature` |
@@ -117,7 +117,7 @@ class FakeGenerator:
 
 | Item | Target |
 | --- | --- |
-| `Failure` record, iteration status, retry link, `start_iteration`, `complete_iteration`, `fail_iteration`, timings | T05 (status and timing may be needed earlier by T04) |
+| `Failure` record, iteration status, retry link, `start_iteration`, `complete_iteration`, `fail_iteration`, timings | T05, though T04 may need status and timing earlier |
 | `BackendError`, `BackendTimeoutError`, fake failure injection, conditioning images (ControlNet), replay-guarantee enum, backend `details`, sketch-byte reader for real adapters | T03 |
 | Constraint kinds (style, functional), evaluation, repeated-selection rules, iteration stage tags (D1 to D4) | T04 or later |
 | Building candidates outside adapters (`assemble_result`), ID-source injection | Revisit when a second adapter or T05 needs it |

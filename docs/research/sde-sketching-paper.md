@@ -16,7 +16,7 @@ The paper's generative loop (pp. 5-6, Algorithm 1) maps onto the planned compone
 | --- | --- | --- |
 | Input preprocessing | `preprocessing` | Deskew, normalize to 1024×1024, contrast enhancement, optional binarization. Edge or normal-map ControlNet guidance when strokes are dense |
 | Conditioned generation | `generation` | Image-to-image with classifier-free guidance. 25-50 steps, guidance scale 7-9, fixed seed. SD 1.5, SDXL, and Flux via Krita AI Diffusion. ControlNet depth, normals, style, sketch, segmentation |
-| Guidance | `domain` guidance records | Prompts combine style cues with functional constraints (for example "maintain wheelbase and roofline"). Negative prompts are used |
+| Guidance | `domain` guidance records | Prompts combine style cues with functional constraints, for example "maintain wheelbase and roofline". Negative prompts are used |
 | Variants | `generation` | Batches of 8-12 variants per cycle |
 | Selection | `evaluation` plus human selection | CLIP similarity filtering followed by manual review |
 | Iterative loop | `orchestration` | The person adjusts prompt, ControlNet settings, or sketch, and repeats until an acceptance threshold (expert rating ≥4.5/5) |

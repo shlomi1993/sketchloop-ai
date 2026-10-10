@@ -18,7 +18,7 @@ A normal diffusion model removes noise a little at a time, so it needs 20-50 ste
 - Verified (LCM-LoRA pp. 4-5, Eq. 3, Fig. 3): it can be linearly combined with style LoRAs (λ1 = 0.8, λ2 = 1.0 in the example).
 - Verified (card): 2-8 steps, and "either disable guidance_scale or use values between 1.0 and 2.0". License `openrail++`. Weights file 135 MB.
 - Verified (Diffusers guide): works with `StableDiffusionControlNetPipeline`. The SD 1.5 example uses `LCMScheduler`, `load_lora_weights`, 4 steps, `guidance_scale=1.5`, `controlnet_conditioning_scale=0.8`, and `cross_attention_kwargs={"scale": 1}`.
-- Contradiction: the Diffusers guide says negative prompts "don't work" with LCM-LoRA, while the blog says guidance 1 "ignores negative prompts" and suggests 1-2 to explore them. Inference: in Diffusers, CFG (and so the negative prompt) only applies when `guidance_scale > 1`, which also doubles the cost per step.
+- Contradiction: the Diffusers guide says negative prompts "don't work" with LCM-LoRA, while the blog says guidance 1 "ignores negative prompts" and suggests 1-2 to explore them. Inference: in Diffusers, CFG, and so the negative prompt, only applies when `guidance_scale > 1`, which also doubles the cost per step.
 - Verified (blog, SDXL 1024 px, 4 versus 25 steps): M1 Mac 6.5 s versus 64 s, Intel i9-10980XE CPU 29 s versus 219 s. These are SDXL numbers, larger than SD 1.5 at 512.
 - Inference: expect softer detail, less texture variety, and a narrower style range than 25-step CFG. Seeds still give different candidates.
 - Inference: the license of the combined system remains bound by SD 1.5's OpenRAIL-M restrictions.
@@ -31,7 +31,7 @@ A normal diffusion model removes noise a little at a time, so it needs 20-50 ste
 | LCM-LoRA, 4 steps, guidance 1.5 (negative prompt active) | about 20-50 s | about 3-8 s |
 | No LCM, 25 steps, guidance 7.5 | about 1.5-4 min | about 15-35 s |
 
-Fixed costs (text encoder, VAE decode, first-call warm-up) weigh more at 4 steps. Model loading takes tens of seconds and should happen once per session. RAM grows only by the 135 MB LoRA.
+Fixed costs such as the text encoder, VAE decode, and first-call warm-up weigh more at 4 steps. Model loading takes tens of seconds and should happen once per session. RAM grows only by the 135 MB LoRA.
 
 ## Implementation guidance
 

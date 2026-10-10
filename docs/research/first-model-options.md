@@ -13,7 +13,7 @@ Which sketch-conditioned model should be the first real `Generator` adapter (T03
 
 ## Findings
 
-- Verified: SD 1.5 ControlNet scribble expects user-drawn strokes, preprocessed with HED `scribble=True`, and loads through `ControlNetModel` + `StableDiffusionControlNetPipeline`. Weights are CreativeML OpenRAIL-M (use-based restrictions that must be passed on, not OSI-open). Not gated.
+- Verified: SD 1.5 ControlNet scribble expects user-drawn strokes, preprocessed with HED `scribble=True`, and loads through `ControlNetModel` + `StableDiffusionControlNetPipeline`. Weights are CreativeML OpenRAIL-M, with use-based restrictions that must be passed on, so they are not OSI-open. Not gated.
 - Verified: T2I-Adapter sketch v2 is Apache-2.0, expects white outlines on black (PidiNet), and uses `T2IAdapter` + `StableDiffusionAdapterPipeline`. Diffusers calls it "even more lightweight than ControlNet... faster but the results may be slightly worse".
 - Verified: LCM-LoRA works with ControlNet and T2I-Adapter in 4 steps. With LCM, guidance_scale is best at 1.0-2.0 and "negative prompts don't work". SD-Turbo also ignores `guidance_scale` and `negative_prompt`.
 - Verified: SDXL-Turbo is licensed `sai-nc-community` (non-commercial). SD-Turbo points to the Stability community license. SDXS sketch is OpenRAIL++, one-step, Diffusers-loadable.
@@ -41,7 +41,7 @@ First backend: SD 1.5 + ControlNet v1.1 scribble through Diffusers, with LCM-LoR
 ## Implementation guidance
 
 - Module `sketchloop.generation.diffusers_backend` (name for the architect), behind an optional extra such as `generation = ["diffusers==0.40.0", "torch==2.14.1", "transformers==5.18.0", "accelerate==1.15.0"]`. Install CPU torch from the PyTorch CPU index. Verify the set resolves together on Windows with Python 3.11 and 3.12 before writing the ADR.
-- Outline: `ControlNetModel.from_pretrained(id, revision=sha)`, `StableDiffusionControlNetPipeline.from_pretrained(base, controlnet=..., revision=sha, safety_checker=None)` (recording that the checker is off), optional `LCMScheduler` + `load_lora_weights(lcm_id, revision=sha)`, then a call with `image`, `num_inference_steps`, `guidance_scale`, `controlnet_conditioning_scale`, `num_images_per_prompt`, and a fresh CPU generator per call.
+- Outline: `ControlNetModel.from_pretrained(id, revision=sha)`, `StableDiffusionControlNetPipeline.from_pretrained(base, controlnet=..., revision=sha, safety_checker=None)` while recording that the checker is off, optional `LCMScheduler` + `load_lora_weights(lcm_id, revision=sha)`, then a call with `image`, `num_inference_steps`, `guidance_scale`, `controlnet_conditioning_scale`, `num_images_per_prompt`, and a fresh CPU generator per call.
 - Record: model IDs and revisions, scheduler class and config, LCM on or off, steps, guidance scale, conditioning scale, seed per candidate, resolution, dtype, device, library versions, conditioning image `ImageRef`, and stage timing.
 - Capabilities must report negative prompt as unsupported when LCM is on with guidance at or below 1, so `validate_request` gives explicit feedback (R03).
 - Pitfalls: scribble expects white strokes on black, so invert pencil-on-paper captures. Weights total several GB on first download. Keep `from_pretrained` lazy so imports stay offline-safe.

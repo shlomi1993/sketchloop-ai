@@ -21,7 +21,7 @@ Should durable runs, iterations, selection events, and artifacts (R06, R09) live
 - Verified: MLflow sends opt-out usage telemetry. Disable it with `MLFLOW_DISABLE_TELEMETRY=true` or `DO_NOT_TRACK=true`.
 - Verified (GitHub issues): MLflow run params are immutable ("Changing param values is not allowed"). Tags can change and metrics append.
 - Inference: the MLflow docs do not describe artifact checksums, so SHA-256 integrity (already in `ImageRef`) would remain project code either way.
-- Inference: MLflow models runs, params, and metrics. SketchLoop's core records (iteration lineage, candidate sets, explicit selection events, requested versus effective settings) would become nested runs and JSON artifacts, so the project schema exists anyway and MLflow adds a second representation.
+- Inference: MLflow models runs, params, and metrics. SketchLoop's core records, such as iteration lineage, candidate sets, explicit selection events, and requested versus effective settings, would become nested runs and JSON artifacts, so the project schema exists anyway and MLflow adds a second representation.
 - Inference: a filesystem store needs only the standard library, works offline and on Windows, is easy to inspect and diff, and fits immutable write-once records. Its weak points are concurrent writers and querying across many runs, neither needed for one local user.
 
 ## Options compared
@@ -38,7 +38,7 @@ Should durable runs, iterations, selection events, and artifacts (R06, R09) live
 
 ## Recommendation and confidence
 
-Use a filesystem store as the authoritative `ExperimentStore`. Consider an optional MLflow exporter later, behind the store interface, only if cross-run comparison in its UI becomes a concrete need (for example T08 or T09 latency tables). Confidence: high for one local user. Revisit for multi-user or large-scale studies.
+Use a filesystem store as the authoritative `ExperimentStore`. Consider an optional MLflow exporter later, behind the store interface, only if cross-run comparison in its UI becomes a concrete need, for example T08 or T09 latency tables. Confidence: high for one local user. Revisit for multi-user or large-scale studies.
 
 ## Implementation guidance
 
@@ -46,7 +46,7 @@ Use a filesystem store as the authoritative `ExperimentStore`. Consider an optio
 - Layout sketch for the architect: `runs/<run_id>/run.json`, `runs/<run_id>/iterations/<iteration_id>.json`, `runs/<run_id>/selections/<event_id>.json`, and artifacts under `runs/<run_id>/sources/` and `candidates/`, referenced by relative `ImageRef` paths with SHA-256.
 - Every JSON record carries `schema_version`. Write to a temporary file in the same directory, then `os.replace` to a name created with exclusive mode. Never overwrite an existing record. Append new events instead of editing old ones.
 - Loading verifies each artifact's SHA-256 and size and reports missing or mismatched files explicitly, rather than failing silently or "repairing".
-- Record environment provenance once per run (package versions, platform summary without host names or user paths) and per-iteration effective settings, timings, and backend identity.
+- Record environment provenance once per run, meaning package versions and a platform summary without host names or user paths, and record per-iteration effective settings, timings, and backend identity.
 - Pitfalls: keep paths relative and POSIX-style in JSON so runs move between Windows and Colab. Sort JSON keys for stable diffs. Store floats as written, and do not round-trip seeds through floats.
 - Tests: round-trip each record type through `tmp_path`, check that a second write of the same record raises, check that tampering with an artifact byte is reported on load, and simulate an interrupted write (temporary file left behind) being ignored.
 

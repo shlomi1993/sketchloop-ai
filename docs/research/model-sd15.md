@@ -8,7 +8,7 @@ What the T03 base model is, what to expect from it, and what the Diffusers adapt
 
 ## How it works (plain words)
 
-An autoencoder (VAE) squeezes a 512×512 image into a 64×64×4 "latent". A UNet learns to remove noise step by step in that small space, steered by the prompt through cross-attention to a frozen CLIP ViT-L/14 text encoder. Generation starts from random latent noise (fixed by the seed), runs the scheduler for N steps, and decodes the result with the VAE. Classifier-free guidance (CFG) runs the UNet twice per step, with and without the prompt (or with the negative prompt), and pushes away from the second.
+An autoencoder (VAE) squeezes a 512×512 image into a 64×64×4 "latent". A UNet learns to remove noise step by step in that small space, steered by the prompt through cross-attention to a frozen CLIP ViT-L/14 text encoder. Generation starts from random latent noise (fixed by the seed), runs the scheduler for N steps, and decodes the result with the VAE. Classifier-free guidance (CFG) runs the UNet twice per step, with and without the prompt or with the negative prompt, and pushes away from the second.
 
 ## Findings
 
@@ -16,7 +16,7 @@ An autoencoder (VAE) squeezes a 512×512 image into a 64×64×4 "latent". A UNet
 - Verified (paper p. 9, §5): "sequential sampling process is still slower than that of GANs", and autoencoder reconstruction "can become a bottleneck" for fine pixel accuracy. Thin pencil detail may soften.
 - Verified (card): fine-tuned 595k steps at 512×512 from v1-2, latent downsampling factor 8, CLIP ViT-L/14 text encoder. Limitations: no "perfect photorealism", "cannot render legible text", weak compositionality, faces and people often wrong, English captions mainly, LAION-5B bias with Western defaults, and some memorization.
 - Verified (card): the repository is a mirror of the deprecated `runwayml` repository, not gated. License CreativeML OpenRAIL-M.
-- Verified (license, §§5-6, Attachment A): use-based restrictions (unlawful use, harming minors, harmful misinformation, harassment, discriminatory or automated legal decisions, medical advice, and others) must be passed on to users of the model or derivatives. The licensor "claims no rights in the Output", and the user is accountable for it.
+- Verified (license, §§5-6, Attachment A): use-based restrictions must be passed on to users of the model or derivatives. They cover unlawful use, harming minors, harmful misinformation, harassment, discriminatory or automated legal decisions, medical advice, and others. The licensor "claims no rights in the Output", and the user is accountable for it.
 - Verified (Hugging Face file tree): the UNet alone is 3.44 GB in fp32 and 1.72 GB in fp16 safetensors. The repo also holds `.bin` and full-checkpoint files that must not be downloaded.
 - Verified ([Diffusers MPS guide](https://huggingface.co/docs/diffusers/main/en/optimization/mps)): use `pipe.to("mps")` and `enable_attention_slicing()` below 64 GB RAM. Batches "can crash or fail to work reliably", so iterate per image.
 - Verified ([Diffusers reproducibility guide](https://huggingface.co/docs/diffusers/main/en/using-diffusers/reusing_seeds)): use a fresh CPU `torch.Generator` per call, and determinism is "not guaranteed even with an identical seed". CPU and MPS outputs for the same seed will differ.
@@ -41,5 +41,5 @@ Evidence: Core ML SD 1.5 takes 21.9 s per image on the M2 GPU (10 cores) in a [H
 
 ## Open questions for the owner
 
-- Is CreativeML OpenRAIL-M acceptable for the thesis and lab use (already open in [first-model options](first-model-options.md))?
+- Is CreativeML OpenRAIL-M acceptable for the thesis and lab use? This is already open in [first-model options](first-model-options.md).
 - Keep the safety checker on by default, or off and recorded?

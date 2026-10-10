@@ -15,7 +15,7 @@ The proposal describes the paper's use of Stable Diffusion 1.5, SDXL, and FLUX t
 ## Required workflow
 
 1. A person draws freely on a physical surface with a drawing medium of their choice.
-2. A camera captures a still image (or a sequence supported by the capture component).
+2. A camera captures a still image, or a sequence if the capture component supports one.
 3. Preprocessing prepares the sketch for the selected generative model.
 4. The person supplies visual/artistic style guidance and supported controls.
 5. The model produces alternatives or completions based on the sketch and guidance.
