@@ -9,9 +9,9 @@ argument-hint: "[optional message hint or files]"
 
 Hint from the user: $ARGUMENTS
 
-1. Run `git status --short` and `git diff` (plus `git diff --cached` if anything is staged). Decide which files belong in this commit. Leave unrelated changes out and tell the user about them.
+1. Run `git status --short` and `git diff`, plus `git diff --cached` if anything is staged. Decide which files belong in this commit. Leave unrelated changes out and tell the user about them.
 2. Add or update docstrings for the functions, methods, and classes added or changed in `src/` and `scripts/`, following the Docstrings section of `AGENTS.md`. Skip tests. Never add module docstrings.
-3. Run the full check with the project interpreter (`.venv/Scripts/python.exe scripts/check.py` on Windows, `.venv/bin/python scripts/check.py` elsewhere). If it fails, stop and report. Do not commit around a failure.
+3. Run the full check with the project interpreter, `.venv/Scripts/python.exe scripts/check.py` on Windows or `.venv/bin/python scripts/check.py` elsewhere. If it fails, stop and report. Do not commit around a failure.
 4. Stage the chosen files by name. Avoid `git add -A` unless every change belongs in the commit.
 5. Delegate a review of the staged diff to the `privacy-reviewer` subagent. If it reports findings, stop and show them to the user.
 6. Read `git log --oneline -10` and match its style. Write the message as one imperative sentence (no trailing period, no body), naming the task ID if there is one.

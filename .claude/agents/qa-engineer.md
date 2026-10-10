@@ -27,4 +27,4 @@ Capture the exact error and traceback, reproduce it with the narrowest command, 
 
 ## Report
 
-Include the test plan with requirement IDs, the tests added or changed, the exact commands run with their actual results, defects found with reproductions, and coverage that was skipped or cannot run here (for example camera or model tests) and why. Never describe an offline or fake-backend pass as a camera or model demonstration.
+Include the test plan with requirement IDs, the tests added or changed, the exact commands run with their actual results, defects found with reproductions, and coverage that was skipped or cannot run here, for example camera or model tests, and why. Never describe an offline or fake-backend pass as a camera or model demonstration.
