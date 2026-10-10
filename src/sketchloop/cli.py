@@ -1,5 +1,4 @@
 import argparse
-import os
 
 from collections.abc import Callable, Mapping
 from enum import StrEnum
@@ -106,8 +105,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     Returns:
         argparse.Namespace: Parsed options, with the subcommand in `command`.
     """
-    # Let the environment move session data out of the repository, with --runs-dir still taking precedence.
-    runs_dir = Path(os.environ.get("SKETCHLOOP_RUNS_DIR", "runs"))
     formatter = argparse.ArgumentDefaultsHelpFormatter
     parser = argparse.ArgumentParser(prog="sketchloop", description="Run, inspect, and rerun sketch sessions.")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -120,7 +117,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     run_parser.add_argument("--prompt", required=True, help="text guidance for generation")
     run_parser.add_argument("--candidates", type=make_int_parser(1), default=4, help="number of candidates to generate")
     run_parser.add_argument("--seed", type=make_int_parser(0), default=None, help="base seed for reproducible candidates")
-    run_parser.add_argument("--runs-dir", type=Path, default=runs_dir, help="folder for run outputs, or set SKETCHLOOP_RUNS_DIR")  # noqa: E501
+    run_parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="folder for run outputs")
     run_parser.add_argument("--raw", action="store_true", help="generate from your original sketch instead of the processed one")  # noqa: E501
     run_parser.add_argument("--rotate", type=int, choices=list(ROTATE_CODES), default=0, help="degrees to turn the sketch clockwise before processing")  # noqa: E501
     run_parser.add_argument("--backend", type=GenerationBackend, choices=list(GenerationBackend), default=GenerationBackend.FAKE, help="generation backend to use")  # noqa: E501
@@ -132,7 +129,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     rerun_parser = commands.add_parser(Command.RERUN, help="rerun a saved round as a new linked session", description="Rerun a saved round with its recorded sketch and settings.", formatter_class=formatter)  # noqa: E501
     rerun_parser.add_argument("session_folder", type=Path, help="session folder, such as runs/<session>")
     rerun_parser.add_argument("--round", type=make_int_parser(1), required=True, dest="round_number", help="round number to rerun")  # noqa: E501
-    rerun_parser.add_argument("--runs-dir", type=Path, default=runs_dir, help="folder for the new session, or set SKETCHLOOP_RUNS_DIR")  # noqa: E501
+    rerun_parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="folder for the new session")
     args = parser.parse_args(argv)
 
     if args.command == Command.RUN:
