@@ -12,14 +12,12 @@ Common rules: UTF-8, `indent=2`, `allow_nan=False`, keys in the fixed order the 
 
 ```json
 {"schema_version": 1, "session_id": "20261009-142233-a1b2c3", "created_at": "2026-10-09T11:22:33+00:00",
- "code": {"revision": "3dc1d45...", "dirty": false},
  "environment": {"python": "3.12.7", "platform": "Windows 11 AMD64",
                  "packages": {"sketchloop": "0.1.0", "diffusers": "0.40.0", "torch": {"unavailable": "not installed"}}},
  "rerun_of": null}
 ```
 
 - `session_id` is the folder name. `rerun_of` is `{"session_id", "round", "iteration_id"}` for a rerun session.
-- `code.revision` comes from `git rev-parse HEAD` and `dirty` from `git status --porcelain --untracked-files=no`, both run in the package folder with a 5 s timeout. Otherwise each is unavailable ("git not found" or "not a git checkout").
 - `packages` covers a fixed list of sketchloop, numpy, opencv-python, rich, diffusers, torch, transformers, accelerate, peft, safetensors, and huggingface_hub through `importlib.metadata`. `platform` uses `platform.system()`, `release()`, and `machine()` only, never host or user names.
 
 `round-<n>/round.json`:
@@ -45,22 +43,22 @@ Common rules: UTF-8, `indent=2`, `allow_nan=False`, keys in the fixed order the 
 - `selection`: null means none recorded, because the session stopped before a choice or because it is a rerun, which does not ask. `"candidate_ids": []` is an explicit no-selection.
 - `evaluation.scores` is empty when the evaluator gives none. `evaluator` is its class name.
 - `timings_seconds.generation` in a session's first round includes the lazy model load. `preprocessing` is absent when skipped (`--raw`) or reused (rerun).
-- A failed round has `status: "failed"`, `failure: {"stage": "preprocessing" | "generation" | "evaluation", "error": "<class name>", "message": "<one line>"}`, null `iteration_id`, `result`, `evaluation`, and `selection`, and a null `request` if preprocessing failed. Its raw sketch is still saved.
+- A failed round has `status: "failed"`, `failure: {"stage": "preprocessing" | "generation" | "evaluation", "error": "<class name>", "message": "<one line>"}` with absolute paths replaced by `<path>`, null `iteration_id`, `result`, `evaluation`, and `selection`, and a null `request` if preprocessing failed. Its raw sketch is still saved.
 
 ## Module `sketchloop.experiments` (new)
 
 ```python
 class ExperimentRecordError(SketchLoopError, ValueError): ...
 RerunLink(session_id: str, round: int, iteration_id: str)
-Environment(python: str, platform: str, packages: Mapping[str, str | Unavailable], code_revision: str | Unavailable, code_dirty: bool | Unavailable)
+Environment(py_version: str, platform: str, packages: Mapping[str, str | Unavailable])
 SessionRecord(schema_version: int, session_id: str, created_at: datetime, environment: Environment, rerun_of: RerunLink | None)
 RoundFailure(stage: Literal["preprocessing", "generation", "evaluation"], error: str, message: str)
 RoundRecord(schema_version: int, number: int, status: Literal["complete", "failed"], started_at: datetime, raw_sketch: ImageRef,
             use_raw: bool, rotation: int, steps: tuple[PreprocessingStep, ...], request: GenerationRequest | None,
             iteration: Iteration | None, timings_seconds: Mapping[str, float], evaluator: str | None,
             scores: Mapping[str, float], selection: SelectionEvent | None, failure: RoundFailure | None)
-SavedSession(folder: Path, session: SessionRecord, rounds: tuple[RoundRecord, ...], problems: tuple[str, ...])
-RerunComparison(identical_candidates: tuple[int, ...], differences: tuple[str, ...])
+SavedSession(folder: Path, session: SessionRecord, rounds: tuple[RoundRecord, ...], problems: tuple[str, ...], checked_files: int)
+RerunComparison(identical_candidates: tuple[int, ...], candidate_count: int, differences: tuple[str, ...])
 
 def collect_environment() -> Environment
 def session_to_dict(record: SessionRecord) -> dict[str, object]      # and session_from_dict
@@ -80,20 +78,20 @@ Write order in `SketchSession`: `session.json` before the first round, then per 
 ## Subcommands
 
 - `sketchloop run <sketch> | --camera ...`: today's behavior and flags unchanged, now also writing the records.
-- `sketchloop show <session-folder>`: loads without constructing a generator or importing torch. Prints the session header with ID, time, code revision and "uncommitted changes" when dirty, Python, platform, installed generation packages, and `rerun_of`. For each round it prints the status, prompt, negative prompt, requested controls and seed, raw or processed input with rotation, preprocessing step names, backend and model ID (with the fake warning), effective settings on one line, timings, a candidate table with seed, score, and a selected mark, the selection ("1, 3", "none", or "not recorded"), and the failure. It ends with the problems, or "All N files match their recorded checksums." For a rerun session whose original still loads, it also prints the comparison. Exit code 0 when the records load, even with problems.
+- `sketchloop show <session-folder>`: loads without constructing a generator or importing torch. Prints the session header with ID, time, Python, platform, installed generation packages, and `rerun_of`. For each round it prints the status, prompt, negative prompt, requested controls and seed, raw or processed input with rotation, preprocessing step names, backend and model ID (with the fake warning), effective settings on one line, timings, a candidate table with seed, score, and a selected mark, the selection ("1, 3", "none", or "not recorded"), and the failure. It ends with the problems, or "All N files match their recorded checksums." For a rerun session whose original still loads, it also prints the comparison. Exit code 0 when the records load, even with problems.
 - `sketchloop rerun <session-folder> --round N [--runs-dir runs]`, in order:
   1. Load the session. Refuse a missing round, a failed round, or a round with problems.
   2. Recreate the generator from `result.backend.adapter`: `sketchloop.fake` gives `FakeGenerator()`, and `sketchloop.diffusers` gives `DiffusersSketchGenerator(mode=<effective "mode">)`. The mode is passed explicitly because its default depends on the device.
   3. `rebuild_request` keeps the sketch, prompt, negative prompt, and candidate count. It pins the effective value of every control the new generator declares, so changed defaults cannot leak in, and pins `seed` to the first candidate's effective seed, or to None with a difference line when unavailable.
   4. Run one round in a new session with `rerun_of` set. `run_round` gains `reuse: PreprocessedSketch | None`, built from the stored `sketch.png` bytes and the original steps, so generation gets byte-identical input. No selection prompt.
-  5. Print `compare_rounds`: "Candidates with identical bytes: 1, 2 of 4", then one line per difference in backend identity, effective prompt and settings, covering device, dtype, scheduler, seeds, and versions, Python, platform, packages, and code revision or dirty flag, such as "device: cuda -> cpu". Always end with "A rerun restores the recorded conditions. Equal seeds do not guarantee identical images across devices, library versions, or model revisions." Never print "reproduced".
+  5. Print `compare_rounds`: "Candidates with identical bytes: 1, 2 of 4", then one line per difference in backend identity, effective prompt and settings, covering device, dtype, scheduler, seeds, and versions, Python, platform, and packages, such as "device: cuda -> cpu". Always end with "A rerun restores the recorded conditions. Equal seeds do not guarantee identical images across devices, library versions, or model revisions." Never print "reproduced".
 
 ## Failure messages
 
 | Case | Error (one line, through the existing `sketchloop error:` handler) |
 | --- | --- |
 | No `session.json` | `No session.json in <folder>. Give a session folder created by sketchloop run.` |
-| Invalid JSON | `<file> is not valid JSON (line <n>). Restore the file or inspect it by hand.` |
+| Invalid JSON | `<file> is not valid JSON: <decoding error with line>. Restore the file or inspect it by hand.` |
 | Schema version | `<file> has schema version <v>, but this sketchloop reads 1. Upgrade sketchloop.` |
 | Invalid field | `<file>: <field> is invalid: <reason>.` |
 | Path escapes folder | `<file> references <path> outside its round folder. Refusing to load it.` |

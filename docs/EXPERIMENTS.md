@@ -8,7 +8,7 @@ The proposed on-disk records (`session.json` and `round.json`), loading checks, 
 
 | Record | Fields to preserve |
 | --- | --- |
-| Experiment | Schema version, opaque experiment ID, creation time, research configuration, code revision and dirty-state flag, environment/dependency snapshot |
+| Experiment | Schema version, opaque experiment ID, creation time, research configuration, environment/dependency snapshot including the sketchloop-ai version |
 | Iteration | Opaque iteration ID, parent iteration ID or null, attempt/retry relationship, status, start/end time, stage durations and units |
 | Capture | Raw image artifact reference and checksum, capture timestamp, non-identifying acquisition settings, sketch version |
 | Processing | Processed artifacts/checksums, ordered operation names/versions, effective parameters, crop/perspective transforms when used |
