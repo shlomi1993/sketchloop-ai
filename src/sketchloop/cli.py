@@ -1,6 +1,6 @@
 import argparse
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 from pathlib import Path
 from rich.console import Console
@@ -10,7 +10,8 @@ from typing import Final
 
 from sketchloop.capture import capture_from_camera, load_sketch_file
 from sketchloop.diffusers_backend import DiffusersSketchGenerator, GenerationMode
-from sketchloop.domain import Guidance, Iteration, SelectionEvent, SketchLoopError, record_no_selection, select_candidates
+from sketchloop.domain import (Guidance, ImageRef, Iteration, SelectionEvent, SketchLoopError, record_no_selection,
+                               select_candidates)
 from sketchloop.experiments import (SESSION_FILE, ExperimentRecordError, RerunComparison, RerunLink, RoundRecord,
                                     SavedSession, compare_rounds, format_value, load_session, rebuild_request)
 from sketchloop.fakes import FakeGenerator
@@ -52,6 +53,27 @@ class NextStep(StrEnum):
     QUIT = "q"
 
 
+def make_int_parser(minimum: int) -> Callable[[str], int]:
+    """
+    Make an argparse type that reads an integer of at least the minimum, so bad values fail before anything is saved.
+
+    Args:
+        minimum (int): Smallest accepted value.
+
+    Returns:
+        Callable[[str], int]: Function that parses the option text.
+    """
+    def parse_int(text: str) -> int:
+        # Name the limit in the error, which argparse prints with the option name.
+        value = int(text)
+        if value < minimum:
+            raise argparse.ArgumentTypeError(f"must be at least {minimum}, got {value}")
+
+        return value
+
+    return parse_int
+
+
 def check_run_options(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     """
     Reject run option combinations that contradict each other.
@@ -91,10 +113,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     run_parser = commands.add_parser(Command.RUN, help="run a new session", description="Generate alternatives from a sketch and pick some.", formatter_class=formatter)  # noqa: E501
     run_parser.add_argument("sketch", type=Path, nargs="?", help="PNG or JPEG sketch image to start from")
     run_parser.add_argument("--camera", action="store_true", help="capture the sketch from a webcam instead of a file")
-    run_parser.add_argument("--camera-index", type=int, default=0, help="webcam to use with --camera, 0 for the default")
+    run_parser.add_argument("--camera-index", type=make_int_parser(0), default=0, help="webcam to use with --camera, 0 for the default")  # noqa: E501
     run_parser.add_argument("--prompt", required=True, help="text guidance for generation")
-    run_parser.add_argument("--candidates", type=int, default=4, help="number of candidates to generate")
-    run_parser.add_argument("--seed", type=int, default=None, help="base seed for reproducible candidates")
+    run_parser.add_argument("--candidates", type=make_int_parser(1), default=4, help="number of candidates to generate")
+    run_parser.add_argument("--seed", type=make_int_parser(0), default=None, help="base seed for reproducible candidates")
     run_parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="folder for run outputs")
     run_parser.add_argument("--raw", action="store_true", help="generate from your original sketch instead of the processed one")  # noqa: E501
     run_parser.add_argument("--rotate", type=int, choices=list(ROTATE_CODES), default=0, help="degrees to turn the sketch clockwise before processing")  # noqa: E501
@@ -106,7 +128,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     show_parser.add_argument("session_folder", type=Path, help="session folder, such as runs/<session>")
     rerun_parser = commands.add_parser(Command.RERUN, help="rerun a saved round as a new linked session", description="Rerun a saved round with its recorded sketch and settings.", formatter_class=formatter)  # noqa: E501
     rerun_parser.add_argument("session_folder", type=Path, help="session folder, such as runs/<session>")
-    rerun_parser.add_argument("--round", type=int, required=True, dest="round_number", help="round number to rerun")
+    rerun_parser.add_argument("--round", type=make_int_parser(1), required=True, dest="round_number", help="round number to rerun")  # noqa: E501
     rerun_parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="folder for the new session")
     args = parser.parse_args(argv)
 
@@ -164,9 +186,10 @@ def ask_selection(iteration: Iteration, console: Console) -> SelectionEvent:
             return record_no_selection(iteration)
 
         # Accept only distinct numbers from the shown list, and ask again otherwise.
-        all_numbers_valid = all(number.isdigit() and 1 <= int(number) <= len(candidates) for number in answer)
-        if all_numbers_valid and len(set(answer)) == len(answer):
-            return select_candidates(iteration, [candidates[int(number) - 1].id for number in answer])
+        numbers = [int(number) for number in answer if number.isdecimal()]
+        all_numbers_valid = len(numbers) == len(answer) and all(1 <= number <= len(candidates) for number in numbers)
+        if all_numbers_valid and len(set(numbers)) == len(numbers):
+            return select_candidates(iteration, [candidates[number - 1].id for number in numbers])
 
         console.print(f"Use distinct numbers from 1 to {len(candidates)}, or press Enter for none.", style="yellow")
 
@@ -265,6 +288,39 @@ def ask_next_step(console: Console, can_recapture: bool) -> tuple[NextStep, str]
         console.print(f"Not a choice. Use: {choices}.")
 
 
+def ask_next_round(args: argparse.Namespace, console: Console, prompt: str,
+                   sketch: tuple[ImageRef, bytes]) -> tuple[str, tuple[ImageRef, bytes]] | None:
+    """
+    Ask for the next change until one applies, so a wrong file path or a cancelled capture asks again.
+
+    Args:
+        args (argparse.Namespace): Parsed run options, for the camera settings.
+        console (Console): Console used for prompts and errors.
+        prompt (str): Current prompt.
+        sketch (tuple[ImageRef, bytes]): Current raw sketch reference and bytes.
+
+    Returns:
+        tuple[str, tuple[ImageRef, bytes]] | None: The prompt and sketch for the next round, or None to quit.
+    """
+    while True:
+        next_step = ask_next_step(console, args.camera)
+        if next_step is None:
+            return None
+
+        # Load or capture a new sketch, and ask again when that fails.
+        step, value = next_step
+        try:
+            if step == NextStep.RECAPTURE:
+                return prompt, capture_from_camera(args.camera_index)
+            if step == NextStep.FILE:
+                return prompt, load_sketch_file(Path(value))
+        except (SketchLoopError, OSError) as error:
+            console.print(f"{error} Choose again.", style="red", markup=False, soft_wrap=True)
+            continue
+
+        return (value if step == NextStep.PROMPT else prompt), sketch
+
+
 def print_summary(session: SketchSession, console: Console) -> None:
     """
     Print the session folder, the number of rounds, and each round's selection.
@@ -290,31 +346,29 @@ def run_session(args: argparse.Namespace, console: Console) -> None:
         console (Console): Console used for output and prompts.
     """
     # Load or capture the first sketch, then create the backend once so a real model stays loaded between rounds.
-    raw_sketch, raw_payload = capture_from_camera(args.camera_index) if args.camera else load_sketch_file(args.sketch)
+    sketch = capture_from_camera(args.camera_index) if args.camera else load_sketch_file(args.sketch)
     session = SketchSession(make_generator(args.backend, args.mode, console), args.runs_dir)
     prompt = args.prompt
     while True:
-        # Run a round with the current sketch and prompt, then record the person's explicit choice.
-        guidance = Guidance(prompt=prompt)
-        outcome = session.run_round(raw_sketch, raw_payload, guidance, rotation=args.rotate, use_raw=args.raw,
-                                    n_candidates=args.candidates, seed=args.seed)
-        show_round(outcome, console)
-        selection = ask_selection(outcome.iteration, console)
-        session.record_selection(selection)
-        console.print(f"Selected: {describe_selection(outcome.iteration, selection)}", style="green")
+        # Run a round with the current sketch and prompt, reporting a failure instead of ending the session.
+        try:
+            outcome = session.run_round(*sketch, Guidance(prompt=prompt), rotation=args.rotate, use_raw=args.raw,
+                                        n_candidates=args.candidates, seed=args.seed)
+        except (SketchLoopError, OSError) as error:
+            console.print(f"Round failed: {error}", style="red", markup=False, soft_wrap=True)
+        else:
+            # Show the candidates and record the person's explicit choice.
+            show_round(outcome, console)
+            selection = ask_selection(outcome.iteration, console)
+            session.record_selection(selection)
+            console.print(f"Selected: {describe_selection(outcome.iteration, selection)}", style="green")
 
         # Stop when the person quits, otherwise apply the requested change before the next round.
-        next_step = ask_next_step(console, args.camera)
-        if next_step is None:
+        next_round = ask_next_round(args, console, prompt, sketch)
+        if next_round is None:
             break
 
-        step, value = next_step
-        if step == NextStep.PROMPT:
-            prompt = value
-        elif step == NextStep.RECAPTURE:
-            raw_sketch, raw_payload = capture_from_camera(args.camera_index)
-        elif step == NextStep.FILE:
-            raw_sketch, raw_payload = load_sketch_file(Path(value))
+        prompt, sketch = next_round
 
     print_summary(session, console)
 
@@ -477,7 +531,7 @@ def find_rerunnable_round(saved: SavedSession, round_number: int) -> RoundRecord
         folder = saved.folder.as_posix()
         raise SketchLoopError(f"Round {round_number} fails integrity checks. Run sketchloop show {folder} for details.")
 
-    return saved.rounds[round_number - 1]
+    return next(record for record in saved.rounds if record.number == round_number)
 
 
 def make_rerun_generator(record: RoundRecord, console: Console) -> Generator:

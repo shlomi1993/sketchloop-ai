@@ -16,7 +16,7 @@ def test_cli_full_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: p
     """
     sketch = tmp_path / "sketch-photo.jpg"
     shutil.copyfile(EXAMPLE_SKETCH, sketch)
-    answers = iter(["1", "q"])
+    answers = iter(["²", "1 01", "1", "q"])
     monkeypatch.setattr("builtins.input", lambda *prompt: next(answers))
 
     exit_code = main(["run", str(sketch), "--prompt", "modern chair", "--runs-dir", str(tmp_path / "runs")])
@@ -35,6 +35,43 @@ def test_cli_full_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: p
     assert processed_saved_and_shown, "The processed sketch must be saved and its steps shown"
     assert len(list((round_dir / "candidates").glob("*.png"))) == 4, "Four candidate PNGs must be written by default"
     assert "Selected: 1" in output, "The summary must show the selected candidate"
+
+    # A superscript digit and a repeat written as "01" each ask again instead of ending the session.
+    hints = output.count("Use distinct numbers from 1 to 4")
+    assert hints == 2, f"Each invalid answer must ask again, got {hints} hints"
+
+
+def test_cli_session_survives_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """
+    A failed round and a missing new file are reported, and the session continues to the menu and summary.
+    """
+    answers = iter(["f missing.png", "q"])
+    monkeypatch.setattr("builtins.input", lambda *prompt: next(answers))
+
+    # The fake allows at most 8 candidates, so this round fails in generation.
+    arguments = ["run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--candidates", "9", "--runs-dir", str(tmp_path / "runs")]
+    exit_code = main(arguments)
+    output = capsys.readouterr().out
+
+    # Both errors are shown, and the session still ends normally with its summary.
+    assert exit_code == 0, f"Quitting after errors must exit with code 0, got {exit_code}"
+    assert "Round failed: Unsupported request" in output, "The failed round must be reported"
+    assert "Cannot read sketch missing.png" in output and "Choose again." in output, "The missing file must be reported"
+    assert "Rounds: 0" in output, "The summary must still be printed"
+
+
+@pytest.mark.parametrize("option", [["--candidates", "0"], ["--seed", "-1"]])
+def test_cli_rejects_out_of_range_numbers(tmp_path: Path, option: list[str]) -> None:
+    """
+    A candidate count below 1 or a negative seed is rejected before any session folder is created.
+    """
+    # Argparse exits with its usage error code.
+    with pytest.raises(SystemExit) as raised:
+        main(["run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--runs-dir", str(tmp_path / "runs"), *option])
+
+    # Nothing is saved for the rejected command.
+    assert raised.value.code == 2, f"Expected the usage error code 2, got {raised.value.code}"
+    assert not (tmp_path / "runs").exists(), "No session folder may be created for invalid options"
 
 
 def test_cli_two_rounds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
