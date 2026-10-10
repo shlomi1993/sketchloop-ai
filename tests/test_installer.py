@@ -25,6 +25,7 @@ def test_failed_command_propagates(run_command: Callable[..., None]) -> None:
     with pytest.raises(subprocess.CalledProcessError) as error:
         run_command("Checking failure handling", sys.executable, "-c", "raise SystemExit(7)")
 
+    # The raised error carries the child's exit code.
     assert error.value.returncode == 7, f"Expected exit code 7, got {error.value.returncode}"
 
 
@@ -55,5 +56,7 @@ def test_refresh_existing_environment_prompt(tmp_path: Path) -> None:
     command = f'. {activate} && printf "%s\\n" "$VIRTUAL_ENV_PROMPT" && python -c {code}'
     result = subprocess.run(["sh", "-c", command], capture_output=True, text=True, check=True)
     lines = result.stdout.splitlines()
+
+    # The activated shell shows the new prompt and uses the venv's interpreter.
     assert "sketchloop-ai" in lines[0], f"Activated prompt must be sketchloop-ai, got {lines[0]!r}"
     assert Path(lines[1]).resolve() == environment.resolve(), f"Activation must select the venv, got {lines[1]!r}"
