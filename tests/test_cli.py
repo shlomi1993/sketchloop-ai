@@ -76,7 +76,7 @@ def test_cli_rejects_out_of_range_numbers(tmp_path: Path, option: list[str]) -> 
 
 def test_cli_two_rounds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """
-    Pick one, press Enter for a second round, pick none, and quit: both rounds are saved with one backend instance.
+    Pick one, press Enter for a second round, pick none, and quit: both rounds are saved in SKETCHLOOP_RUNS_DIR with one backend.
     """
     answers = iter(["1", "", "", "q"])
     monkeypatch.setattr("builtins.input", lambda *prompt: next(answers))
@@ -91,12 +91,14 @@ def test_cli_two_rounds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys:
 
     monkeypatch.setattr("sketchloop.cli.FakeGenerator", create_counted_fake)
 
-    exit_code = main(["run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--candidates", "2", "--runs-dir", str(tmp_path / "runs")])
+    # Choose the session folder through the environment instead of --runs-dir.
+    monkeypatch.setenv("SKETCHLOOP_RUNS_DIR", str(tmp_path / "runs"))
+    exit_code = main(["run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--candidates", "2"])
     output = capsys.readouterr().out
     session_dirs = list((tmp_path / "runs").iterdir())
     round_names = sorted(path.name for path in session_dirs[0].glob("round-*"))
 
-    # The session ends cleanly with two round folders and a single backend instance.
+    # The session ends cleanly with two round folders in the folder from the environment, and a single backend instance.
     assert exit_code == 0, "A session ended with q must exit with code 0"
     assert round_names == ["round-1", "round-2"], f"Expected two round folders, got {round_names}"
     assert len(created) == 1, f"The backend must be created once per session, got {len(created)}"
