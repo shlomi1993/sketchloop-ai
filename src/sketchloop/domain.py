@@ -71,7 +71,10 @@ def _new_id() -> str:
     return uuid.uuid4().hex
 
 
-def _require(condition: object, message: str) -> None:
+def require(condition: object, message: str) -> None:
+    """
+    Raise InvalidRecordError with the message when a record invariant does not hold.
+    """
     if not condition:
         raise InvalidRecordError(message)
 
@@ -93,7 +96,7 @@ class Unavailable:
     reason: str
 
     def __post_init__(self) -> None:
-        _require(_is_text(self.reason), "Unavailable needs a non-empty reason.")
+        require(_is_text(self.reason), "Unavailable needs a non-empty reason.")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -111,14 +114,14 @@ class ImageRef:
     def __post_init__(self) -> None:
         # Reject Windows separators, drive letters, and traversal so the path stays inside the run folder.
         unsafe = "\\" in self.path or ":" in self.path or {"", ".", ".."} & set(self.path.split("/"))
-        _require(not unsafe, f"Image path {self.path!r} must be relative POSIX without ':', empty, '.', or '..' parts.")
+        require(not unsafe, f"Image path {self.path!r} must be relative POSIX without ':', empty, '.', or '..' parts.")
 
         # Check the image metadata needed to reopen and verify the stored file.
-        _require(_is_int(self.width) and self.width >= 1, f"Image width must be an int >= 1, got {self.width!r}.")
-        _require(_is_int(self.height) and self.height >= 1, f"Image height must be an int >= 1, got {self.height!r}.")
-        _require(self.mode in get_args(ColorMode), f"Image mode must be L, RGB, or RGBA, got {self.mode!r}.")
-        _require(_MEDIA_TYPE.fullmatch(self.media_type), f"Media type must be type/subtype, got {self.media_type!r}.")
-        _require(_SHA256.fullmatch(self.sha256), "Image sha256 must be 64 lowercase hex characters.")
+        require(_is_int(self.width) and self.width >= 1, f"Image width must be an int >= 1, got {self.width!r}.")
+        require(_is_int(self.height) and self.height >= 1, f"Image height must be an int >= 1, got {self.height!r}.")
+        require(self.mode in get_args(ColorMode), f"Image mode must be L, RGB, or RGBA, got {self.mode!r}.")
+        require(_MEDIA_TYPE.fullmatch(self.media_type), f"Media type must be type/subtype, got {self.media_type!r}.")
+        require(_SHA256.fullmatch(self.sha256), "Image sha256 must be 64 lowercase hex characters.")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -133,8 +136,8 @@ class Guidance:
     def __post_init__(self) -> None:
         # Keep control names portable and values serializable, since NaN and infinity break JSON records.
         for name, value in self.controls.items():
-            _require(isinstance(name, str) and _CONTROL_NAME.fullmatch(name), f"Control {name!r} must be snake_case.")
-            _require(not isinstance(value, float) or math.isfinite(value), f"Control {name} must be finite.")
+            require(isinstance(name, str) and _CONTROL_NAME.fullmatch(name), f"Control {name!r} must be snake_case.")
+            require(not isinstance(value, float) or math.isfinite(value), f"Control {name} must be finite.")
 
         # Copy into a read-only view so later changes to the caller's dict cannot alter the record.
         object.__setattr__(self, "controls", MappingProxyType(dict(self.controls)))
@@ -151,8 +154,8 @@ class GenerationRequest:
     seed: int | None = None
 
     def __post_init__(self) -> None:
-        _require(_is_int(self.n_candidates) and self.n_candidates >= 1, "n_candidates must be an int >= 1.")
-        _require(self.seed is None or (_is_int(self.seed) and self.seed >= 0), "seed must be None or an int >= 0.")
+        require(_is_int(self.n_candidates) and self.n_candidates >= 1, "n_candidates must be an int >= 1.")
+        require(self.seed is None or (_is_int(self.seed) and self.seed >= 0), "seed must be None or an int >= 0.")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -166,9 +169,9 @@ class BackendIdentity:
     model_id: str | Unavailable
 
     def __post_init__(self) -> None:
-        _require(_is_text(self.adapter) and _is_text(self.adapter_version), "Adapter and version must be non-empty.")
-        _require(self.execution in get_args(ExecutionKind), "Execution must be fake, in_process, or remote.")
-        _require(isinstance(self.model_id, Unavailable) or _is_text(self.model_id), "Model ID must be non-empty.")
+        require(_is_text(self.adapter) and _is_text(self.adapter_version), "Adapter and version must be non-empty.")
+        require(self.execution in get_args(ExecutionKind), "Execution must be fake, in_process, or remote.")
+        require(isinstance(self.model_id, Unavailable) or _is_text(self.model_id), "Model ID must be non-empty.")
 
     @property
     def is_fake(self) -> bool:
@@ -203,7 +206,7 @@ class Candidate:
     seed: int | Unavailable
 
     def __post_init__(self) -> None:
-        _require(_is_int(self.index) and self.index >= 0, f"Candidate index must be an int >= 0, got {self.index!r}.")
+        require(_is_int(self.index) and self.index >= 0, f"Candidate index must be an int >= 0, got {self.index!r}.")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -218,13 +221,13 @@ class GenerationResult:
     def __post_init__(self) -> None:
         # Candidates need distinct IDs and files so a selection and its stored image are unambiguous.
         count = len(self.candidates)
-        _require(count >= 1, "A generation result needs at least one candidate.")
-        _require(len({candidate.id for candidate in self.candidates}) == count, "Candidate IDs must be unique.")
-        _require(len({candidate.image.path for candidate in self.candidates}) == count, "Image paths must be unique.")
+        require(count >= 1, "A generation result needs at least one candidate.")
+        require(len({candidate.id for candidate in self.candidates}) == count, "Candidate IDs must be unique.")
+        require(len({candidate.image.path for candidate in self.candidates}) == count, "Image paths must be unique.")
 
         # Indices must match display order with no gaps.
         indices = [candidate.index for candidate in self.candidates]
-        _require(indices == list(range(count)), f"Candidate indices must be 0..{count - 1} in order, got {indices}.")
+        require(indices == list(range(count)), f"Candidate indices must be 0..{count - 1} in order, got {indices}.")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -240,9 +243,9 @@ class Iteration:
 
     def __post_init__(self) -> None:
         # Block a self-loop in the lineage and a backend that silently returned a different candidate count.
-        _require(self.parent_id != self.id, "An iteration cannot be its own parent.")
+        require(self.parent_id != self.id, "An iteration cannot be its own parent.")
         expected, actual = self.request.n_candidates, len(self.result.candidates)
-        _require(actual == expected, f"Backend returned {actual} candidates but {expected} were requested.")
+        require(actual == expected, f"Backend returned {actual} candidates but {expected} were requested.")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -259,8 +262,8 @@ class SelectionEvent:
     def __post_init__(self) -> None:
         # Require unique picks and an aware timestamp so timings compare correctly across machines.
         selected = self.selected_candidate_ids
-        _require(len(set(selected)) == len(selected), f"Selected candidate IDs must be unique, got {selected}.")
-        _require(self.created_at.utcoffset() is not None, "Selection created_at must be timezone-aware.")
+        require(len(set(selected)) == len(selected), f"Selected candidate IDs must be unique, got {selected}.")
+        require(self.created_at.utcoffset() is not None, "Selection created_at must be timezone-aware.")
 
     @property
     def is_no_selection(self) -> bool:
