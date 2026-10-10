@@ -12,6 +12,7 @@ def test_private_artifact_paths(name: str) -> None:
     """
     Private artifact paths must be flagged by name alone.
     """
+    # The guard flags the path by name.
     assert path_findings(name), f"{name} must be flagged as private"
 
 
@@ -20,6 +21,7 @@ def test_public_paths(name: str) -> None:
     """
     Publishable paths, including open article PDFs in docs/articles/, must pass.
     """
+    # The guard lets the path pass.
     assert not path_findings(name), f"{name} must be publishable"
 
 
@@ -27,6 +29,7 @@ def test_renamed_pdf() -> None:
     """
     PDF content must be flagged by its bytes, even under another file name.
     """
+    # The guard flags PDF bytes regardless of the file name.
     assert content_findings(b"%P" + b"DF-1.7\nprivate source"), "PDF content must be flagged even when renamed"
 
 
@@ -38,6 +41,7 @@ def test_synthetic_sensitive_patterns(value: str) -> None:
     """
     Each sensitive pattern must be detected in synthetic text.
     """
+    # The guard flags the synthetic sample.
     assert content_findings(value.encode()), "Sensitive pattern must be flagged"
 
 
@@ -45,6 +49,7 @@ def test_public_project_text() -> None:
     """
     Ordinary project text must not trigger a finding.
     """
+    # The guard lets plain project text pass.
     assert not content_findings(b"R06: preserve model revision and iteration lineage."), "Plain project text must pass"
 
 

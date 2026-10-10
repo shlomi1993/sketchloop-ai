@@ -81,9 +81,12 @@ def test_diffusers_missing_model(tmp_path: Path) -> None:
     """
     generator = DiffusersSketchGenerator(tmp_path, mode="fast", device="cpu")
     sketch, payload = make_sketch()
+
+    # Generating without the model folder fails with a backend error.
     with pytest.raises(GenerationBackendError) as raised:
         generator.generate(GenerationRequest(sketch=sketch, guidance=Guidance(prompt="chair")), payload)
 
+    # The error names the missing folder and the download script on one line.
     message = str(raised.value)
     assert "stable-diffusion-v1-5" in message and "download_models.py" in message, f"Unhelpful error {message!r}"
     assert "\n" not in message, "The error must be a single line"
@@ -99,6 +102,7 @@ def test_diffusers_real_model() -> None:
     request = GenerationRequest(sketch=processed.image, guidance=Guidance(prompt="modern chair"), seed=0)
     output = generator.generate(request, processed.payload)
 
+    # The real backend is labeled real and gives a decodable, non-uniform candidate.
     candidate = output.result.candidates[0]
     pixels = cv2.imdecode(np.frombuffer(output.payloads[candidate.image.path], dtype=np.uint8), cv2.IMREAD_COLOR)
     assert not output.result.backend.is_fake, "The real backend must not be labeled fake"

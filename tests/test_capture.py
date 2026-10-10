@@ -55,6 +55,7 @@ def test_camera_capture() -> None:
 
     image, payload = capture_from_camera(0, open_camera=lambda index: camera)
 
+    # The capture is a PNG raw sketch with the frame's size, and the camera is released.
     image_ref_is_raw_png = image.path == "sketch-raw.png" and image.media_type == "image/png" and payload.startswith(b"\x89PNG")
     assert image_ref_is_raw_png, f"Expected a PNG raw sketch, got {image}"
     assert (image.width, image.height, image.mode) == (64, 48, "RGB"), f"Unexpected size or mode {image}"
@@ -68,8 +69,10 @@ def test_camera_unavailable() -> None:
     """
     camera = FakeCamera(available=False)
 
+    # Opening the missing camera fails with an error naming its index.
     with pytest.raises(InvalidSketchError, match="No camera at index 2") as error:
         capture_from_camera(2, open_camera=lambda index: camera)
 
+    # The error fits on one line, and the camera is still released.
     assert "\n" not in str(error.value), f"Expected a one-line error, got {error.value!r}"
     assert camera.released, "The camera must be released after a failure"

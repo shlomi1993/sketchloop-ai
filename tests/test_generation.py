@@ -115,6 +115,7 @@ def test_image_ref_rejects_unsafe_paths(path: str) -> None:
     """
     Image paths must be relative POSIX paths that cannot escape the artifact folder.
     """
+    # Giving the image reference an unsafe path fails validation.
     with pytest.raises(InvalidRecordError):
         dataclasses.replace(SKETCH, path=path)
 
@@ -125,5 +126,7 @@ def test_iteration_rejects_fewer_candidates_than_requested() -> None:
     """
     # Pair a two-candidate result with a three-candidate request to mimic a backend that returned too few.
     result = FakeGenerator().generate(make_request(n_candidates=2), SKETCH_BYTES).result
+
+    # Building the iteration fails with an error naming both candidate counts.
     with pytest.raises(InvalidRecordError, match="2 candidates but 3"):
         Iteration(parent_id=None, request=make_request(n_candidates=3), result=result)
