@@ -8,16 +8,16 @@ The intended loop is **draw → capture → preprocess → generate alternatives
 
 | Task | What you can run | Status |
 | --- | --- | --- |
-| T01 | `sketchloop examples/sketch.png --prompt "..."` with fake candidates | ✅ Done |
+| T01 | `sketchloop run examples/sketch.png --prompt "..."` with fake candidates | ✅ Done |
 | T02a | Load PNG or JPEG and preprocess the sketch (`--raw` to skip) | ✅ Done |
-| T02b | `sketchloop --camera` captures the sketch from a webcam | ✅ Done |
+| T02b | `sketchloop run --camera` captures the sketch from a webcam | ✅ Done |
 | T03 | `--backend diffusers` makes real AI candidates with SD 1.5 and ControlNet scribble | ✅ Done |
 | T04 | Several rounds in one session | ✅ Done |
-| T05 | Reopen and rerun an earlier session | ⏳ Next |
-| T06 | A simple window instead of the terminal | Planned |
-| T07 | Switch model, camera, or storage through a setting | Planned |
-| T08 | Timing per stage | Planned |
-| T09 | Full demo and evaluation report | Planned |
+| T05 | `sketchloop show` and `sketchloop rerun` reopen and rerun an earlier session | ✅ Done |
+| T06 | A simple window instead of the terminal | ⏳ Next |
+| T07 | Switch model, camera, or storage through a setting | ⬜ Planned |
+| T08 | Timing per stage | ⬜ Planned |
+| T09 | Full demo and evaluation report | ⬜ Planned |
 
 Details are in the [roadmap](docs/ROADMAP.md) and [current status](docs/STATUS.md).
 
@@ -47,9 +47,10 @@ The environment stays in `.venv` and uses the shell prompt name `sketchloop-ai`.
 
 ## Try it
 
-Run `sketchloop examples/sketch-photo.jpg --prompt "modern chair"` in the activated environment. It keeps the raw photo, saves a cropped, contrast-normalized, 512 px grayscale `sketch.png` and four candidates under `runs/`, and asks you to pick some by number. Add `--raw` to generate from the raw image. Run `sketchloop --camera --prompt "modern chair"` to take the sketch from your webcam instead: a preview window opens, Space captures (saved as `sketch-raw.png`), and Esc cancels. Use `--camera-index 1` for a second camera.
+Run `sketchloop run examples/sketch-photo.jpg --prompt "modern chair"` in the activated environment. It keeps the raw photo, saves a cropped, contrast-normalized, 512 px grayscale `sketch.png` and four candidates under `runs/`, and asks you to pick some by number. Add `--raw` to generate from the raw image. Run `sketchloop run --camera --prompt "modern chair"` to take the sketch from your webcam instead: a preview window opens, Space captures (saved as `sketch-raw.png`), and Esc cancels. Use `--camera-index 1` for a second camera.
 After each pick, a menu starts the next round: Enter repeats with the same sketch and prompt, `p` asks for a new prompt, `c` recaptures (with `--camera`), `f <path>` loads another sketch file, and `q` quits with a summary. Each round is saved under `runs/<session>/round-<n>/`, and the model stays loaded between rounds.
 By default the images come from a labeled fake backend (deterministic noise).
+Each session also writes `session.json` and a `round.json` per round with the prompt, settings, seeds, timings, checksums, and selection. Run `sketchloop show runs/<session>` to print a saved session and check its files without loading a model. Run `sketchloop rerun runs/<session> --round 1` to repeat a round as a new linked session from the stored `sketch.png` and recorded settings. It reports which candidates came out byte-identical and what changed, without claiming exact replay.
 
 ## Real model
 
@@ -58,10 +59,10 @@ Generate real candidates with Stable Diffusion 1.5 and the ControlNet scribble m
 ```sh
 pip install -e ".[generation]"
 python scripts/download_models.py
-sketchloop examples/sketch-photo.jpg --prompt "modern chair" --backend diffusers
+sketchloop run examples/sketch-photo.jpg --prompt "modern chair" --backend diffusers
 ```
 
-The download script fetches about 6 GB into the ignored `models/` folder and skips files already present. The backend uses CUDA, then Apple MPS, then the CPU. `--mode fast` (4 steps with LCM-LoRA, no negative prompt) is the default on CPU, and `--mode quality` (20 steps) the default on a GPU. Run the real-model test with `python -m pytest -m model`, since default checks skip it.
+The download script fetches about 6 GB into the ignored `models/` folder and skips files already present. The backend uses CUDA, then Apple MPS, then the CPU. `--mode fast` uses 4 steps with LCM-LoRA and no negative prompt and is the default on CPU, and `--mode quality` (20 steps) is the default on a GPU. Run the real-model test with `python -m pytest -m model`, since default checks skip it.
 
 ## Using the project environment with Conda
 
