@@ -89,6 +89,7 @@ class Generator(Protocol):
     Interface every generation backend implements, local or remote.
     """
 
+    @property
     def capabilities(self) -> GeneratorCapabilities: ...
 
     def generate(self, request: GenerationRequest, sketch_payload: bytes) -> GenerationOutput: ...

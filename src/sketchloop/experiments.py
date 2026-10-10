@@ -14,7 +14,7 @@ from typing import Final, Literal, TypeAlias, TypeVar
 
 from sketchloop.domain import (SCHEMA_VERSION, BackendIdentity, Candidate, ControlValue, EffectiveSettings,
                                GenerationRequest, GenerationResult, Guidance, ImageRef, Iteration, SelectionEvent,
-                               SketchLoopError, Unavailable, require)
+                               SketchLoopError, Unavailable, first_line, require)
 from sketchloop.generation import GeneratorCapabilities
 from sketchloop.preprocessing import PreprocessingStep
 
@@ -194,9 +194,7 @@ def describe_failure(stage: FailureStage, error: BaseException) -> RoundFailure:
     """
     Summarize an exception as a round failure with its class name and the first line of its message, paths redacted.
     """
-    lines = str(error).strip().splitlines()
-    message = redact_paths(lines[0]) if lines else type(error).__name__
-    return RoundFailure(stage=stage, error=type(error).__name__, message=message)
+    return RoundFailure(stage=stage, error=type(error).__name__, message=redact_paths(first_line(error)))
 
 
 def encode_value(value: object) -> object:
@@ -236,8 +234,7 @@ def image_from_dict(data: Mapping[str, object]) -> ImageRef:
     if isinstance(path, str) and (path.startswith(("/", "\\")) or ".." in re.split(r"[/\\]", path)):
         raise ExperimentRecordError(f"references {path} outside its round folder. Refusing to load it.")
 
-    return ImageRef(path=path, width=data["width"], height=data["height"], mode=data["mode"],
-                    media_type=data["media_type"], sha256=data["sha256"])
+    return ImageRef(**data)
 
 
 def request_to_dict(request: GenerationRequest) -> dict[str, object]:
@@ -344,7 +341,7 @@ def round_to_dict(record: RoundRecord) -> dict[str, object]:
         "candidate_ids": list(selection.selected_candidate_ids),
         "created_at": selection.created_at.isoformat(),
     } if selection else None
-    failure_data = {"stage": failure.stage, "error": failure.error, "message": failure.message} if failure else None
+    failure_data = asdict(failure) if failure else None
     return {
         "schema_version": record.schema_version,
         "round": record.number,
@@ -493,19 +490,11 @@ def read_json(path: Path, label: str) -> Mapping[str, object]:
     Returns:
         Mapping[str, object]: The parsed object.
     """
-    # Report the line of a syntax error, so the person can find it.
+    # Name the decoding error, which includes the line of a syntax error, so the person can find it.
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        location = f"line {error.lineno}"
-    except UnicodeDecodeError:
-        location = "not UTF-8"
-    else:
-        location = None
-
-    if location is not None:
-        raise ExperimentRecordError(f"{label} is not valid JSON ({location}). Restore the file or inspect it by hand.")
-
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ExperimentRecordError(f"{label} is not valid JSON: {error}. Restore the file or inspect it by hand.") from None
 
     if not isinstance(data, dict):
         raise ExperimentRecordError(f"{label}: the top level is invalid: expected an object.")

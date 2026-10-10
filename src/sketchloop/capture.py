@@ -34,7 +34,6 @@ class InvalidSketchError(SketchLoopError, ValueError):
     """
     A sketch file or camera capture is missing, unreadable, cancelled, or not a supported image.
     """
-    pass
 
 
 class VideoSource(Protocol):
@@ -67,6 +66,13 @@ class VideoSource(Protocol):
         ...
 
 
+def count_channels(pixels: np.ndarray) -> int:
+    """
+    Count an image's color channels, where a two-dimensional array has one.
+    """
+    return 1 if pixels.ndim == 2 else pixels.shape[2]
+
+
 def load_sketch_file(path: Path) -> tuple[ImageRef, bytes]:
     """
     Load a PNG or JPEG sketch and describe it as an image reference relative to its run folder.
@@ -91,8 +97,7 @@ def load_sketch_file(path: Path) -> tuple[ImageRef, bytes]:
     # Decode from memory, so paths with non-ASCII characters work, and accept only 8-bit images.
     extension, media_type = matches[0]
     pixels = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
-    channels = 0 if pixels is None else 1 if pixels.ndim == 2 else pixels.shape[2]
-    if channels not in MODE_BY_CHANNELS or pixels.dtype != np.uint8:
+    if pixels is None or count_channels(pixels) not in MODE_BY_CHANNELS or pixels.dtype != np.uint8:
         raise InvalidSketchError(f"Sketch {path.name} cannot be decoded as 8-bit gray, RGB, or RGBA. Re-save it as PNG or JPEG.")
 
     return raw_image_ref(pixels, payload, extension, media_type), payload
@@ -111,12 +116,11 @@ def raw_image_ref(pixels: np.ndarray, payload: bytes, extension: str, media_type
     Returns:
         ImageRef: Reference to `sketch-raw<extension>` with size, mode, and checksum.
     """
-    channels = 1 if pixels.ndim == 2 else pixels.shape[2]
     return ImageRef(
         path=f"sketch-raw{extension}",
         width=pixels.shape[1],
         height=pixels.shape[0],
-        mode=MODE_BY_CHANNELS[channels],
+        mode=MODE_BY_CHANNELS[count_channels(pixels)],
         media_type=media_type,
         sha256=hashlib.sha256(payload).hexdigest()
     )
@@ -154,8 +158,7 @@ def capture_from_camera(camera_index: int, open_camera: Callable[[int], VideoSou
 
     # Encode the captured frame losslessly, since it is the raw sketch kept for the run.
     encoded, buffer = cv2.imencode(".png", frame)
-    channels = 1 if frame.ndim == 2 else frame.shape[2]
-    if not encoded or channels not in MODE_BY_CHANNELS or frame.dtype != np.uint8:
+    if not encoded or count_channels(frame) not in MODE_BY_CHANNELS or frame.dtype != np.uint8:
         raise InvalidSketchError(f"Camera frame from index {camera_index} cannot be saved as PNG. Try another camera.")
 
     payload = buffer.tobytes()

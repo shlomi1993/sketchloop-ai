@@ -79,6 +79,14 @@ def require(condition: object, message: str) -> None:
         raise InvalidRecordError(message)
 
 
+def first_line(error: BaseException) -> str:
+    """
+    Return the first line of an exception's message, or its class name when the message is empty.
+    """
+    lines = str(error).strip().splitlines()
+    return lines[0].strip() if lines else type(error).__name__
+
+
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
