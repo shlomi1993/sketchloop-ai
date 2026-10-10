@@ -42,4 +42,4 @@ Keep the reproduction script outside the worktree or pass it by absolute path, s
 
 ## 5. Confirm and report
 
-Check the result. The check should fail on the culprit and pass on its parent. Read the culprit diff and explain in a few sentences which change causes the issue and why. Report the commit hash and subject, the evidence (reproduction command and results on the culprit and its parent), your confidence, and a suggested fix. Do not change code unless the user asks. If they do, hand the reproduction to the `python-developer` and turn it into a regression test with the `qa-engineer`.
+Check the result. The check should fail on the culprit and pass on its parent. Read the culprit diff and explain in a few sentences which change causes the issue and why. Report the commit hash and subject, the evidence, meaning the reproduction command and results on the culprit and its parent, your confidence, and a suggested fix. Do not change code unless the user asks. If they do, hand the reproduction to the `python-developer` and turn it into a regression test with the `qa-engineer`.

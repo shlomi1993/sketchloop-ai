@@ -23,7 +23,7 @@ Read `docs/REFERENCES.md`, the relevant parts of `docs/PROJECT.md` and `docs/ARC
 
 - For a generative model, cover sketch conditioning support, output quality evidence, supported guidance and controls, memory and latency on stated hardware, local versus remote execution, availability and revision pinning, license terms, and reproducibility and replay limits. Do not choose hardware or a cloud provider for the owner.
 - For a dependency, cover the current version, supported Python versions and operating systems (including Windows), license, maintenance activity, install weight, optional-extra placement, and whether default tests can stay offline.
-- For a paper's method, map each step to the planned boundaries (capture, preprocessing, generation, evaluation, orchestration, experiments, ui). Name the parameters that must be recorded for provenance and what cannot be reproduced exactly.
+- For a paper's method, map each step to the planned boundaries: capture, preprocessing, generation, evaluation, orchestration, experiments, and ui. Name the parameters that must be recorded for provenance and what cannot be reproduced exactly.
 - Similarity scores such as CLIP are research signals, not measures of design quality. Say so where relevant.
 
 ## Rules
@@ -34,4 +34,4 @@ Read `docs/REFERENCES.md`, the relevant parts of `docs/PROJECT.md` and `docs/ARC
 
 ## Output
 
-Write a note at `docs/research/<short-topic>.md` (create the directory if needed) with these sections: Question and decision informed, Sources (title, link, version or date read), Findings (labeled as above), Options compared (a table when there are several), Recommendation and confidence, Implementation guidance (target module, minimal usage outline with pinned versions, parameters to record, pitfalls, and test ideas including a fake-backend strategy), and Open questions for the owner. Add durable sources to `docs/REFERENCES.md`. Return a short summary and the note's path.
+Write a note at `docs/research/<short-topic>.md`, creating the directory if needed. Give it these sections: Question and decision informed. Sources, with title, link, and version or date read. Findings, labeled as above. Options compared, as a table when there are several. Recommendation and confidence. Implementation guidance, covering the target module, a minimal usage outline with pinned versions, parameters to record, pitfalls, and test ideas including a fake-backend strategy. Open questions for the owner. Add durable sources to `docs/REFERENCES.md`. Return a short summary and the note's path.

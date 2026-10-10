@@ -33,22 +33,24 @@ For durable interface, storage, dependency, or scope decisions, add an ADR using
 ## Communication style
 
 - Avoid semicolons in user-facing messages. Use separate sentences or natural connecting words instead.
+- In Markdown and other prose, avoid long parenthetical asides and write them as part of coherent, easy-to-read sentences. Short labels in parentheses are fine, such as a license (Apache 2.0), a version, an abbreviation, or a requirement ID.
 
 ## Code style
 
 - Type hints on every function and method parameter and return value, including helpers and tests. Use `-> None` when nothing is returned. Implicit `self` and `cls` need no annotation.
 - Target 120 characters per line. Up to 130 is fine when it keeps a statement on one line and the file shorter.
 - `argparse` `add_argument` calls stay on one line even past the limit, marked `# noqa: E501`, because one option per line reads best.
+- Write dict literals with more than three entries, and dependency lists, one entry per line with a trailing comma.
 - Prefer single-line statements, calls, and collections unless one line is hard to read. Do not wrap short calls or add trailing commas just to force multiline formatting.
 - Keep log strings and error messages on one line. Shorten redundant wording instead of splitting a message across string literals, but keep the cause and recovery action.
 - Add a blank line after `return` or `raise` when another statement follows, including after a guard clause. Add a blank line before a comment unless it is the first line of a block. No extra blank line is needed at the end of a function or file.
-- Put a one-line comment above each logical block (an `if`, `for`, `try`, or `with` block, or a group of statements doing one step) saying what it does or why. Skip trivial one-liners.
+- Put a one-line comment above each logical block, meaning an `if`, `for`, `try`, or `with` block or a group of statements doing one step, saying what it does or why. In tests, this includes each group of assertions, saying what it checks. Skip trivial one-liners.
 - In tests, request fixtures used only for their side effects with `@pytest.mark.usefixtures("name")`, not as unused parameters.
 - In tests, give every `assert` a short message that says what went wrong, for example `assert seeds == [7, 8], f"Expected seed + index, got {seeds}"`.
 - Give each dataclass field a short inline comment saying what it holds, for example `revision: str  # Pinned commit SHA to download`.
 - Define helpers above the functions that use them, both module functions and methods. Split long functions into helpers.
-- Name functions and methods with verbs that say what they do (for example `identify_backend`, `build_pipeline_kwargs`).
-- Use self-explanatory names. Avoid single letters and abbreviations except conventional loop indices, and include units where they matter (for example `timeout_seconds`).
+- Name functions and methods with verbs that say what they do, for example `identify_backend` or `build_pipeline_kwargs`.
+- Use self-explanatory names. Avoid single letters and abbreviations except conventional loop indices, and include units where they matter, for example `timeout_seconds`.
 
 ```python
 if privacy_main():
@@ -61,7 +63,7 @@ raise RuntimeError("Existing .venv is incomplete. Move it aside and rerun the in
 
 ## Docstrings
 
-Do not write docstrings during development. Add them before committing (the `/commit` skill does this) for functions, methods, and classes in the change. Tests, fixtures, and test helpers get a one-line docstring saying what they verify or provide, with no `Args:` or `Returns:` sections. Never add a file-level (module) docstring. Keep them short: one to three lines of explanation (one is best), an `Args:` section with one line per argument, and a `Returns:` section. Do not document raised exceptions. Short helpers (one or two statements) get only the one-line explanation, with no `Args:` or `Returns:` sections. Put the opening and closing `"""` on their own lines, even for one-line docstrings.
+Do not write docstrings during development. Add them before committing for functions, methods, and classes in the change. The `/commit` skill does this. Tests, fixtures, and test helpers get a one-line docstring saying what they verify or provide, with no `Args:` or `Returns:` sections. Never add a file-level (module) docstring. Keep them short: one to three lines of explanation (one is best), an `Args:` section with one line per argument, and a `Returns:` section. Do not document raised exceptions. Short helpers (one or two statements) get only the one-line explanation, with no `Args:` or `Returns:` sections. Put the opening and closing `"""` on their own lines, even for one-line docstrings.
 
 ```python
 def filter_candidates(candidates: list[Candidate], threshold: float = 0.5) -> list[Candidate]:

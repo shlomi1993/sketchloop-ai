@@ -15,6 +15,6 @@ Decision to record: $ARGUMENTS
 5. Decision: the chosen approach, the alternatives considered and why they lost, and pinned versions for any dependency or runtime.
 6. Consequences: tradeoffs, compatibility or migration impact, how it was or will be validated, and what remains uncertain.
 7. If it supersedes an earlier ADR, say so in the new status line and change the old ADR's status to `superseded by ADR NNNN`.
-8. Update the documents the decision affects (`docs/ARCHITECTURE.md`, `docs/EXPERIMENTS.md`, `docs/ROADMAP.md` open decisions, or `docs/DEVELOPMENT.md`) and mention the ADR in `docs/STATUS.md`.
+8. Update the documents the decision affects, such as `docs/ARCHITECTURE.md`, `docs/EXPERIMENTS.md`, the open decisions in `docs/ROADMAP.md`, or `docs/DEVELOPMENT.md`, and mention the ADR in `docs/STATUS.md`.
 9. Keep it short and factual. No private source text, personal data, or absolute paths.
 10. Run the full check with the project interpreter so the Markdown links are verified, and tell the user the ADR number and file.

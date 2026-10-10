@@ -6,13 +6,13 @@ argument-hint: "[optional files or diff range]"
 
 # Readability review
 
-Scope: $ARGUMENTS (default: the current `git diff` and staged changes)
+Scope: $ARGUMENTS, or by default the current `git diff` and staged changes
 
 Read the code as a newcomer to the project would. The question is whether someone can understand what each part does without reading its callers.
 
 ## Names
 
-- Every variable, function, class, and parameter name says what it holds or does. Flag single letters (except conventional loop indices like `i` or short comprehension variables), abbreviations (`cfg`, `img`, `res`, `tmp`), and vague names (`data`, `info`, `obj`, `result`, `handle`, `process`).
+- Every variable, function, class, and parameter name says what it holds or does. Flag single letters, except conventional loop indices like `i` or short comprehension variables. Also flag abbreviations such as `cfg`, `img`, `res`, and `tmp`, and vague names such as `data`, `info`, `obj`, `result`, `handle`, and `process`.
 - Functions start with verbs (`load_manifest`, `validate_selection`). Booleans read as questions (`is_complete`, `has_seed`). Collections are plural.
 - Include units and formats where they matter (`timeout_seconds`, `width_px`, `created_at_utc`).
 - Use the project's domain terms consistently: sketch, capture, preprocessing, guidance, candidate, iteration, selection, experiment, artifact. Do not mix synonyms for the same concept.
@@ -26,4 +26,4 @@ Read the code as a newcomer to the project would. The question is whether someon
 
 ## Report
 
-List each finding as `file:line`, the current code or name, and a concrete suggestion (for example `res` → `generation_result`). Put the few most confusing spots first. Skip anything that is already clear, and say plainly if the code reads well.
+List each finding as `file:line`, the current code or name, and a concrete suggestion, for example `res` → `generation_result`. Put the few most confusing spots first. Skip anything that is already clear, and say plainly if the code reads well.
