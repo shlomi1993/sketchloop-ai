@@ -140,11 +140,13 @@ class SketchSession:
             parent_id = self.rounds[-1].iteration.id if self.rounds else None
             iteration = Iteration(parent_id=parent_id, request=request, result=output.result)
 
-            # Score separately from generation and selection.
+            # Score separately from generation and selection, and check the scores by building the record.
             stage = "evaluation"
             started = time.perf_counter()
             scores = self.evaluator.evaluate(output.result.candidates, output.payloads, request)
             timings["evaluation"] = time.perf_counter() - started
+            record = draft(status="complete", steps=steps, request=request, iteration=iteration, timings_seconds=timings,
+                           evaluator=type(self.evaluator).__name__, scores=scores, selection=None, failure=None)
         except Exception as error:
             # Keep the sketches made so far and a failed record, so the attempt stays visible, then let the caller report it.
             write_files(folder, {raw_sketch.path: raw_payload} | ({request.sketch.path: sketch_payload} if request else {}))
@@ -155,8 +157,7 @@ class SketchSession:
 
         # Store the raw and processed sketches and the candidates, then the record without a selection.
         write_files(folder, {raw_sketch.path: raw_payload, sketch.path: sketch_payload} | dict(output.payloads))
-        self._latest_record = draft(status="complete", steps=steps, request=request, iteration=iteration, timings_seconds=timings,
-                                    evaluator=type(self.evaluator).__name__, scores=scores, selection=None, failure=None)
+        self._latest_record = record
         write_json_atomic(folder / ROUND_FILE, round_to_dict(self._latest_record))
         outcome = RoundOutcome(number=number, folder=folder, raw_sketch=raw_sketch, steps=steps, iteration=iteration,
                                timings_seconds=timings, scores=scores)

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -23,8 +24,11 @@ SESSION_FILE: Final = "session.json"
 ROUND_FILE: Final = "round.json"
 ROUND_FOLDER_PATTERN: Final = re.compile(r"round-([1-9][0-9]*)")
 
-# Absolute Windows or POSIX paths, up to the next quote or whitespace, so failure messages never save local paths.
-ABSOLUTE_PATH_PATTERN: Final = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\|/(?:Users|home|root|tmp|var|private|mnt|opt)/)[^\s'\"]*")
+# Absolute paths to redact from failure messages, quoted ones up to the closing quote since names may contain spaces.
+DRIVE: Final = r"(?<!\w)[A-Za-z]:[\\/]"
+ABSOLUTE_PATH_PATTERN: Final = re.compile(
+    rf"(?<=')(?:{DRIVE}|\\\\|/)[^']*(?=')|(?<=\")(?:{DRIVE}|\\\\|/)[^\"]*(?=\")|(?:{DRIVE}|\\\\|(?<![\w.:/])/[^\s'\"/]+/)[^\s'\"]*"
+)
 
 # Distributions whose versions can change generated output or how records are read.
 TRACKED_PACKAGES: Final = (
@@ -127,6 +131,8 @@ class RoundRecord:
         complete = self.iteration is not None and self.failure is None
         require((self.status == "complete") == complete, "Round status must be complete exactly when it has a result.")
         require(not complete or self.request is self.iteration.request, "A complete round's request must be its iteration's.")
+        require(self.started_at.utcoffset() is not None, "Round started_at must be timezone-aware.")
+        require(all(math.isfinite(score) for score in self.scores.values()), "Scores must be finite numbers.")
 
         # A selection must name this round's iteration and candidates.
         if self.selection is not None:
@@ -707,7 +713,9 @@ def describe_conditions(record: RoundRecord, environment: Environment) -> dict[s
         "python": environment.py_version,
         "platform": environment.platform,
     }
-    conditions |= dict(effective.controls)
+
+    # Add the settings and packages, skipping a backend's seeds setting, which candidate seeds already cover.
+    conditions |= {name: value for name, value in effective.controls.items() if name != "seeds"}
     conditions |= {f"package {name}": version for name, version in environment.packages.items()}
     return conditions
 
@@ -725,7 +733,7 @@ def compare_rounds(original: SavedSession, round_number: int, rerun: SavedSessio
         RerunComparison: Identical candidate numbers and one line per difference.
     """
     # Compare only completed rounds, since a failed one has no candidates.
-    source = original.rounds[round_number - 1] if 0 < round_number <= len(original.rounds) else None
+    source = next((record for record in original.rounds if record.number == round_number), None)
     repeat = rerun.rounds[0] if rerun.rounds else None
     if source is None or repeat is None or source.iteration is None or repeat.iteration is None:
         return RerunComparison(identical_candidates=(), candidate_count=0, differences=("A round did not complete.",))
