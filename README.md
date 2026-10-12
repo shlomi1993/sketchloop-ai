@@ -14,8 +14,8 @@ The intended loop is **draw → capture → preprocess → generate alternatives
 | T03 | `--backend diffusers` makes real AI candidates with SD 1.5 and ControlNet scribble | ✅ Done |
 | T04 | Several rounds in one session | ✅ Done |
 | T05 | `sketchloop show` and `sketchloop rerun` reopen and rerun an earlier session | ✅ Done |
-| T06 | A simple window instead of the terminal | ⏳ Next |
-| T07 | Switch model, camera, or storage through a setting | ⬜ Planned |
+| T06 | `sketchloop ui` runs sessions in a local browser page | ✅ Done |
+| T07 | Switch model, camera, or storage through a setting | ⏳ Next |
 | T08 | Timing per stage | ⬜ Planned |
 | T09 | Full demo and evaluation report | ⬜ Planned |
 
