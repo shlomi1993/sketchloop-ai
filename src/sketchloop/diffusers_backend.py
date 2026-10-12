@@ -20,7 +20,7 @@ from sketchloop.preprocessing import STROKE_CONTRAST
 CONDITIONING_LONG_SIDE_PIXELS: Final = 512
 LATENT_SIDE_MULTIPLE: Final = 8
 LCM_LORA_WEIGHTS: Final = "pytorch_lora_weights.safetensors"
-MISSING_EXTRA_MESSAGE: Final = 'The diffusers backend needs the generation extra. Run pip install -e ".[generation]" and retry.'
+MISSING_LIBRARY_MESSAGE: Final = "The diffusers backend cannot import torch or diffusers. Run pip install -e . and retry."
 
 
 class TorchDevice(StrEnum):
@@ -121,11 +121,11 @@ def select_device() -> TorchDevice:
     Returns:
         TorchDevice: The torch device.
     """
-    # Import torch only here, so the core package works without the generation extra.
+    # Import torch only here, since it takes seconds to load and the fake backend and other commands never need it.
     try:
         import torch
     except ImportError as error:
-        raise GenerationBackendError(MISSING_EXTRA_MESSAGE) from error
+        raise GenerationBackendError(MISSING_LIBRARY_MESSAGE) from error
 
     # Prefer an NVIDIA GPU, then Apple Silicon, then the CPU.
     if torch.cuda.is_available():
@@ -250,7 +250,7 @@ class DiffusersSketchGenerator:
             import torch
             import transformers
         except ImportError as error:
-            raise GenerationBackendError(MISSING_EXTRA_MESSAGE) from error
+            raise GenerationBackendError(MISSING_LIBRARY_MESSAGE) from error
 
         # Hide harmless library warnings (missing torchvision, LoRA keys absent from the text encoder), keeping progress bars.
         diffusers.utils.logging.set_verbosity_error()

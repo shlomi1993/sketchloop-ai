@@ -24,7 +24,7 @@ def main() -> int:
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
-        print('Install the generation extra first: pip install -e ".[generation]"')
+        print("Install SketchLoop first: pip install -e .")
         return 1
 
     # Download each repository, where files whose recorded metadata already matches are skipped.

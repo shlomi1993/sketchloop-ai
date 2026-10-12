@@ -21,5 +21,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0
+      # Install CPU-only torch on Linux, since the default PyPI build adds about 3 GB of CUDA libraries the checks never use.
+      - if: runner.os == 'Linux'
+        run: echo "PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu" >> "$GITHUB_ENV"
       - run: python install.py
       - run: .venv/bin/python scripts/check.py

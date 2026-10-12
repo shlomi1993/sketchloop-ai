@@ -1,5 +1,7 @@
 # Gradio implementation guidance for the T06 interface
 
+Update after implementation: the UI streams webcam frames and saves the newest one as PNG instead of using a browser snapshot, and [ADR 0013](../decisions/0013-default-dependencies.md) made Gradio a default dependency instead of a `ui` extra. See [the T06 design](../design/t06-ui.md).
+
 ## Question and decision informed
 
 How should T06 (R07) build the local research interface with Gradio, which [ADR 0006](../decisions/0006-first-backend-store-and-ui.md) already chose? This note answers six concrete questions: the version to pin and its footprint, telemetry and local-only serving, browser webcam capture that keeps the original encoded bytes, multi-select of candidates, progress and errors for a slow CPU round with one loaded backend, and offline testing. It informs the `ui` optional extra, the module split under `src/sketchloop/`, and any ADR amendment. The toolkit comparison stays in [UI toolkit options](ui-toolkit-options.md).

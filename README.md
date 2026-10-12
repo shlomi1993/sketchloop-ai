@@ -59,7 +59,6 @@ To work in a browser instead of the terminal, run `sketchloop ui`. It opens a pa
 Generate real candidates with Stable Diffusion 1.5 and the ControlNet scribble model (no GPU needed):
 
 ```sh
-pip install -e ".[generation]"
 python scripts/download_models.py
 sketchloop run examples/sketch-photo.jpg --prompt "modern chair" --backend diffusers
 ```

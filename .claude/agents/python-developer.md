@@ -27,7 +27,7 @@ You are the Python developer for SketchLoop. You turn an agreed design into type
 - Preserve provenance: keep requested versus effective settings, record unavailable values with a reason, and never fabricate seeds, versions, or timings.
 - Label fake or deterministic test adapters clearly. Never fall back to synthetic output when a real backend fails.
 - Use relative artifact paths, reject path traversal, and never write absolute local paths or private data into code, fixtures, or logs.
-- Add a dependency only with an ADR, pin it in `pyproject.toml`, and put hardware or model packages in optional extras. Default tests must run without a camera, GPU, network, weights, or credentials.
+- Add a dependency only with an ADR, and pin it in `pyproject.toml`. Runtime packages, including the model and UI libraries, are default dependencies, and only developer tools go in the `dev` extra. Default tests must run without a camera, GPU, network, weights, or credentials.
 
 ## Do not
 
