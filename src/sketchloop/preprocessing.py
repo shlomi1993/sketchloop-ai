@@ -32,6 +32,12 @@ THICKEN_PIXELS: Final = 3
 # Pencil strokes are pixels this much darker than the surrounding paper.
 LOCAL_STROKE_CONTRAST: Final = 12
 
+# A partly visible sheet is straightened only when it tilts more than this, so a level sheet is left untouched.
+MIN_TILT_DEGREES: Final = 1.0
+
+# Outline points this close to the image border are where the frame cuts a sheet, not the sheet's own corners or edges.
+FRAME_EDGE_PIXELS: Final = 3
+
 # OpenCV rotation codes by clockwise angle in degrees.
 ROTATE_CODES: Final = {0: None, 90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
 
@@ -96,23 +102,67 @@ def find_paper_corners(gray: np.ndarray) -> np.ndarray | None:
     if len(corners) != 4 or not cv2.isContourConvex(corners):
         return None
 
-    return corners.reshape(4, 2).astype(np.float32)
+    # A corner on the frame edge is where the frame cuts the sheet, not a paper corner.
+    corners = corners.reshape(4, 2).astype(np.float32)
+    if is_on_frame_edge(corners, width, height).any():
+        return None
+
+    return corners
 
 
-def order_corners(points: np.ndarray) -> np.ndarray:
+def is_on_frame_edge(points: np.ndarray, width: int, height: int) -> np.ndarray:
     """
-    Order four corners as top-left, top-right, bottom-right, bottom-left using coordinate sums and differences.
+    Mark which points lie within a few pixels of the image border, where the frame cuts a sheet.
+    """
+    x, y = points[:, 0], points[:, 1]
+    return (x <= FRAME_EDGE_PIXELS) | (y <= FRAME_EDGE_PIXELS) | (x >= width - 1 - FRAME_EDGE_PIXELS) | (y >= height - 1 - FRAME_EDGE_PIXELS)  # noqa: E501
+
+
+def list_outline_edges(outline: np.ndarray) -> np.ndarray:
+    """
+    Return the edge vectors of a closed outline, from each point to the next.
+    """
+    points = outline.reshape(-1, 2).astype(np.float64)
+    return np.roll(points, -1, axis=0) - points
+
+
+def measure_tilt_degrees(edges: np.ndarray) -> float:
+    """
+    Measure how far edges turn clockwise from level, between -45 and 45 degrees, weighting longer edges more.
+
+    Args:
+        edges (np.ndarray): Edge vectors as an Nx2 array, such as the sides of a sheet.
+
+    Returns:
+        float: The tilt in degrees, positive when the sheet is turned clockwise in the image.
+    """
+    # Quadruple each edge angle so edges 90 degrees apart agree, then average them as unit vectors.
+    lengths = np.hypot(edges[:, 0], edges[:, 1])
+    angles = 4 * np.arctan2(edges[:, 1], edges[:, 0])
+    return float(np.degrees(np.arctan2((lengths * np.sin(angles)).sum(), (lengths * np.cos(angles)).sum()) / 4))
+
+
+def order_corners(points: np.ndarray) -> tuple[np.ndarray, float]:
+    """
+    Order four corners as top-left, top-right, bottom-right, bottom-left, with the smallest turn from the camera's view.
 
     Args:
         points (np.ndarray): Four corner points as a 4x2 array.
 
     Returns:
-        np.ndarray: The ordered corners.
+        tuple[np.ndarray, float]: The ordered corners, and the sheet's tilt in degrees.
     """
-    sums, differences = points.sum(axis=1), np.diff(points, axis=1).ravel()
-    top_left, bottom_right = points[np.argmin(sums)], points[np.argmax(sums)]
-    top_right, bottom_left = points[np.argmin(differences)], points[np.argmax(differences)]
-    return np.array([top_left, top_right, bottom_right, bottom_left], dtype=np.float32)
+    # Turn the corners level around their center, so sums and differences pick the corners even for a steep tilt.
+    tilt = measure_tilt_degrees(list_outline_edges(points))
+    radians = np.radians(tilt)
+    offsets = points - points.mean(axis=0)
+    level = np.column_stack([offsets[:, 0] * np.cos(radians) + offsets[:, 1] * np.sin(radians),
+                             -offsets[:, 0] * np.sin(radians) + offsets[:, 1] * np.cos(radians)])
+
+    # Pick each corner on the level points and return the original points in that order.
+    sums, differences = level.sum(axis=1), np.diff(level, axis=1).ravel()
+    order = [np.argmin(sums), np.argmin(differences), np.argmax(sums), np.argmax(differences)]
+    return points[order].astype(np.float32), tilt
 
 
 def correct_perspective(gray: np.ndarray) -> tuple[np.ndarray, dict[str, ControlValue]]:
@@ -131,14 +181,21 @@ def correct_perspective(gray: np.ndarray) -> tuple[np.ndarray, dict[str, Control
         return gray, {"corners_found": False, "width": width, "height": height}
 
     # Size the output by the longer of each pair of opposite edges, then warp the paper onto it.
-    source = order_corners(corners)
+    source, tilt = order_corners(corners)
     top_left, top_right, bottom_right, bottom_left = source
     out_width = round(max(np.linalg.norm(top_right - top_left), np.linalg.norm(bottom_right - bottom_left)))
     out_height = round(max(np.linalg.norm(bottom_left - top_left), np.linalg.norm(bottom_right - top_right)))
     target = np.array([[0, 0], [out_width - 1, 0], [out_width - 1, out_height - 1], [0, out_height - 1]], dtype=np.float32)
     warped = cv2.warpPerspective(gray, cv2.getPerspectiveTransform(source, target), (out_width, out_height))
     corner_text = " ".join(f"{round(float(x))},{round(float(y))}" for x, y in source)
-    return warped, {"corners_found": True, "corners": corner_text, "width": out_width, "height": out_height}
+    params: dict[str, ControlValue] = {
+        "corners_found": True,
+        "corners": corner_text,
+        "tilt_degrees": round(tilt, 1),
+        "width": out_width,
+        "height": out_height,
+    }
+    return warped, params
 
 
 def find_paper_mask(image: np.ndarray, scale: float) -> np.ndarray:
@@ -167,9 +224,43 @@ def find_paper_mask(image: np.ndarray, scale: float) -> np.ndarray:
     return paper_mask
 
 
+def straighten_tilt(gray: np.ndarray, scale: float) -> tuple[np.ndarray, float]:
+    """
+    Turn the image so the largest bright region's edges are level, for a tilted sheet whose corners are not all visible.
+
+    Args:
+        gray (np.ndarray): Grayscale image.
+        scale (float): Ratio of the image's long side to the reference long side.
+
+    Returns:
+        tuple[np.ndarray, float]: The straightened image, enlarged to keep every pixel, and the tilt it removed in degrees.
+    """
+    contours = cv2.findContours(find_paper_mask(gray, scale), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+    if not contours:
+        return gray, 0.0
+
+    # Measure the tilt from the paper's own edges, skipping edges where the frame cuts the sheet, and leave a level sheet.
+    height, width = gray.shape
+    paper = max(contours, key=cv2.contourArea)
+    outline = cv2.approxPolyDP(paper, 0.004 * cv2.arcLength(paper, True), True).reshape(-1, 2).astype(np.float64)
+    on_frame = is_on_frame_edge(outline, width, height)
+    inner_edges = list_outline_edges(outline)[~(on_frame & np.roll(on_frame, -1))]
+    tilt = measure_tilt_degrees(inner_edges) if len(inner_edges) else 0.0
+    if abs(tilt) < MIN_TILT_DEGREES:
+        return gray, 0.0
+
+    # Turn back by the tilt on a canvas large enough for the turned image, filling new corners dark like a table.
+    rotation = cv2.getRotationMatrix2D((width / 2, height / 2), tilt, 1.0)
+    cos, sin = abs(rotation[0, 0]), abs(rotation[0, 1])
+    new_width, new_height = round(width * cos + height * sin), round(width * sin + height * cos)
+    rotation[:, 2] += [(new_width - width) / 2, (new_height - height) / 2]
+    straightened = cv2.warpAffine(gray, rotation, (new_width, new_height), flags=cv2.INTER_LINEAR, borderValue=0)
+    return straightened, round(tilt, 1)
+
+
 def isolate_paper(gray: np.ndarray, scale: float) -> tuple[np.ndarray, np.ndarray, dict[str, ControlValue]]:
     """
-    Straighten the paper when its four corners are visible, then whiten everything outside its slightly shrunken outline.
+    Straighten the paper by its corners or, when some are hidden, by its edges, then whiten everything outside its outline.
 
     Args:
         gray (np.ndarray): Grayscale image.
@@ -179,6 +270,11 @@ def isolate_paper(gray: np.ndarray, scale: float) -> tuple[np.ndarray, np.ndarra
         tuple[np.ndarray, np.ndarray, dict[str, ControlValue]]: The paper-only image, the paper mask, and the parameters used.
     """
     flattened, params = correct_perspective(gray)
+
+    # Straighten a tilted sheet whose corners are not all visible, using its visible edges.
+    if not params["corners_found"]:
+        flattened, tilt = straighten_tilt(flattened, scale)
+        params |= {"tilt_degrees": tilt, "width": flattened.shape[1], "height": flattened.shape[0]}
 
     # Shrink the outline, also from the frame edge, so the paper's own edge is not mistaken for a stroke.
     erode_size = odd_kernel_size(PAPER_ERODE_PIXELS, scale)

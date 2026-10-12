@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import pytest
 
 from sketchloop.preprocessing import preprocess_sketch
 
@@ -68,6 +69,34 @@ def test_perspective_straightens_paper() -> None:
     # The warped sheet spans its longer edges within 6 px.
     size_matches_edges = abs(paper["width"] - 581) <= 6 and abs(paper["height"] - 463) <= 6
     assert size_matches_edges, f"Output must span the paper's longer edges, got {dict(paper)}"
+
+
+@pytest.mark.parametrize(("angle", "center", "corners_found", "tilt", "aspect_ratio"), [
+    (30, (400, 300), True, 30, 1.8),
+    (60, (400, 300), True, -30, 1 / 1.8),
+    (-25, (180, 320), False, -25, 1.8)
+], ids=["visible-30", "visible-60", "partly-visible-minus-25"])
+def test_tilted_sheet_straightened(angle: float, center: tuple[int, int], corners_found: bool, tilt: float,
+                                   aspect_ratio: float) -> None:
+    """
+    A tilted sheet is turned by the smallest angle that levels it, by its corners or, when partly off-frame, by its edges.
+    """
+    # A light 500 x 300 sheet on a dark table with a 160 x 80 rectangle drawn on it, both turned clockwise by the angle.
+    photo = np.full((600, 800), 40, dtype=np.uint8)
+    cv2.fillConvexPoly(photo, cv2.boxPoints((center, (500, 300), angle)).astype(np.int32), 220)
+    cv2.polylines(photo, [cv2.boxPoints((center, (160, 80), angle)).astype(np.int32)], True, 60, 3)
+    _, encoded = cv2.imencode(".png", photo)
+
+    result = preprocess_sketch(encoded.tobytes())
+    paper, crop = result.steps[2].params, result.steps[4].params
+
+    # The tilt is found from the corners when all are visible, and from the visible edges otherwise.
+    assert paper["corners_found"] == corners_found, f"Expected corners_found {corners_found}, got {dict(paper)}"
+    assert abs(paper["tilt_degrees"] - tilt) <= 1.5, f"Expected a tilt near {tilt}, got {paper['tilt_degrees']}"
+
+    # The drawn rectangle comes out level, so its crop has the rectangle's proportions, turned upright at 60 degrees.
+    crop_ratio = crop["width"] / crop["height"]
+    assert abs(crop_ratio - aspect_ratio) < 0.15, f"Expected a crop aspect near {aspect_ratio:.2f}, got {crop_ratio:.2f}"
 
 
 def test_noisy_capture() -> None:
