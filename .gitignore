@@ -227,6 +227,7 @@ __marimo__/
 /tmp/
 /output/
 /.dist/
+.gradio/
 .env.*
 !.env.example
 .DS_Store

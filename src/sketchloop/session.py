@@ -8,10 +8,11 @@ from functools import partial
 from pathlib import Path
 
 from sketchloop.domain import (SCHEMA_VERSION, GenerationRequest, Guidance, ImageRef, InvalidSelectionError, Iteration,
-                               SelectionEvent)
+                               SelectionEvent, Unavailable)
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
 from sketchloop.experiments import (ROUND_FILE, SESSION_FILE, FailureStage, RerunLink, RoundRecord, SessionRecord,
-                                    collect_environment, describe_failure, round_to_dict, session_to_dict, write_json_atomic)
+                                    SketchSource, collect_environment, describe_failure, require_known_source, round_to_dict,
+                                    session_to_dict, write_json_atomic)
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, preprocess_sketch
 
@@ -66,8 +67,8 @@ class SketchSession:
         self.rounds: list[RoundOutcome] = []
         self.selections: dict[str, SelectionEvent] = {}
         self.session_record: SessionRecord | None = None
+        self.records: list[RoundRecord] = []
         self._started_rounds = 0
-        self._latest_record: RoundRecord | None = None
 
     def _write_session_record(self) -> None:
         # Write session.json once, before the first round's files.
@@ -95,8 +96,8 @@ class SketchSession:
         timings["preprocessing"] = time.perf_counter() - started
         return processed.image, processed.payload, processed.steps
 
-    def run_round(self, raw_sketch: ImageRef, raw_payload: bytes, guidance: Guidance, *, rotation: int = 0,
-                  use_raw: bool = False, n_candidates: int = 1, seed: int | None = None,
+    def run_round(self, raw_sketch: ImageRef, raw_payload: bytes, guidance: Guidance, *, source: SketchSource | Unavailable,
+                  rotation: int = 0, use_raw: bool = False, n_candidates: int = 1, seed: int | None = None,
                   reuse: PreprocessedSketch | None = None) -> RoundOutcome:
         """
         Preprocess the sketch, generate and score candidates, save the files and record, and link to the previous round.
@@ -105,6 +106,7 @@ class SketchSession:
             raw_sketch (ImageRef): Reference to the raw sketch as loaded or captured.
             raw_payload (bytes): Encoded raw sketch bytes.
             guidance (Guidance): Prompt and controls for generation.
+            source (SketchSource | Unavailable): Where the raw sketch bytes came from, such as file or webcam.
             rotation (int, optional): Degrees to turn the sketch clockwise before processing. Defaults to 0.
             use_raw (bool, optional): Generate from the raw sketch and skip preprocessing. Defaults to False.
             n_candidates (int, optional): Number of candidates to generate. Defaults to 1.
@@ -115,13 +117,16 @@ class SketchSession:
         Returns:
             RoundOutcome: The round's folder, iteration, timings, and scores.
         """
+        # Refuse an unknown source before writing anything, since even the failure record could not hold it.
+        require_known_source(source)
+
         # Number the round and fix the fields its record has whether it completes or fails.
         self._write_session_record()
         self._started_rounds += 1
         number = self._started_rounds
         folder = self.folder / f"round-{number}"
         draft = partial(RoundRecord, schema_version=SCHEMA_VERSION, number=number, started_at=datetime.now(timezone.utc),
-                        raw_sketch=raw_sketch, use_raw=use_raw, rotation=rotation)
+                        raw_sketch=raw_sketch, source=source, use_raw=use_raw, rotation=rotation)
         timings: dict[str, float] = {}
         stage: FailureStage = "preprocessing"
         steps: tuple[PreprocessingStep, ...] = ()
@@ -153,12 +158,13 @@ class SketchSession:
             failed = draft(status="failed", steps=steps, request=request, iteration=None, timings_seconds=timings,
                            evaluator=None, scores={}, selection=None, failure=describe_failure(stage, error))
             write_json_atomic(folder / ROUND_FILE, round_to_dict(failed))
+            self.records.append(failed)
             raise
 
         # Store the raw and processed sketches and the candidates, then the record without a selection.
         write_files(folder, {raw_sketch.path: raw_payload, sketch.path: sketch_payload} | dict(output.payloads))
-        self._latest_record = record
-        write_json_atomic(folder / ROUND_FILE, round_to_dict(self._latest_record))
+        write_json_atomic(folder / ROUND_FILE, round_to_dict(record))
+        self.records.append(record)
         outcome = RoundOutcome(number=number, folder=folder, raw_sketch=raw_sketch, steps=steps, iteration=iteration,
                                timings_seconds=timings, scores=scores)
         self.rounds.append(outcome)
@@ -178,5 +184,6 @@ class SketchSession:
 
         # Replace the round's record once to add the selection.
         self.selections[latest_id] = selection
-        self._latest_record = replace(self._latest_record, selection=selection)
-        write_json_atomic(self.rounds[-1].folder / ROUND_FILE, round_to_dict(self._latest_record))
+        position = [record.iteration.id if record.iteration else None for record in self.records].index(latest_id)
+        self.records[position] = replace(self.records[position], selection=selection)
+        write_json_atomic(self.rounds[-1].folder / ROUND_FILE, round_to_dict(self.records[position]))

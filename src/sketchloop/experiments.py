@@ -11,7 +11,7 @@ from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias, TypeVar
+from typing import Final, Literal, TypeAlias, TypeVar, get_args
 
 from sketchloop.domain import (SCHEMA_VERSION, BackendIdentity, Candidate, ControlValue, EffectiveSettings,
                                GenerationRequest, GenerationResult, Guidance, ImageRef, Iteration, SelectionEvent,
@@ -23,6 +23,7 @@ from sketchloop.preprocessing import PreprocessingStep
 SESSION_FILE: Final = "session.json"
 ROUND_FILE: Final = "round.json"
 ROUND_FOLDER_PATTERN: Final = re.compile(r"round-([1-9][0-9]*)")
+MISSING_SOURCE_REASON: Final = "recorded before input sources were tracked"
 
 # Absolute paths to redact from failure messages, quoted ones up to the closing quote since names may contain spaces.
 DRIVE: Final = r"(?<!\w)[A-Za-z]:[\\/]"
@@ -47,6 +48,7 @@ TRACKED_PACKAGES: Final = (
 
 FailureStage: TypeAlias = Literal["preprocessing", "generation", "evaluation"]
 RoundStatus: TypeAlias = Literal["complete", "failed"]
+SketchSource: TypeAlias = Literal["file", "camera", "webcam", "upload"]
 RecordT = TypeVar("RecordT")
 
 
@@ -105,6 +107,14 @@ class RoundFailure:
     message: str  # First line of the error message
 
 
+def require_known_source(source: object) -> None:
+    """
+    Refuse a round source that is neither a known value nor Unavailable.
+    """
+    valid_source = isinstance(source, Unavailable) or source in get_args(SketchSource)
+    require(valid_source, f"Round source must be file, camera, webcam, or upload, got {source!r}.")
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RoundRecord:
     """
@@ -115,6 +125,7 @@ class RoundRecord:
     status: RoundStatus  # complete, or failed with a failure record
     started_at: datetime  # Timezone-aware start time
     raw_sketch: ImageRef  # Raw sketch as loaded or captured
+    source: SketchSource | Unavailable  # Where the raw sketch bytes came from, unavailable in older records
     use_raw: bool  # Whether generation used the raw sketch and skipped preprocessing
     rotation: int  # Clockwise rotation in degrees applied before preprocessing
     steps: tuple[PreprocessingStep, ...]  # Preprocessing steps applied, empty with --raw
@@ -132,6 +143,7 @@ class RoundRecord:
         require((self.status == "complete") == complete, "Round status must be complete exactly when it has a result.")
         require(not complete or self.request is self.iteration.request, "A complete round's request must be its iteration's.")
         require(self.started_at.utcoffset() is not None, "Round started_at must be timezone-aware.")
+        require_known_source(self.source)
         require(all(math.isfinite(score) for score in self.scores.values()), "Scores must be finite numbers.")
 
         # A selection must name this round's iteration and candidates.
@@ -354,6 +366,7 @@ def round_to_dict(record: RoundRecord) -> dict[str, object]:
         "status": record.status,
         "started_at": record.started_at.isoformat(),
         "input": {
+            "source": encode_value(record.source),
             "raw_sketch": asdict(record.raw_sketch),
             "use_raw": record.use_raw,
             "rotation": record.rotation,
@@ -408,11 +421,15 @@ def round_from_dict(data: Mapping[str, object]) -> RoundRecord:
                                    created_at=parse_time(selection_data["created_at"]))
     failure = RoundFailure(**failure_data) if failure_data is not None else None
     steps = tuple(PreprocessingStep(name=step["name"], params=step["params"]) for step in input_data["preprocessing"])
+
+    # Records written before sources were tracked have no source, which is unknown rather than a guessed default.
+    source = decode_value(input_data["source"]) if "source" in input_data else Unavailable(MISSING_SOURCE_REASON)
     return RoundRecord(schema_version=data["schema_version"], number=data["round"], status=data["status"],
                        started_at=parse_time(data["started_at"]), raw_sketch=image_from_dict(input_data["raw_sketch"]),
-                       use_raw=input_data["use_raw"], rotation=input_data["rotation"], steps=steps, request=request,
-                       iteration=iteration, timings_seconds=data["timings_seconds"], evaluator=evaluation.get("evaluator"),
-                       scores=evaluation.get("scores", {}), selection=selection, failure=failure)
+                       source=source, use_raw=input_data["use_raw"], rotation=input_data["rotation"], steps=steps,
+                       request=request, iteration=iteration, timings_seconds=data["timings_seconds"],
+                       evaluator=evaluation.get("evaluator"), scores=evaluation.get("scores", {}), selection=selection,
+                       failure=failure)
 
 
 def session_to_dict(record: SessionRecord) -> dict[str, object]:

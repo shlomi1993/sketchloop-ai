@@ -1,4 +1,5 @@
 import argparse
+import os
 
 from collections.abc import Callable, Mapping
 from enum import StrEnum
@@ -8,28 +9,19 @@ from rich.panel import Panel
 from rich.table import Table
 from typing import Final
 
+from sketchloop.app import AppController, describe_selection
+from sketchloop.backends import RERUNNABLE_BACKENDS, GenerationBackend, make_generator
 from sketchloop.capture import capture_from_camera, load_sketch_file
-from sketchloop.diffusers_backend import DiffusersSketchGenerator, GenerationMode
+from sketchloop.diffusers_backend import GenerationMode
 from sketchloop.domain import (Guidance, ImageRef, Iteration, SelectionEvent, SketchLoopError, record_no_selection,
                                select_candidates)
 from sketchloop.experiments import (SESSION_FILE, ExperimentRecordError, RerunComparison, RerunLink, RoundRecord,
-                                    SavedSession, compare_rounds, format_value, load_session, rebuild_request)
-from sketchloop.fakes import FakeGenerator
+                                    SavedSession, SketchSource, compare_rounds, format_value, load_session, rebuild_request)
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import ROTATE_CODES, PreprocessedSketch
 from sketchloop.session import RoundOutcome, SketchSession
 
 
-class GenerationBackend(StrEnum):
-    """
-    Generation backends the command can use.
-    """
-    FAKE = "fake"
-    DIFFUSERS = "diffusers"
-
-
-# Backends rerun can recreate, by the adapter name a round recorded.
-RERUNNABLE_BACKENDS: Final = {"sketchloop.fake": GenerationBackend.FAKE, "sketchloop.diffusers": GenerationBackend.DIFFUSERS}
 REPLAY_LIMITS: Final = "A rerun restores the recorded conditions. Equal seeds do not guarantee identical images across devices, library versions, or model revisions."  # noqa: E501
 
 
@@ -40,6 +32,7 @@ class Command(StrEnum):
     RUN = "run"
     SHOW = "show"
     RERUN = "rerun"
+    UI = "ui"
 
 
 class NextStep(StrEnum):
@@ -74,6 +67,29 @@ def make_int_parser(minimum: int) -> Callable[[str], int]:
     return parse_int
 
 
+def parse_positive_seconds(text: str) -> float:
+    """
+    Read a time in seconds that is greater than zero, so argparse rejects a capture interval that would never fire.
+    """
+    seconds = float(text)
+    if not seconds > 0:
+        raise argparse.ArgumentTypeError(f"must be greater than 0 seconds, got {text}")
+
+    return seconds
+
+
+def check_backend_options(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """
+    Reject a diffusers mode without the diffusers backend, since only that backend has modes.
+
+    Args:
+        parser (argparse.ArgumentParser): The subcommand parser, used to report errors.
+        args (argparse.Namespace): Parsed options with backend and mode.
+    """
+    if args.mode is not None and args.backend != GenerationBackend.DIFFUSERS:
+        parser.error(f"--mode needs --backend {GenerationBackend.DIFFUSERS}")
+
+
 def check_run_options(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     """
     Reject run option combinations that contradict each other.
@@ -86,9 +102,7 @@ def check_run_options(parser: argparse.ArgumentParser, args: argparse.Namespace)
     if (args.sketch is None) == (not args.camera):
         parser.error("give exactly one of a sketch file or --camera")
 
-    # Only the diffusers backend has modes.
-    if args.mode is not None and args.backend != GenerationBackend.DIFFUSERS:
-        parser.error(f"--mode needs --backend {GenerationBackend.DIFFUSERS}")
+    check_backend_options(parser, args)
 
     # Rotation is part of preprocessing, which --raw skips.
     if args.rotate and args.raw:
@@ -130,36 +144,32 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     rerun_parser.add_argument("session_folder", type=Path, help="session folder, such as runs/<session>")
     rerun_parser.add_argument("--round", type=make_int_parser(1), required=True, dest="round_number", help="round number to rerun")  # noqa: E501
     rerun_parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="folder for the new session")
+
+    # Serve the local browser interface.
+    ui_parser = commands.add_parser(Command.UI, help="open the local browser interface", description="Run sessions from a local browser page.", formatter_class=formatter)  # noqa: E501
+    ui_parser.add_argument("--candidates", type=make_int_parser(1), default=2, help="default number of candidates per round")
+    ui_parser.add_argument("--seed", type=make_int_parser(0), default=None, help="default base seed for reproducible candidates")
+    ui_parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="folder for run outputs")
+    ui_parser.add_argument("--capture-interval", type=parse_positive_seconds, default=0.5, help="seconds between webcam frames the page keeps, so Generate uses a fresh one")  # noqa: E501
+    ui_parser.add_argument("--backend", type=GenerationBackend, choices=list(GenerationBackend), default=GenerationBackend.FAKE, help="generation backend to use")  # noqa: E501
+    ui_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), help="diffusers mode, by default fast on CPU and quality on a GPU")  # noqa: E501
     args = parser.parse_args(argv)
 
+    # Reject contradicting options before anything is loaded or saved.
     if args.command == Command.RUN:
         check_run_options(run_parser, args)
+    elif args.command == Command.UI:
+        check_backend_options(ui_parser, args)
 
     return args
 
 
-def make_generator(backend: GenerationBackend, mode: GenerationMode | None, console: Console) -> Generator:
+def make_announced_generator(backend: GenerationBackend, mode: GenerationMode | None, console: Console) -> Generator:
     """
     Create the chosen generation backend and print which backend, device, and mode it uses.
-
-    Args:
-        backend (GenerationBackend): Backend to create.
-        mode (GenerationMode | None): Diffusers mode, or None for the device default.
-        console (Console): Console used for output.
-
-    Returns:
-        Generator: The generation backend.
     """
-    if backend == GenerationBackend.FAKE:
-        console.print(f"Using the {backend} backend, which makes test images, not real AI output.")
-        return FakeGenerator()
-
-    # Describe the real model, where it runs, and what the mode means, so slow CPU runs are expected.
-    generator = DiffusersSketchGenerator(mode=mode)
-    steps = next(spec.default for spec in generator.capabilities.controls if spec.name == "steps")
-    model = "Stable Diffusion 1.5 and ControlNet scribble"
-    device = generator.device.upper()
-    console.print(f"Using the {backend} backend with {model} on {device} in {generator.mode} mode, running {steps} steps.")
+    generator = make_generator(backend, mode)
+    console.print(generator.describe())
     return generator
 
 
@@ -192,15 +202,6 @@ def ask_selection(iteration: Iteration, console: Console) -> SelectionEvent:
             return select_candidates(iteration, [candidates[number - 1].id for number in numbers])
 
         console.print(f"Use distinct numbers from 1 to {len(candidates)}, or press Enter for none.", style="yellow")
-
-
-def describe_selection(iteration: Iteration, selection: SelectionEvent) -> str:
-    """
-    Turn a selection into the candidate numbers shown in the table, such as "1, 3", or "none" when nothing was picked.
-    """
-    selected_ids = selection.selected_candidate_ids
-    chosen = [str(candidate.index + 1) for candidate in iteration.result.candidates if candidate.id in selected_ids]
-    return ", ".join(chosen) or "none"
 
 
 def show_round(outcome: RoundOutcome, console: Console) -> None:
@@ -288,8 +289,8 @@ def ask_next_step(console: Console, can_recapture: bool) -> tuple[NextStep, str]
         console.print(f"Not a choice. Use: {choices}.")
 
 
-def ask_next_round(args: argparse.Namespace, console: Console, prompt: str,
-                   sketch: tuple[ImageRef, bytes]) -> tuple[str, tuple[ImageRef, bytes]] | None:
+def ask_next_round(args: argparse.Namespace, console: Console, prompt: str, sketch: tuple[ImageRef, bytes],
+                   source: SketchSource) -> tuple[str, tuple[ImageRef, bytes], SketchSource] | None:
     """
     Ask for the next change until one applies, so a wrong file path or a cancelled capture asks again.
 
@@ -298,9 +299,11 @@ def ask_next_round(args: argparse.Namespace, console: Console, prompt: str,
         console (Console): Console used for prompts and errors.
         prompt (str): Current prompt.
         sketch (tuple[ImageRef, bytes]): Current raw sketch reference and bytes.
+        source (SketchSource): Where the current sketch came from.
 
     Returns:
-        tuple[str, tuple[ImageRef, bytes]] | None: The prompt and sketch for the next round, or None to quit.
+        tuple[str, tuple[ImageRef, bytes], SketchSource] | None: The prompt, sketch, and sketch source for the next round,
+            or None to quit.
     """
     while True:
         next_step = ask_next_step(console, args.camera)
@@ -311,14 +314,14 @@ def ask_next_round(args: argparse.Namespace, console: Console, prompt: str,
         step, value = next_step
         try:
             if step == NextStep.RECAPTURE:
-                return prompt, capture_from_camera(args.camera_index)
+                return prompt, capture_from_camera(args.camera_index), "camera"
             if step == NextStep.FILE:
-                return prompt, load_sketch_file(Path(value))
+                return prompt, load_sketch_file(Path(value)), "file"
         except (SketchLoopError, OSError) as error:
             console.print(f"{error} Choose again.", style="red", markup=False, soft_wrap=True)
             continue
 
-        return (value if step == NextStep.PROMPT else prompt), sketch
+        return (value if step == NextStep.PROMPT else prompt), sketch, source
 
 
 def print_summary(session: SketchSession, console: Console) -> None:
@@ -347,13 +350,14 @@ def run_session(args: argparse.Namespace, console: Console) -> None:
     """
     # Load or capture the first sketch, then create the backend once so a real model stays loaded between rounds.
     sketch = capture_from_camera(args.camera_index) if args.camera else load_sketch_file(args.sketch)
-    session = SketchSession(make_generator(args.backend, args.mode, console), args.runs_dir)
+    source: SketchSource = "camera" if args.camera else "file"
+    session = SketchSession(make_announced_generator(args.backend, args.mode, console), args.runs_dir)
     prompt = args.prompt
     while True:
         # Run a round with the current sketch and prompt, reporting a failure instead of ending the session.
         try:
-            outcome = session.run_round(*sketch, Guidance(prompt=prompt), rotation=args.rotate, use_raw=args.raw,
-                                        n_candidates=args.candidates, seed=args.seed)
+            outcome = session.run_round(*sketch, Guidance(prompt=prompt), source=source, rotation=args.rotate,
+                                        use_raw=args.raw, n_candidates=args.candidates, seed=args.seed)
         except (SketchLoopError, OSError) as error:
             console.print(f"Round failed: {error}", style="red", markup=False, soft_wrap=True)
         else:
@@ -364,11 +368,11 @@ def run_session(args: argparse.Namespace, console: Console) -> None:
             console.print(f"Selected: {describe_selection(outcome.iteration, selection)}", style="green")
 
         # Stop when the person quits, otherwise apply the requested change before the next round.
-        next_round = ask_next_round(args, console, prompt, sketch)
+        next_round = ask_next_round(args, console, prompt, sketch, source)
         if next_round is None:
             break
 
-        prompt, sketch = next_round
+        prompt, sketch, source = next_round
 
     print_summary(session, console)
 
@@ -435,8 +439,8 @@ def print_round_record(record: RoundRecord, console: Console) -> None:
         console.print(f"Negative prompt: {guidance.negative_prompt or 'none'}", markup=False, soft_wrap=True)
         console.print(f"Requested: {format_controls(guidance.controls)}, seed {format_value(record.request.seed)}", markup=False)
 
-    source = "raw sketch" if record.use_raw else f"processed sketch, rotation {record.rotation}"
-    console.print(f"Input: {source}, from {record.raw_sketch.path}")
+    sketch_kind = "raw sketch" if record.use_raw else f"processed sketch, rotation {record.rotation}"
+    console.print(f"Input: {sketch_kind}, from {record.raw_sketch.path} (source: {format_value(record.source)})", markup=False)
     console.print(f"Preprocessing: {', '.join(step.name for step in record.steps) or 'skipped'}", soft_wrap=True)
     timings = ", ".join(f"{stage} {seconds:.2f} s" for stage, seconds in record.timings_seconds.items())
     console.print(f"Timings: {timings or 'none'}")
@@ -552,7 +556,7 @@ def make_rerun_generator(record: RoundRecord, console: Console) -> Generator:
     # Pass the recorded mode, since the diffusers default depends on the device.
     recorded_mode = record.iteration.result.effective.controls.get("mode")
     mode = GenerationMode(recorded_mode) if recorded_mode in list(GenerationMode) else None
-    return make_generator(RERUNNABLE_BACKENDS[adapter], mode, console)
+    return make_announced_generator(RERUNNABLE_BACKENDS[adapter], mode, console)
 
 
 def rerun_round(args: argparse.Namespace, console: Console) -> None:
@@ -579,11 +583,37 @@ def rerun_round(args: argparse.Namespace, console: Console) -> None:
     request = rebuild_request(record, generator.capabilities)
     link = RerunLink(session_id=original.session.session_id, round_number=record.number, iteration_id=record.iteration.id)
     session = SketchSession(generator, args.runs_dir, rerun_of=link)
-    outcome = session.run_round(record.raw_sketch, raw_payload, request.guidance, rotation=record.rotation,
-                                use_raw=record.use_raw, n_candidates=request.n_candidates, seed=request.seed, reuse=reuse)
+    outcome = session.run_round(record.raw_sketch, raw_payload, request.guidance, source=record.source,
+                                rotation=record.rotation, use_raw=record.use_raw, n_candidates=request.n_candidates,
+                                seed=request.seed, reuse=reuse)
     show_round(outcome, console)
     console.print(f"Rerun session folder: {session.folder.as_posix()}", markup=False, soft_wrap=True)
     print_comparison(compare_rounds(original, record.number, load_session(session.folder)), console)
+
+
+def launch_ui(args: argparse.Namespace, console: Console) -> None:
+    """
+    Serve the browser interface on this machine with one loaded backend, until the person stops it with Ctrl+C.
+
+    Args:
+        args (argparse.Namespace): Parsed ui options.
+        console (Console): Console used for output.
+    """
+    # Turn off Gradio and Hugging Face telemetry before Gradio is imported.
+    os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
+    os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+
+    # Import Gradio only for this command, so the other commands start without loading it.
+    from sketchloop.ui import launch_app
+
+    # Create the backend once, and refuse a default candidate count the backend cannot produce.
+    controller = AppController(make_announced_generator(args.backend, args.mode, console), args.runs_dir)
+    limit = controller.max_candidates
+    if args.candidates > limit:
+        raise SketchLoopError(f"--candidates {args.candidates} is above the backend limit of {limit}. Use {limit} or fewer.")
+
+    launch_app(controller, default_candidates=args.candidates, default_seed=args.seed,
+               capture_interval_seconds=args.capture_interval)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -597,7 +627,7 @@ def main(argv: list[str] | None = None) -> int:
         int: Process exit code, 0 on success and 1 on a reported error.
     """
     args = parse_args(argv)
-    commands = {Command.RUN: run_session, Command.SHOW: show_session, Command.RERUN: rerun_round}
+    commands = {Command.RUN: run_session, Command.SHOW: show_session, Command.RERUN: rerun_round, Command.UI: launch_ui}
     try:
         commands[args.command](args, Console())
     except (SketchLoopError, OSError) as error:

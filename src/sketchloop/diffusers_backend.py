@@ -225,6 +225,14 @@ class DiffusersSketchGenerator:
         """
         return self._capabilities
 
+    def describe(self) -> str:
+        """
+        Say which model, device, mode, and step count this backend uses, so slow CPU runs are expected.
+        """
+        model = "Stable Diffusion 1.5 and ControlNet scribble"
+        steps = MODE_SETTINGS[self.mode].steps
+        return f"Using the diffusers backend with {model} on {self.device.upper()} in {self.mode} mode, running {steps} steps."
+
     def _list_model_sources(self) -> tuple[ModelSource, ...]:
         return MODEL_SOURCES if self.mode == GenerationMode.FAST else (BASE_MODEL, CONTROLNET_MODEL)
 

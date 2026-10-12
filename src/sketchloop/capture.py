@@ -133,6 +133,25 @@ def open_webcam(camera_index: int) -> VideoSource:
     return cv2.VideoCapture(camera_index, CAMERA_BACKEND_BY_PLATFORM.get(sys.platform, cv2.CAP_ANY))
 
 
+def encode_frame(frame: np.ndarray) -> tuple[ImageRef, bytes]:
+    """
+    Encode an 8-bit BGR or grayscale camera frame losslessly as the PNG raw sketch.
+
+    Args:
+        frame (np.ndarray): Camera frame in OpenCV channel order.
+
+    Returns:
+        tuple[ImageRef, bytes]: The image reference and the frame's PNG bytes.
+    """
+    # Encode losslessly, since the frame is the raw sketch kept for the run.
+    encoded, buffer = cv2.imencode(".png", frame)
+    if not encoded or count_channels(frame) not in MODE_BY_CHANNELS or frame.dtype != np.uint8:
+        raise InvalidSketchError("Camera frame cannot be saved as PNG. Try another camera.")
+
+    payload = buffer.tobytes()
+    return raw_image_ref(frame, payload, ".png", "image/png"), payload
+
+
 def capture_from_camera(camera_index: int, open_camera: Callable[[int], VideoSource] = open_webcam) -> tuple[ImageRef, bytes]:
     """
     Show a live camera preview, capture a frame on Space, and describe it as a PNG raw sketch.
@@ -156,13 +175,7 @@ def capture_from_camera(camera_index: int, open_camera: Callable[[int], VideoSou
         # macOS only closes windows after the event loop runs once more.
         cv2.waitKey(1)
 
-    # Encode the captured frame losslessly, since it is the raw sketch kept for the run.
-    encoded, buffer = cv2.imencode(".png", frame)
-    if not encoded or count_channels(frame) not in MODE_BY_CHANNELS or frame.dtype != np.uint8:
-        raise InvalidSketchError(f"Camera frame from index {camera_index} cannot be saved as PNG. Try another camera.")
-
-    payload = buffer.tobytes()
-    return raw_image_ref(frame, payload, ".png", "image/png"), payload
+    return encode_frame(frame)
 
 
 def camera_unavailable_message(camera_index: int) -> str:

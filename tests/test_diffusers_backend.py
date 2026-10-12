@@ -74,6 +74,9 @@ def test_diffusers_maps_request() -> None:
     assert result.backend.execution == "in_process" and "scribble" in str(result.backend.model_id), "Backend not identified"
     assert [candidate.image.mode for candidate in result.candidates] == ["RGB", "RGB"], "Candidates must be RGB images"
 
+    # The description names the device, mode, and default step count, so the person expects the run time.
+    assert "on CPU in quality mode, running 20 steps" in generator.describe(), f"Unexpected description {generator.describe()}"
+
 
 def test_diffusers_missing_model(tmp_path: Path) -> None:
     """

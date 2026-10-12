@@ -29,5 +29,7 @@ The four arXiv papers above use the arXiv non-exclusive distribution license, wh
 | [Diffusers reproducibility guide](https://huggingface.co/docs/diffusers/main/en/using-diffusers/reusing_seeds) | Seed and determinism limits for replay (R06). |
 | [MLflow backend stores](https://mlflow.org/docs/latest/self-hosting/architecture/backend-store/) | File backend status and default SQLite store. See [store options](research/experiment-store-options.md). |
 | [Streamlit](https://docs.streamlit.io/) and [NiceGUI](https://nicegui.io/documentation) documentation | UI alternatives. See [UI toolkit options](research/ui-toolkit-options.md). |
+| [Gradio file access guide](https://www.gradio.app/guides/file-access), [environment variables](https://www.gradio.app/guides/environment-variables), [state in Blocks](https://www.gradio.app/guides/state-in-blocks), and [Gradio source](https://github.com/gradio-app/gradio) | Served paths, telemetry and sharing settings, backend lifetime, and webcam encoding for T06. See [Gradio implementation guidance](research/gradio-ui-implementation.md). |
+| [MDN secure contexts](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts) | Why browser camera access works on `localhost` and HTTPS but not on a plain-HTTP LAN address. |
 
 Before implementing against a tool, read current official documentation and record the version actually selected. Preserve bibliographic provenance without copying private cover-page details or personal retrieval history.

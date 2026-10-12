@@ -40,6 +40,8 @@ Which toolkit should provide the T06 interface (R07): camera preview, prompt and
 
 Use Gradio (pin `gradio==6.29.0`) in an optional `ui` extra for T06, with analytics disabled in code. NiceGUI is the fallback if live OpenCV preview inside Gradio proves clumsy. Confidence: medium-high. Gradio fits the gallery and selection flow and Colab best, and camera preview is the main risk.
 
+Update 2026-10-12: [Gradio implementation guidance](gradio-ui-implementation.md) supersedes the version pin with `gradio==6.30.0`. It finds that the browser webcam already gives a live preview, that `type="filepath"` with `image_mode=None` keeps the original encoded bytes, and that webcam snapshots are mirrored unless `mirror=False` is set.
+
 ## Implementation guidance
 
 - Target module: `sketchloop.ui.gradio_app`, which calls the application service only. No model, store, or Gradio types cross into `domain`, `orchestration`, or `experiments`.

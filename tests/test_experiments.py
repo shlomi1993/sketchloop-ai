@@ -7,7 +7,7 @@ from pathlib import Path
 from sketchloop.capture import load_sketch_file
 from sketchloop.cli import main
 from sketchloop.domain import Guidance, Unavailable, UnsupportedConfigurationError, record_no_selection, select_candidates
-from sketchloop.experiments import ExperimentRecordError, describe_failure, load_session
+from sketchloop.experiments import MISSING_SOURCE_REASON, ExperimentRecordError, describe_failure, load_session
 from sketchloop.fakes import FakeGenerator
 from sketchloop.session import SketchSession
 
@@ -17,27 +17,28 @@ EXAMPLE_SKETCH = Path(__file__).resolve().parents[1] / "examples" / "sketch-phot
 
 def run_two_rounds(runs_dir: Path) -> SketchSession:
     """
-    Run two fake rounds, picking candidate 1 in round 1 and none in a raw round 2.
+    Run two fake rounds, a file round picking candidate 1 and a raw camera round picking none.
     """
     raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
     session = SketchSession(FakeGenerator(), runs_dir)
-    round1 = session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), n_candidates=2, seed=7)
+    round1 = session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source="file", n_candidates=2, seed=7)
     session.record_selection(select_candidates(round1.iteration, [round1.iteration.result.candidates[0].id]))
-    round2 = session.run_round(raw_sketch, raw_payload, Guidance(prompt="lamp", controls={"steps": 8}), use_raw=True)
+    round2 = session.run_round(raw_sketch, raw_payload, Guidance(prompt="lamp", controls={"steps": 8}), source="camera",
+                               use_raw=True)
     session.record_selection(record_no_selection(round2.iteration))
     return session
 
 
 def test_records_round_trip(tmp_path: Path) -> None:
     """
-    Two rounds and a failed third save their files and load back with equal iterations, steps, selections, lineage, and checksums.
+    Two rounds and a failed third save their files and load back with equal iterations, steps, selections, sources, and checksums.
     """
     session = run_two_rounds(tmp_path)
     round1_folder = session.folder / "round-1"
     round1_files = sorted(path.relative_to(round1_folder).as_posix() for path in round1_folder.rglob("*.*"))
     raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
     with pytest.raises(UnsupportedConfigurationError):
-        session.run_round(raw_sketch, raw_payload, Guidance(prompt="vase"), n_candidates=99)
+        session.run_round(raw_sketch, raw_payload, Guidance(prompt="vase"), source="webcam", n_candidates=99)
     (session.folder / "round-1" / "round.json.tmp").write_text("{", encoding="utf-8")
 
     saved = load_session(session.folder)
@@ -61,6 +62,10 @@ def test_records_round_trip(tmp_path: Path) -> None:
     assert set(round1.timings_seconds) == {"preprocessing", "generation", "evaluation"}, "Round 1 must time every stage"
     assert round3.status == "failed" and round3.failure.stage == "generation", f"Round 3 must fail in generation: {round3}"
     assert saved.problems == () and saved.checked_files == 8, f"All files must match: {saved.problems}"
+
+    # Each round's sketch source, including the failed round's, loads back unchanged.
+    sources = [record.source for record in saved.rounds]
+    assert sources == ["file", "camera", "webcam"], f"Sources changed on reload: {sources}"
 
     # Package versions are recorded as real versions or as unavailable with a reason, never invented.
     versions = list(saved.session.environment.packages.values())
@@ -91,11 +96,12 @@ def test_damaged_candidate_listed(tmp_path: Path, damage: str, problem: str) -> 
     ("session.json", lambda data: data.update(schema_version=2), "schema version 2"),
     ("round-2/round.json", lambda data: data.update(parent_id="0" * 32), "does not link to round-1"),
     ("round-1/round.json", lambda data: data.update(started_at="2026-10-09T11:25:02"), "timezone-aware"),
-    ("round-1/round.json", lambda data: data["evaluation"].update(scores={"x": float("nan")}), "finite")
+    ("round-1/round.json", lambda data: data["evaluation"].update(scores={"x": float("nan")}), "finite"),
+    ("round-1/round.json", lambda data: data["input"].update(source="scanner"), "source must be file, camera, webcam, or upload")
 ])
 def test_invalid_records_rejected(tmp_path: Path, file_name: str, edit: Callable[[dict], None], message: str) -> None:
     """
-    Path traversal, an unknown schema version, broken lineage, a time without timezone, and a NaN score refuse to load.
+    Path traversal, an unknown schema version, broken lineage, a naive time, a NaN score, and an unknown source refuse to load.
     """
     session = run_two_rounds(tmp_path)
     record_file = session.folder / file_name
@@ -115,21 +121,33 @@ def refuse_generator(*args: object, **kwargs: object) -> None:
     raise AssertionError("show must not create a generator")
 
 
-def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("drop_source", [False, True], ids=["with-source", "recorded-before-sources"])
+def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+                              drop_source: bool) -> None:
     """
-    Rerunning a fake round makes a linked session with identical candidates, and show reads it without a generator.
+    Rerunning a fake round makes a linked session with identical candidates and the original's source, and show reads it.
     """
     answers = iter(["1", "q"])
     monkeypatch.setattr("builtins.input", lambda *prompt: next(answers))
     runs_dir = tmp_path / "runs"
     main(["run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--candidates", "2", "--runs-dir", str(runs_dir)])
     original = next(runs_dir.iterdir())
+    recorded_source = load_session(original).rounds[0].source
+
+    # Strip input.source to stand in for a round saved before sources were tracked.
+    if drop_source:
+        record_file = original / "round-1" / "round.json"
+        data = json.loads(record_file.read_text(encoding="utf-8"))
+        del data["input"]["source"]
+        record_file.write_text(json.dumps(data), encoding="utf-8")
+
+    original_source = load_session(original).rounds[0].source
     rerun_exit = main(["rerun", str(original), "--round", "1", "--runs-dir", str(runs_dir)])
     rerun_output = capsys.readouterr().out
 
     rerun_folder = next(path for path in runs_dir.iterdir() if path != original)
-    monkeypatch.setattr("sketchloop.cli.FakeGenerator", refuse_generator)
-    monkeypatch.setattr("sketchloop.cli.DiffusersSketchGenerator", refuse_generator)
+    monkeypatch.setattr("sketchloop.backends.FakeGenerator", refuse_generator)
+    monkeypatch.setattr("sketchloop.backends.DiffusersSketchGenerator", refuse_generator)
     show_exit = main(["show", str(rerun_folder)])
     show_output = capsys.readouterr().out
 
@@ -142,6 +160,17 @@ def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
     assert "Candidates with identical bytes: 1, 2 of 2" in rerun_output, "The fake rerun must give identical candidates"
     assert "reproduced" not in rerun_output.lower(), "A rerun must never claim exact replay"
     assert "Candidates with identical bytes: 1, 2 of 2" in show_output, "show must compare a rerun with its original"
+
+    # A run from a file records file, an older record loads as unavailable, and the rerun copies whichever it finds.
+    expected_source = Unavailable(MISSING_SOURCE_REASON) if drop_source else "file"
+    rerun_source = load_session(rerun_folder).rounds[0].source
+    assert recorded_source == "file", f"run from a file must record source file, got {recorded_source}"
+    assert original_source == expected_source, f"Expected original source {expected_source}, got {original_source}"
+    assert rerun_source == expected_source, f"The rerun must copy the original source {expected_source}, got {rerun_source}"
+
+    # show prints the rerun round's source, naming the reason when it is unavailable.
+    shown_source = "(source: unavailable (recorded before input sources were tracked))" if drop_source else "(source: file)"
+    assert shown_source in " ".join(show_output.split()), f"show must print {shown_source}"
 
 
 # Build each path from pieces so this file never contains a literal home path for the publication guard to flag.

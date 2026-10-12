@@ -28,6 +28,7 @@ The orchestrator records all stage inputs, effective configuration, outputs, err
 | `capture` | Acquire image plus capture metadata | File/synthetic source for tests; real camera adapter for delivery |
 | `preprocessing` | Named, configurable image transformations | Retain input and transformation provenance; no generation calls |
 | `generation` | Capabilities, request validation, candidate generation | Backend-specific objects stay inside adapters |
+| `backends` | Name the available backends and create one, whose `describe()` tells the person what runs | The CLI and UI create backends only through `make_generator` |
 | `evaluation` | Optional scoring/filtering of candidates | No hidden human-selection decisions; preserve original candidates |
 | `orchestration` | Execute a manual iteration and link it to history | Inject adapters; do not select a provider globally |
 | `experiments` | Durable records, artifact integrity, load/replay | UI and model adapters do not write storage directly |
@@ -47,7 +48,7 @@ Later contracts, still proposals:
 - `Preprocessor.process(capture, config)` returns processed image(s) and ordered transformation metadata (T02).
 - `Evaluator.evaluate(candidates, payloads, request)` returns scores by candidate ID without mutating candidates, and `NoOpEvaluator` gives none. Implemented in T04 ([ADR 0010](decisions/0010-sessions-and-evaluator.md)).
 - `ExperimentStore` creates/loads runs, stores artifacts, appends iterations and selection events, and reconstructs replay requests. T05 implements this as functions in `sketchloop.experiments` for records, atomic writes, `load_session`, `rebuild_request`, and `compare_rounds`. [ADR 0011](decisions/0011-session-records-and-subcommands.md) defers a replaceable store protocol to T07.
-- An application service runs an iteration and records explicit selection separately. Candidate IDs must belong to the iteration being selected.
+- An application service runs an iteration and records explicit selection separately. Candidate IDs must belong to the iteration being selected. T06 implements `sketchloop.app.AppController`, which never imports gradio, and a thin `sketchloop.ui` Gradio module that calls it ([the T06 design](design/t06-ui.md), [ADR 0012](decisions/0012-gradio-ui-and-input-source.md)).
 
 Define failure types for capture unavailable, invalid image, unsupported configuration, backend failure/timeout, and persistence failure. Keep an incomplete run visible as failed; never label partial output complete or overwrite the previous successful iteration. Retry creates a new attempt linked to the original.
 

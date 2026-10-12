@@ -94,6 +94,8 @@ class Generator(Protocol):
 
     def generate(self, request: GenerationRequest, sketch_payload: bytes) -> GenerationOutput: ...
 
+    def describe(self) -> str: ...
+
 
 def _control_problem(spec: ControlSpec, value: ControlValue) -> tuple[IssueCode, str] | None:
     # Bools pass isinstance checks for int and float, so reject them unless the control is a bool.

@@ -2,7 +2,7 @@
 
 Status: proposed implementation contract derived from R06; exact serialization is decided during T01/T05. This document adds engineering detail to the source requirement and does not describe an implemented store. The first in-memory records for guidance, generation, candidates, iterations, and selection are specified in [the T01a design](design/t01a-contracts.md).
 
-The proposed on-disk records (`session.json` and `round.json`), loading checks, and the `show` and `rerun` subcommands are specified in [the T05 design](design/t05-records.md) and [ADR 0011](decisions/0011-session-records-and-subcommands.md), which was accepted and implemented in T05.
+The proposed on-disk records (`session.json` and `round.json`), loading checks, and the `show` and `rerun` subcommands are specified in [the T05 design](design/t05-records.md) and [ADR 0011](decisions/0011-session-records-and-subcommands.md), which was accepted and implemented in T05. [ADR 0012](decisions/0012-gradio-ui-and-input-source.md), implemented in T06, adds `input.source` to `round.json`, naming whether the raw sketch came from a file, the host camera, a browser webcam, or a browser upload. Older records load it as unavailable, without a schema version bump.
 
 ## Minimum information
 

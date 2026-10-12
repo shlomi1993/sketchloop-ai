@@ -37,6 +37,12 @@ class FakeGenerator:
         """
         return self._capabilities
 
+    def describe(self) -> str:
+        """
+        Say that this backend makes test images, not real AI output.
+        """
+        return "Using the fake backend, which makes test images, not real AI output."
+
     def generate(self, request: GenerationRequest, sketch_payload: bytes) -> GenerationOutput:
         """
         Validate the request and render deterministic grayscale images derived from it.

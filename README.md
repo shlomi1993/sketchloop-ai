@@ -52,6 +52,8 @@ After each pick, a menu starts the next round: Enter repeats with the same sketc
 By default the images come from a labeled fake backend (deterministic noise).
 Each session also writes `session.json` and a `round.json` per round with the prompt, settings, seeds, timings, checksums, and selection. Run `sketchloop show runs/<session>` to print a saved session and check its files without loading a model. Run `sketchloop rerun runs/<session> --round 1` to repeat a round as a new linked session from the stored `sketch.png` and recorded settings. It reports which candidates came out byte-identical and what changed, without claiming exact replay.
 
+To work in a browser instead of the terminal, run `sketchloop ui`. It opens a page served only on this machine, usually at `http://127.0.0.1:7860`, with no share link and Gradio analytics off. Take a webcam picture or upload a PNG or JPEG, enter a prompt, and click Generate. Tick the candidates you like, or none, and click Record selection, then change the sketch or prompt and generate the next round. The page shows the current session's history, and New session starts a fresh session with the loaded model. `sketchloop ui` takes the same `--backend`, `--mode`, `--runs-dir`, and `--seed` options as `run`, and `--candidates` sets the default count, 2 by default. The page keeps the newest webcam frame every `--capture-interval` seconds, 0.5 by default, so Generate uses the sketch as it is now without a separate snapshot. All browser tabs share one session, and reloading the page keeps it. Each round records whether its sketch came from a file, the camera, the browser webcam, or an upload.
+
 ## Real model
 
 Generate real candidates with Stable Diffusion 1.5 and the ControlNet scribble model (no GPU needed):
