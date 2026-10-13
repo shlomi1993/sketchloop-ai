@@ -1,4 +1,5 @@
 import argparse
+import math
 import os
 
 from collections.abc import Callable, Mapping
@@ -11,18 +12,24 @@ from typing import Final
 
 from sketchloop.app import AppController, describe_selection
 from sketchloop.backends import RERUNNABLE_BACKENDS, GenerationBackend, make_generator
-from sketchloop.capture import capture_from_camera, load_sketch_file
+from sketchloop.capture import CaptureSource, load_sketch_file
+from sketchloop.components import (NO_RUN_SKETCH_MESSAGE, check_component_names, make_capture_source, make_evaluator,
+                                   make_preprocessor, make_store)
 from sketchloop.diffusers_backend import GenerationMode
-from sketchloop.domain import (Guidance, ImageRef, Iteration, SelectionEvent, SketchLoopError, record_no_selection,
-                               select_candidates)
-from sketchloop.experiments import (SESSION_FILE, ExperimentRecordError, RerunComparison, RerunLink, RoundRecord,
-                                    SavedSession, SketchSource, compare_rounds, format_value, load_session, rebuild_request)
+from sketchloop.domain import (Guidance, ImageRef, Iteration, SelectionEvent, SketchLoopError, SketchSource,
+                               record_no_selection, select_candidates)
+from sketchloop.experiments import (SESSION_FILE, ExperimentRecordError, ExperimentStore, RerunComparison, RerunLink,
+                                    RoundRecord, SavedSession, StoreError, compare_rounds, format_value, load_session,
+                                    rebuild_request)
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import ROTATE_CODES, PreprocessedSketch
 from sketchloop.session import RoundOutcome, SketchSession
+from sketchloop.settings import (GeneratorSettings, Settings, SettingsError, StorageSettings, find_settings_file,
+                                 load_settings, override_settings)
 
 
 REPLAY_LIMITS: Final = "A rerun restores the recorded conditions. Equal seeds do not guarantee identical images across devices, library versions, or model revisions."  # noqa: E501
+CONFIG_HELP: Final = "settings file, by default sketchloop.toml in the working folder when present"
 
 
 class Command(StrEnum):
@@ -44,6 +51,30 @@ class NextStep(StrEnum):
     RECAPTURE = "c"
     FILE = "f"
     QUIT = "q"
+
+
+# Settings key each flag overrides, by command and the attribute argparse stores the flag in.
+FLAG_SETTINGS: Final[dict[str, dict[str, str]]] = {
+    Command.RUN: {
+        "candidates": "run.candidates",
+        "seed": "run.seed",
+        "runs_dir": "storage.runs_dir",
+        "raw": "preprocessing.raw",
+        "rotate": "preprocessing.rotation",
+        "backend": "generator.backend",
+        "mode": "generator.diffusers.mode",
+        "camera_index": "capture.camera_index",
+    },
+    Command.UI: {
+        "candidates": "ui.candidates",
+        "seed": "ui.seed",
+        "runs_dir": "storage.runs_dir",
+        "capture_interval": "ui.capture_interval_seconds",
+        "backend": "generator.backend",
+        "mode": "generator.diffusers.mode",
+    },
+    Command.RERUN: {"runs_dir": "storage.runs_dir"},
+}
 
 
 def make_int_parser(minimum: int) -> Callable[[str], int]:
@@ -72,41 +103,93 @@ def parse_positive_seconds(text: str) -> float:
     Read a time in seconds that is greater than zero, so argparse rejects a capture interval that would never fire.
     """
     seconds = float(text)
-    if not seconds > 0:
+    if not (seconds > 0 and math.isfinite(seconds)):
         raise argparse.ArgumentTypeError(f"must be greater than 0 seconds, got {text}")
 
     return seconds
 
 
-def check_backend_options(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+def check_run_flags(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     """
-    Reject a diffusers mode without the diffusers backend, since only that backend has modes.
-
-    Args:
-        parser (argparse.ArgumentParser): The subcommand parser, used to report errors.
-        args (argparse.Namespace): Parsed options with backend and mode.
-    """
-    if args.mode is not None and args.backend != GenerationBackend.DIFFUSERS:
-        parser.error(f"--mode needs --backend {GenerationBackend.DIFFUSERS}")
-
-
-def check_run_options(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    """
-    Reject run option combinations that contradict each other.
+    Reject run flags that contradict each other, before any settings file is read.
 
     Args:
         parser (argparse.ArgumentParser): The run subcommand parser, used to report errors.
         args (argparse.Namespace): Parsed run options.
     """
-    # Take the sketch from exactly one source.
-    if (args.sketch is None) == (not args.camera):
+    # Take the sketch from at most one source, since the settings file may name the camera.
+    if args.sketch is not None and args.camera:
         parser.error("give exactly one of a sketch file or --camera")
 
-    check_backend_options(parser, args)
-
     # Rotation is part of preprocessing, which --raw skips.
-    if args.rotate and args.raw:
+    if getattr(args, "rotate", 0) and getattr(args, "raw", False):
         parser.error("--rotate cannot be combined with --raw, which skips preprocessing")
+
+
+def collect_flag_overrides(args: argparse.Namespace) -> dict[str, object]:
+    """
+    Collect the settings the given flags override, by dotted key, where a sketch file or --camera sets the capture source.
+
+    Args:
+        args (argparse.Namespace): Parsed options, where a flag that was not given is absent.
+
+    Returns:
+        dict[str, object]: Flag values by dotted settings key, such as "run.candidates".
+    """
+    overrides = {key: getattr(args, name) for name, key in FLAG_SETTINGS[args.command].items() if name in args}
+    if args.command == Command.RUN and (args.sketch is not None or args.camera):
+        overrides["capture.source"] = "camera" if args.camera else "file"
+
+    return overrides
+
+
+def check_settings(args: argparse.Namespace, settings: Settings, label: str) -> None:
+    """
+    Reject effective settings that contradict each other once the file and the flags are combined.
+
+    Args:
+        args (argparse.Namespace): Parsed options, to tell flags from file values.
+        settings (Settings): Settings after the flags were applied.
+        label (str): Settings file name used in messages.
+    """
+    # Only the diffusers backend has modes, while a mode in the file's [generator.diffusers] is simply unused.
+    if "mode" in args and settings.generator.backend != GenerationBackend.DIFFUSERS:
+        raise SettingsError(f"--mode needs --backend {GenerationBackend.DIFFUSERS}")
+
+    if args.command != Command.RUN:
+        return
+
+    # Rotation is part of preprocessing, which raw skips, and a file source needs a sketch file.
+    preprocessing = settings.preprocessing
+    if preprocessing.rotation and preprocessing.raw:
+        rotation = preprocessing.rotation
+        raise SettingsError(f"preprocessing.rotation {rotation} cannot be combined with preprocessing.raw, which skips preprocessing. Change one in {label} or pass --rotate 0 or --no-raw.")  # noqa: E501
+
+    if settings.capture.source == "file" and args.sketch is None:
+        raise SettingsError(NO_RUN_SKETCH_MESSAGE)
+
+
+def resolve_settings(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """
+    Read the settings file, apply the given flags, and check the result, storing it in args.settings.
+
+    Args:
+        parser (argparse.ArgumentParser): The subcommand parser, used to report errors with exit code 2.
+        args (argparse.Namespace): Parsed options, which gain settings and settings_file.
+    """
+    # Check the file's own values before flags replace any of them, so a typo in the file is always reported.
+    try:
+        settings_file = find_settings_file(args.config)
+        label = settings_file.as_posix() if settings_file else "built-in settings"
+        file_settings = load_settings(settings_file)
+        check_component_names(file_settings, label)
+        settings = override_settings(file_settings, collect_flag_overrides(args))
+        check_settings(args, settings, label)
+    except SettingsError as error:
+        parser.error(str(error))
+
+    args.settings_file = settings_file
+    args.settings = settings
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -117,25 +200,29 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         argv (list[str] | None): Arguments to parse, or None for the process arguments.
 
     Returns:
-        argparse.Namespace: Parsed options, with the subcommand in `command`.
+        argparse.Namespace: Parsed options, with the subcommand in `command`, and for run, rerun, and ui the effective
+            `settings` and the `settings_file` they came from.
     """
+    # Options that a settings file can also set are absent unless given, so the file and the defaults can apply.
     formatter = argparse.ArgumentDefaultsHelpFormatter
+    unset = argparse.SUPPRESS
     parser = argparse.ArgumentParser(prog="sketchloop", description="Run, inspect, and rerun sketch sessions.")
     commands = parser.add_subparsers(dest="command", required=True)
 
     # Run a new session.
     run_parser = commands.add_parser(Command.RUN, help="run a new session", description="Generate alternatives from a sketch and pick some.", formatter_class=formatter)  # noqa: E501
     run_parser.add_argument("sketch", type=Path, nargs="?", help="PNG or JPEG sketch image to start from")
-    run_parser.add_argument("--camera", action="store_true", help="capture the sketch from a webcam instead of a file")
-    run_parser.add_argument("--camera-index", type=make_int_parser(0), default=0, help="webcam to use with --camera, 0 for the default")  # noqa: E501
+    run_parser.add_argument("--camera", action="store_true", help="capture the sketch from a webcam instead of a file (settings capture.source)")  # noqa: E501
+    run_parser.add_argument("--camera-index", type=make_int_parser(0), default=unset, help="webcam to use with --camera (settings capture.camera_index, default 0)")  # noqa: E501
     run_parser.add_argument("--prompt", required=True, help="text guidance for generation")
-    run_parser.add_argument("--candidates", type=make_int_parser(1), default=4, help="number of candidates to generate")
-    run_parser.add_argument("--seed", type=make_int_parser(0), default=None, help="base seed for reproducible candidates")
-    run_parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="folder for run outputs")
-    run_parser.add_argument("--raw", action="store_true", help="generate from your original sketch instead of the processed one")  # noqa: E501
-    run_parser.add_argument("--rotate", type=int, choices=list(ROTATE_CODES), default=0, help="degrees to turn the sketch clockwise before processing")  # noqa: E501
-    run_parser.add_argument("--backend", type=GenerationBackend, choices=list(GenerationBackend), default=GenerationBackend.FAKE, help="generation backend to use")  # noqa: E501
-    run_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), help="diffusers mode, by default fast on CPU and quality on a GPU")  # noqa: E501
+    run_parser.add_argument("--candidates", type=make_int_parser(1), default=unset, help="number of candidates to generate (settings run.candidates, default 4)")  # noqa: E501
+    run_parser.add_argument("--seed", type=make_int_parser(0), default=unset, help="base seed for reproducible candidates (settings run.seed, default random)")  # noqa: E501
+    run_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for run outputs (settings storage.runs_dir, default runs)")  # noqa: E501
+    run_parser.add_argument("--raw", action=argparse.BooleanOptionalAction, default=unset, help="generate from your original sketch instead of the processed one (settings preprocessing.raw, default off)")  # noqa: E501
+    run_parser.add_argument("--rotate", type=int, choices=list(ROTATE_CODES), default=unset, help="degrees to turn the sketch clockwise before processing (settings preprocessing.rotation, default 0)")  # noqa: E501
+    run_parser.add_argument("--backend", type=GenerationBackend, choices=list(GenerationBackend), default=unset, help="generation backend to use (settings generator.backend, default fake)")  # noqa: E501
+    run_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="diffusers mode (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
+    run_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
 
     # Show or rerun a saved session.
     show_parser = commands.add_parser(Command.SHOW, help="show a saved session without loading a model", description="Show a saved session and check its files.")  # noqa: E501
@@ -143,34 +230,76 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     rerun_parser = commands.add_parser(Command.RERUN, help="rerun a saved round as a new linked session", description="Rerun a saved round with its recorded sketch and settings.", formatter_class=formatter)  # noqa: E501
     rerun_parser.add_argument("session_folder", type=Path, help="session folder, such as runs/<session>")
     rerun_parser.add_argument("--round", type=make_int_parser(1), required=True, dest="round_number", help="round number to rerun")  # noqa: E501
-    rerun_parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="folder for the new session")
+    rerun_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for the new session (settings storage.runs_dir, default runs)")  # noqa: E501
+    rerun_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
 
     # Serve the local browser interface.
     ui_parser = commands.add_parser(Command.UI, help="open the local browser interface", description="Run sessions from a local browser page.", formatter_class=formatter)  # noqa: E501
-    ui_parser.add_argument("--candidates", type=make_int_parser(1), default=2, help="default number of candidates per round")
-    ui_parser.add_argument("--seed", type=make_int_parser(0), default=None, help="default base seed for reproducible candidates")
-    ui_parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="folder for run outputs")
-    ui_parser.add_argument("--capture-interval", type=parse_positive_seconds, default=0.5, help="seconds between webcam frames the page keeps, so Generate uses a fresh one")  # noqa: E501
-    ui_parser.add_argument("--backend", type=GenerationBackend, choices=list(GenerationBackend), default=GenerationBackend.FAKE, help="generation backend to use")  # noqa: E501
-    ui_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), help="diffusers mode, by default fast on CPU and quality on a GPU")  # noqa: E501
+    ui_parser.add_argument("--candidates", type=make_int_parser(1), default=unset, help="default number of candidates per round (settings ui.candidates, default 2)")  # noqa: E501
+    ui_parser.add_argument("--seed", type=make_int_parser(0), default=unset, help="default base seed for reproducible candidates (settings ui.seed, default random)")  # noqa: E501
+    ui_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for run outputs (settings storage.runs_dir, default runs)")  # noqa: E501
+    ui_parser.add_argument("--capture-interval", type=parse_positive_seconds, default=unset, help="seconds between webcam frames the page keeps, so Generate uses a fresh one (settings ui.capture_interval_seconds, default 0.5)")  # noqa: E501
+    ui_parser.add_argument("--backend", type=GenerationBackend, choices=list(GenerationBackend), default=unset, help="generation backend to use (settings generator.backend, default fake)")  # noqa: E501
+    ui_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="diffusers mode (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
+    ui_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
     args = parser.parse_args(argv)
 
-    # Reject contradicting options before anything is loaded or saved.
+    # Reject contradicting flags, then combine the settings file with the flags, before anything is loaded or saved.
+    args.settings_file = None
     if args.command == Command.RUN:
-        check_run_options(run_parser, args)
-    elif args.command == Command.UI:
-        check_backend_options(ui_parser, args)
+        check_run_flags(run_parser, args)
+
+    command_parsers = {Command.RUN: run_parser, Command.RERUN: rerun_parser, Command.UI: ui_parser}
+    if args.command in command_parsers:
+        resolve_settings(command_parsers[args.command], args)
 
     return args
 
 
-def make_announced_generator(backend: GenerationBackend, mode: GenerationMode | None, console: Console) -> Generator:
+def make_announced_generator(backend: GenerationBackend, mode: GenerationMode | None, console: Console, *,
+                             models_dir: Path) -> Generator:
     """
     Create the chosen generation backend and print which backend, device, and mode it uses.
+
+    Args:
+        backend (GenerationBackend): Backend to create.
+        mode (GenerationMode | None): Diffusers mode, or None for the device default.
+        console (Console): Console used for output.
+        models_dir (Path): Folder with the downloaded diffusers models.
+
+    Returns:
+        Generator: The generation backend.
     """
-    generator = make_generator(backend, mode)
+    generator = make_generator(backend, mode, models_dir=models_dir)
     console.print(generator.describe())
     return generator
+
+
+def make_configured_generator(settings: GeneratorSettings, console: Console) -> Generator:
+    """
+    Create and announce the backend the settings name, with its diffusers mode and models folder.
+    """
+    mode = settings.diffusers.mode
+    return make_announced_generator(GenerationBackend(settings.backend), GenerationMode(mode) if mode else None, console,
+                                    models_dir=settings.diffusers.models_dir)
+
+
+def require_folder_store(settings: StorageSettings, command: Command) -> ExperimentStore:
+    """
+    Create the configured store, refusing one without a local folder, since the command prints saved file paths.
+
+    Args:
+        settings (StorageSettings): Storage settings naming the store.
+        command (Command): Command that needs the folder, named in the error.
+
+    Returns:
+        ExperimentStore: The store, whose root is a folder.
+    """
+    store = make_store(settings)
+    if store.root is None:
+        raise SketchLoopError(f"sketchloop {command} shows saved file paths, so it needs a store that keeps files in a folder.")
+
+    return store
 
 
 def ask_selection(iteration: Iteration, console: Console) -> SelectionEvent:
@@ -289,13 +418,13 @@ def ask_next_step(console: Console, can_recapture: bool) -> tuple[NextStep, str]
         console.print(f"Not a choice. Use: {choices}.")
 
 
-def ask_next_round(args: argparse.Namespace, console: Console, prompt: str, sketch: tuple[ImageRef, bytes],
+def ask_next_round(capture_source: CaptureSource, console: Console, prompt: str, sketch: tuple[ImageRef, bytes],
                    source: SketchSource) -> tuple[str, tuple[ImageRef, bytes], SketchSource] | None:
     """
     Ask for the next change until one applies, so a wrong file path or a cancelled capture asks again.
 
     Args:
-        args (argparse.Namespace): Parsed run options, for the camera settings.
+        capture_source (CaptureSource): Source of the first sketch, used again to recapture from a camera.
         console (Console): Console used for prompts and errors.
         prompt (str): Current prompt.
         sketch (tuple[ImageRef, bytes]): Current raw sketch reference and bytes.
@@ -306,7 +435,7 @@ def ask_next_round(args: argparse.Namespace, console: Console, prompt: str, sket
             or None to quit.
     """
     while True:
-        next_step = ask_next_step(console, args.camera)
+        next_step = ask_next_step(console, capture_source.kind == "camera")
         if next_step is None:
             return None
 
@@ -314,7 +443,7 @@ def ask_next_round(args: argparse.Namespace, console: Console, prompt: str, sket
         step, value = next_step
         try:
             if step == NextStep.RECAPTURE:
-                return prompt, capture_from_camera(args.camera_index), "camera"
+                return prompt, capture_source.capture(), capture_source.kind
             if step == NextStep.FILE:
                 return prompt, load_sketch_file(Path(value)), "file"
         except (SketchLoopError, OSError) as error:
@@ -336,8 +465,9 @@ def print_summary(session: SketchSession, console: Console) -> None:
     console.print(f"Session folder: {session.folder.as_posix()}", markup=False, soft_wrap=True)
     console.print(f"Rounds: {len(session.rounds)}")
     for outcome in session.rounds:
-        selection = session.selections[outcome.iteration.id]
-        console.print(f"Round {outcome.number} selected: {describe_selection(outcome.iteration, selection)}")
+        selection = session.selections.get(outcome.iteration.id)
+        choice = describe_selection(outcome.iteration, selection) if selection else "not saved"
+        console.print(f"Round {outcome.number} selected: {choice}")
 
 
 def run_session(args: argparse.Namespace, console: Console) -> None:
@@ -349,26 +479,38 @@ def run_session(args: argparse.Namespace, console: Console) -> None:
         console (Console): Console used for output and prompts.
     """
     # Load or capture the first sketch, then create the backend once so a real model stays loaded between rounds.
-    sketch = capture_from_camera(args.camera_index) if args.camera else load_sketch_file(args.sketch)
-    source: SketchSource = "camera" if args.camera else "file"
-    session = SketchSession(make_announced_generator(args.backend, args.mode, console), args.runs_dir)
+    settings = args.settings
+    store = require_folder_store(settings.storage, Command.RUN)
+    capture_source = make_capture_source(settings.capture, args.sketch)
+    sketch = capture_source.capture()
+    source: SketchSource = capture_source.kind
+    generator = make_configured_generator(settings.generator, console)
+    session = SketchSession(generator, store, make_evaluator(settings.evaluator),
+                            preprocessor=make_preprocessor(settings.preprocessing))
+    preprocessing = settings.preprocessing
     prompt = args.prompt
     while True:
         # Run a round with the current sketch and prompt, reporting a failure instead of ending the session.
         try:
-            outcome = session.run_round(*sketch, Guidance(prompt=prompt), source=source, rotation=args.rotate,
-                                        use_raw=args.raw, n_candidates=args.candidates, seed=args.seed)
+            outcome = session.run_round(*sketch, Guidance(prompt=prompt), source=source, rotation=preprocessing.rotation,
+                                        use_raw=preprocessing.raw, n_candidates=settings.run.candidates, seed=settings.run.seed)
         except (SketchLoopError, OSError) as error:
             console.print(f"Round failed: {error}", style="red", markup=False, soft_wrap=True)
         else:
             # Show the candidates and record the person's explicit choice.
             show_round(outcome, console)
             selection = ask_selection(outcome.iteration, console)
-            session.record_selection(selection)
-            console.print(f"Selected: {describe_selection(outcome.iteration, selection)}", style="green")
+
+            # Report a selection the store could not save like a failed round, so the session continues.
+            try:
+                session.record_selection(selection)
+            except StoreError as error:
+                console.print(f"Selection not saved: {error}", style="red", markup=False, soft_wrap=True)
+            else:
+                console.print(f"Selected: {describe_selection(outcome.iteration, selection)}", style="green")
 
         # Stop when the person quits, otherwise apply the requested change before the next round.
-        next_round = ask_next_round(args, console, prompt, sketch, source)
+        next_round = ask_next_round(capture_source, console, prompt, sketch, source)
         if next_round is None:
             break
 
@@ -538,13 +680,14 @@ def find_rerunnable_round(saved: SavedSession, round_number: int) -> RoundRecord
     return next(record for record in saved.rounds if record.number == round_number)
 
 
-def make_rerun_generator(record: RoundRecord, console: Console) -> Generator:
+def make_rerun_generator(record: RoundRecord, console: Console, models_dir: Path) -> Generator:
     """
     Recreate the backend a round used, with its recorded diffusers mode.
 
     Args:
         record (RoundRecord): Completed round to rerun.
         console (Console): Console used for output.
+        models_dir (Path): Folder with the downloaded diffusers models.
 
     Returns:
         Generator: The recreated backend.
@@ -556,7 +699,7 @@ def make_rerun_generator(record: RoundRecord, console: Console) -> Generator:
     # Pass the recorded mode, since the diffusers default depends on the device.
     recorded_mode = record.iteration.result.effective.controls.get("mode")
     mode = GenerationMode(recorded_mode) if recorded_mode in list(GenerationMode) else None
-    return make_announced_generator(RERUNNABLE_BACKENDS[adapter], mode, console)
+    return make_announced_generator(RERUNNABLE_BACKENDS[adapter], mode, console, models_dir=models_dir)
 
 
 def rerun_round(args: argparse.Namespace, console: Console) -> None:
@@ -567,9 +710,12 @@ def rerun_round(args: argparse.Namespace, console: Console) -> None:
         args (argparse.Namespace): Parsed rerun options.
         console (Console): Console used for output.
     """
+    # Take only the store, evaluator, and models folder from settings, and everything else from the record.
+    settings = args.settings
+    store = require_folder_store(settings.storage, Command.RERUN)
     original = load_session(args.session_folder)
     record = find_rerunnable_round(original, args.round_number)
-    generator = make_rerun_generator(record, console)
+    generator = make_rerun_generator(record, console, settings.generator.diffusers.models_dir)
 
     # Read the stored sketches, reusing the processed one so generation gets the same input bytes.
     round_folder = original.folder / f"round-{record.number}"
@@ -582,7 +728,7 @@ def rerun_round(args: argparse.Namespace, console: Console) -> None:
     # Run one round in a new linked session with the recorded settings, without asking for a selection.
     request = rebuild_request(record, generator.capabilities)
     link = RerunLink(session_id=original.session.session_id, round_number=record.number, iteration_id=record.iteration.id)
-    session = SketchSession(generator, args.runs_dir, rerun_of=link)
+    session = SketchSession(generator, store, make_evaluator(settings.evaluator), rerun_of=link)
     outcome = session.run_round(record.raw_sketch, raw_payload, request.guidance, source=record.source,
                                 rotation=record.rotation, use_raw=record.use_raw, n_candidates=request.n_candidates,
                                 seed=request.seed, reuse=reuse)
@@ -607,13 +753,16 @@ def launch_ui(args: argparse.Namespace, console: Console) -> None:
     from sketchloop.ui import launch_app
 
     # Create the backend once, and refuse a default candidate count the backend cannot produce.
-    controller = AppController(make_announced_generator(args.backend, args.mode, console), args.runs_dir)
-    limit = controller.max_candidates
-    if args.candidates > limit:
-        raise SketchLoopError(f"--candidates {args.candidates} is above the backend limit of {limit}. Use {limit} or fewer.")
+    settings = args.settings
+    store = make_store(settings.storage)
+    controller = AppController(make_configured_generator(settings.generator, console), store, make_evaluator(settings.evaluator),
+                               preprocessor=make_preprocessor(settings.preprocessing))
+    limit, candidates = controller.max_candidates, settings.ui.candidates
+    if candidates > limit:
+        raise SketchLoopError(f"Default candidates {candidates} (--candidates or ui.candidates) is above the backend limit of {limit}. Use {limit} or fewer.")  # noqa: E501
 
-    launch_app(controller, default_candidates=args.candidates, default_seed=args.seed,
-               capture_interval_seconds=args.capture_interval)
+    launch_app(controller, default_candidates=candidates, default_seed=settings.ui.seed,
+               capture_interval_seconds=settings.ui.capture_interval_seconds)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -627,9 +776,15 @@ def main(argv: list[str] | None = None) -> int:
         int: Process exit code, 0 on success and 1 on a reported error.
     """
     args = parse_args(argv)
+    console = Console()
     commands = {Command.RUN: run_session, Command.SHOW: show_session, Command.RERUN: rerun_round, Command.UI: launch_ui}
+
+    # Say which settings file applies before anything else, so a file found in the working folder is never a surprise.
+    if args.settings_file is not None:
+        console.print(f"Settings: {args.settings_file.as_posix()}", markup=False, soft_wrap=True)
+
     try:
-        commands[args.command](args, Console())
+        commands[args.command](args, console)
     except (SketchLoopError, OSError) as error:
         Console(stderr=True).print(f"sketchloop error: {error}", style="red", markup=False, highlight=False, soft_wrap=True)
         return 1

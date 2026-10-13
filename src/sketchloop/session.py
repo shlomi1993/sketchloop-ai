@@ -8,13 +8,12 @@ from functools import partial
 from pathlib import Path
 
 from sketchloop.domain import (SCHEMA_VERSION, GenerationRequest, Guidance, ImageRef, InvalidSelectionError, Iteration,
-                               SelectionEvent, Unavailable)
+                               SelectionEvent, SketchSource, Unavailable)
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
-from sketchloop.experiments import (ROUND_FILE, SESSION_FILE, FailureStage, RerunLink, RoundRecord, SessionRecord,
-                                    SketchSource, collect_environment, describe_failure, require_known_source, round_to_dict,
-                                    session_to_dict, write_json_atomic)
+from sketchloop.experiments import (ExperimentStore, FailureStage, RerunLink, RoundRecord, SessionRecord, collect_environment,
+                                    describe_failure, require_known_source)
 from sketchloop.generation import Generator
-from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, preprocess_sketch
+from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor, StrokePreprocessor
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -23,7 +22,7 @@ class RoundOutcome:
     What one round produced: its folder, sketches, preprocessing steps, iteration, timings, and scores.
     """
     number: int  # Round number, starting at 1
-    folder: Path  # Round folder holding the sketches and candidates
+    folder: Path | None  # Round folder holding the sketches and candidates, None for a store without files
     raw_sketch: ImageRef  # Raw sketch as loaded or captured
     steps: tuple[PreprocessingStep, ...]  # Preprocessing steps applied, empty with --raw
     iteration: Iteration  # Request, result, and link to the previous round
@@ -38,31 +37,19 @@ def make_session_folder_name() -> str:
     return f"{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:6]}"
 
 
-def write_files(folder: Path, files: Mapping[str, bytes]) -> None:
-    """
-    Write each payload to its relative path under the folder, creating subfolders as needed.
-
-    Args:
-        folder (Path): Folder the relative paths resolve against.
-        files (Mapping[str, bytes]): Payload by relative POSIX path.
-    """
-    # Create each file's subfolder before writing it.
-    for path, payload in files.items():
-        target_file = folder / path
-        target_file.parent.mkdir(parents=True, exist_ok=True)
-        target_file.write_bytes(payload)
-
-
 class SketchSession:
     """
     Runs successive manual rounds with one generator, linking each round to the previous one.
     """
 
-    def __init__(self, generator: Generator, runs_dir: Path, evaluator: Evaluator | None = None, *,
-                 rerun_of: RerunLink | None = None) -> None:
+    def __init__(self, generator: Generator, store: ExperimentStore, evaluator: Evaluator | None = None, *,
+                 preprocessor: Preprocessor | None = None, rerun_of: RerunLink | None = None) -> None:
         self.generator = generator
+        self.store = store
         self.evaluator = evaluator or NoOpEvaluator()
-        self.folder = runs_dir / make_session_folder_name()
+        self.preprocessor = preprocessor or StrokePreprocessor()
+        self.session_id = make_session_folder_name()
+        self.folder = store.locate_session(self.session_id)
         self.rerun_of = rerun_of
         self.rounds: list[RoundOutcome] = []
         self.selections: dict[str, SelectionEvent] = {}
@@ -71,15 +58,16 @@ class SketchSession:
         self._started_rounds = 0
 
     def _write_session_record(self) -> None:
-        # Write session.json once, before the first round's files.
+        # Save the session record once, before the first round's files.
         if self.session_record is not None:
             return
 
-        self.session_record = SessionRecord(schema_version=SCHEMA_VERSION, session_id=self.folder.name,
-                                            created_at=datetime.now(timezone.utc), environment=collect_environment(),
-                                            rerun_of=self.rerun_of)
-        self.folder.mkdir(parents=True, exist_ok=True)
-        write_json_atomic(self.folder / SESSION_FILE, session_to_dict(self.session_record))
+        record = SessionRecord(schema_version=SCHEMA_VERSION, session_id=self.session_id, created_at=datetime.now(timezone.utc),
+                               environment=collect_environment(), rerun_of=self.rerun_of)
+
+        # Remember the record only once it is saved, so a failed save is retried by the next round.
+        self.store.save_session(record)
+        self.session_record = record
 
     def _prepare_sketch(self, raw_sketch: ImageRef, raw_payload: bytes, rotation: int, use_raw: bool,
                         reuse: PreprocessedSketch | None, timings: dict[str, float]) -> tuple[ImageRef, bytes, tuple[PreprocessingStep, ...]]:  # noqa: E501
@@ -92,7 +80,7 @@ class SketchSession:
 
         # Preprocess and time it.
         started = time.perf_counter()
-        processed = preprocess_sketch(raw_payload, rotation)
+        processed = self.preprocessor.preprocess(raw_payload, rotation)
         timings["preprocessing"] = time.perf_counter() - started
         return processed.image, processed.payload, processed.steps
 
@@ -124,7 +112,6 @@ class SketchSession:
         self._write_session_record()
         self._started_rounds += 1
         number = self._started_rounds
-        folder = self.folder / f"round-{number}"
         draft = partial(RoundRecord, schema_version=SCHEMA_VERSION, number=number, started_at=datetime.now(timezone.utc),
                         raw_sketch=raw_sketch, source=source, use_raw=use_raw, rotation=rotation)
         timings: dict[str, float] = {}
@@ -154,17 +141,18 @@ class SketchSession:
                            evaluator=type(self.evaluator).__name__, scores=scores, selection=None, failure=None)
         except Exception as error:
             # Keep the sketches made so far and a failed record, so the attempt stays visible, then let the caller report it.
-            write_files(folder, {raw_sketch.path: raw_payload} | ({request.sketch.path: sketch_payload} if request else {}))
+            sketches = {raw_sketch.path: raw_payload} | ({request.sketch.path: sketch_payload} if request else {})
             failed = draft(status="failed", steps=steps, request=request, iteration=None, timings_seconds=timings,
                            evaluator=None, scores={}, selection=None, failure=describe_failure(stage, error))
-            write_json_atomic(folder / ROUND_FILE, round_to_dict(failed))
+            self.store.save_round(self.session_id, failed, sketches)
             self.records.append(failed)
             raise
 
         # Store the raw and processed sketches and the candidates, then the record without a selection.
-        write_files(folder, {raw_sketch.path: raw_payload, sketch.path: sketch_payload} | dict(output.payloads))
-        write_json_atomic(folder / ROUND_FILE, round_to_dict(record))
+        files = {raw_sketch.path: raw_payload, sketch.path: sketch_payload} | dict(output.payloads)
+        self.store.save_round(self.session_id, record, files)
         self.records.append(record)
+        folder = self.store.locate_round(self.session_id, number)
         outcome = RoundOutcome(number=number, folder=folder, raw_sketch=raw_sketch, steps=steps, iteration=iteration,
                                timings_seconds=timings, scores=scores)
         self.rounds.append(outcome)
@@ -182,8 +170,9 @@ class SketchSession:
         if selection.iteration_id != latest_id or latest_id in self.selections:
             raise InvalidSelectionError("A selection must be for the latest round and recorded once. Run a round first.")
 
-        # Replace the round's record once to add the selection.
-        self.selections[latest_id] = selection
+        # Save the round's record with the selection first, so a failed save leaves the choice open for a retry.
         position = [record.iteration.id if record.iteration else None for record in self.records].index(latest_id)
-        self.records[position] = replace(self.records[position], selection=selection)
-        write_json_atomic(self.rounds[-1].folder / ROUND_FILE, round_to_dict(self.records[position]))
+        selected_record = replace(self.records[position], selection=selection)
+        self.store.save_round(self.session_id, selected_record, {})
+        self.records[position] = selected_record
+        self.selections[latest_id] = selection

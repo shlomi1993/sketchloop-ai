@@ -1,3 +1,4 @@
+import ast
 import cv2
 import hashlib
 import json
@@ -9,11 +10,13 @@ import subprocess
 import sys
 
 from pathlib import Path
+from typing import Final
 
+import sketchloop
 from sketchloop.app import NO_SKETCH_MESSAGE, AppController
 from sketchloop.capture import InvalidSketchError
 from sketchloop.domain import InvalidSelectionError, SketchLoopError, UnsupportedConfigurationError
-from sketchloop.experiments import load_session
+from sketchloop.experiments import FolderStore, load_session
 from sketchloop.fakes import FakeGenerator
 
 
@@ -45,7 +48,7 @@ def controller(tmp_path: Path) -> AppController:
     """
     Provide a controller with the deterministic fake backend and a runs folder under tmp_path.
     """
-    return AppController(FakeGenerator(), tmp_path / "runs")
+    return AppController(FakeGenerator(), FolderStore(tmp_path / "runs"))
 
 
 def read_round_files(controller: AppController) -> dict[str, bytes]:
@@ -210,16 +213,46 @@ def test_app_history_refresh_and_new_session(controller: AppController, sketch_f
     assert new_saved.rounds[0].iteration.parent_id is None, "The first round of a new session must not link to the old one"
 
 
-def test_cli_and_app_never_import_gradio() -> None:
+def list_imported_names(module_file: Path) -> set[str]:
     """
-    Importing the CLI and the controller works with gradio unimportable and never loads sketchloop.ui.
+    List every module and name a source file imports anywhere, including module.name pairs for from-imports.
     """
-    code = "; ".join(["import sys", "sys.modules['gradio'] = None", "import sketchloop.app, sketchloop.cli",
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(module_file.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            names.add(node.module or "")
+            names.update(name for alias in node.names for name in (alias.name, f"{node.module}.{alias.name}"))
+
+    return names
+
+
+# Orchestration may import only protocols, records, and default components, never implementations it should receive.
+ORCHESTRATION_FORBIDDEN: Final = ("FolderStore", "MemoryStore", "write_json_atomic", "preprocess_sketch", "sketchloop.backends",
+                                  "sketchloop.components", "sketchloop.settings", "sketchloop.ui", "gradio")
+
+
+@pytest.mark.parametrize(("module", "forbidden"), [
+    ("session", (*ORCHESTRATION_FORBIDDEN, "write_files", "load_sketch_file", "capture_from_camera", "cv2")),
+    ("app", ORCHESTRATION_FORBIDDEN),
+    ("cli", ())
+])
+def test_import_boundaries(module: str, forbidden: tuple[str, ...]) -> None:
+    """
+    Session and controller import no store, preprocessing, capture, factory, or UI code, and no module loads gradio on import.
+    """
+    imported = list_imported_names(Path(sketchloop.__file__).parent / f"{module}.py")
+    found = sorted(name for name in imported if any(name == banned or name.startswith(f"{banned}.") for banned in forbidden))
+    code = "; ".join(["import sys", "sys.modules['gradio'] = None", f"import sketchloop.{module}",
                       "assert 'sketchloop.ui' not in sys.modules"])
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
 
-    # The subprocess imports both modules without touching gradio.
-    assert result.returncode == 0, f"sketchloop.cli or sketchloop.app imported gradio or sketchloop.ui: {result.stderr}"
+    # The module's source imports nothing orchestration must receive by injection.
+    assert found == [], f"sketchloop.{module} imports {found}, which must be injected instead"
+
+    # A subprocess imports the module without touching gradio or the UI module.
+    assert result.returncode == 0, f"sketchloop.{module} imported gradio or sketchloop.ui: {result.stderr}"
 
 
 @pytest.fixture

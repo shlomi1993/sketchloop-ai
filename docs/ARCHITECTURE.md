@@ -29,6 +29,8 @@ The orchestrator records all stage inputs, effective configuration, outputs, err
 | `preprocessing` | Named, configurable image transformations | Retain input and transformation provenance; no generation calls |
 | `generation` | Capabilities, request validation, candidate generation | Backend-specific objects stay inside adapters |
 | `backends` | Name the available backends and create one, whose `describe()` tells the person what runs | The CLI and UI create backends only through `make_generator` |
+| `components` | Map setting names to capture sources, preprocessors, evaluators, and stores | The CLI and UI build components only through it, while library callers inject objects directly |
+| `settings` | Read the optional `sketchloop.toml` or `--config` file and apply flag overrides | Standard library only; validates shape and types, while `components` checks names |
 | `evaluation` | Optional scoring/filtering of candidates | No hidden human-selection decisions; preserve original candidates |
 | `orchestration` | Execute a manual iteration and link it to history | Inject adapters; do not select a provider globally |
 | `experiments` | Durable records, artifact integrity, load/replay | UI and model adapters do not write storage directly |
@@ -44,10 +46,10 @@ T01a (accepted, not implemented) defines `sketchloop.domain`, `sketchloop.genera
 
 Later contracts, still proposals:
 
-- `CaptureSource.capture()` returns a captured image and metadata (T02).
-- `Preprocessor.process(capture, config)` returns processed image(s) and ordered transformation metadata (T02).
+- `CaptureSource.capture()` returns a captured image and metadata (T02). T02 implemented this as the functions `load_sketch_file` and `capture_from_camera`. [The T07 design](design/t07-modularity.md), implemented in T07, adds a `CaptureSource` protocol with `kind` and `capture()`, implemented by `FileCapture` and `CameraCapture` ([ADR 0014](decisions/0014-replaceable-components-and-settings.md)).
+- `Preprocessor.process(capture, config)` returns processed image(s) and ordered transformation metadata (T02). T02 implemented this as the function `preprocess_sketch`. T07 adds a `Preprocessor` protocol with `preprocess(payload, rotation)`, implemented by `StrokePreprocessor` and injected into `SketchSession`.
 - `Evaluator.evaluate(candidates, payloads, request)` returns scores by candidate ID without mutating candidates, and `NoOpEvaluator` gives none. Implemented in T04 ([ADR 0010](decisions/0010-sessions-and-evaluator.md)).
-- `ExperimentStore` creates/loads runs, stores artifacts, appends iterations and selection events, and reconstructs replay requests. T05 implements this as functions in `sketchloop.experiments` for records, atomic writes, `load_session`, `rebuild_request`, and `compare_rounds`. [ADR 0011](decisions/0011-session-records-and-subcommands.md) defers a replaceable store protocol to T07.
+- `ExperimentStore` creates/loads runs, stores artifacts, appends iterations and selection events, and reconstructs replay requests. T05 implements this as functions in `sketchloop.experiments` for records, atomic writes, `load_session`, `rebuild_request`, and `compare_rounds`. [ADR 0011](decisions/0011-session-records-and-subcommands.md) defers a replaceable store protocol to T07. T07 adds a write-side `ExperimentStore` protocol injected into `SketchSession`, raising `StoreError` with a one-line message when a save fails, with `FolderStore` as the default and only registered store and `MemoryStore` for tests and library callers. Loading, checks, and rerun comparison stay folder functions.
 - An application service runs an iteration and records explicit selection separately. Candidate IDs must belong to the iteration being selected. T06 implements `sketchloop.app.AppController`, which never imports gradio, and a thin `sketchloop.ui` Gradio module that calls it ([the T06 design](design/t06-ui.md), [ADR 0012](decisions/0012-gradio-ui-and-input-source.md)).
 
 Define failure types for capture unavailable, invalid image, unsupported configuration, backend failure/timeout, and persistence failure. Keep an incomplete run visible as failed; never label partial output complete or overwrite the previous successful iteration. Retry creates a new attempt linked to the original.

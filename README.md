@@ -65,6 +65,10 @@ sketchloop run examples/sketch-photo.jpg --prompt "modern chair" --backend diffu
 
 The download script fetches about 6 GB into the ignored `models/` folder and skips files already present. The backend uses CUDA, then Apple MPS, then the CPU. `--mode fast` uses 4 steps with LCM-LoRA and no negative prompt and is the default on CPU, and `--mode quality` (20 steps) is the default on a GPU. Run the real-model test with `python -m pytest -m model`, since default checks skip it.
 
+## Settings file
+
+Instead of repeating flags, put your choices in a settings file. Copy [examples/sketchloop.toml](examples/sketchloop.toml) to `sketchloop.toml` in the folder you run `sketchloop` from, which git ignores, or pass `--config PATH` to `run`, `ui`, or `rerun`. The file selects the generation backend and its mode, the image source for `run`, the preprocessor, the evaluator, the store and its runs folder, and the default candidate count and seed of `run` and `ui`. A command-line flag overrides the file, and the file overrides the built-in default. When a file is used, the command first prints `Settings:` with its path. A relative `runs_dir` or `models_dir` in the file is relative to the file's folder. `generator.diffusers.models_dir` tells the backend where the model folders are, and `scripts/download_models.py` reads the same setting, so run it from the same folder or with the same `--config` to download where the backend looks. `rerun` always recreates the backend and settings from the recorded round and takes only the store, evaluator, and models folder from the file.
+
 ## Using the project environment with Conda
 
 If your terminal shows `(base)`, leave Conda before activating the project environment:

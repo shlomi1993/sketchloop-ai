@@ -5,7 +5,7 @@ import numpy as np
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Protocol
 
 from sketchloop.capture import InvalidSketchError
 from sketchloop.domain import ControlValue, ImageRef
@@ -504,3 +504,34 @@ def preprocess_sketch(payload: bytes, rotation: int = 0) -> PreprocessedSketch:
 
     image, processed = encode_processed_sketch(resized)
     return PreprocessedSketch(image=image, payload=processed, steps=tuple(steps))
+
+
+class Preprocessor(Protocol):
+    """
+    Prepares a raw sketch for generation and records each applied step with the parameters it used.
+    """
+
+    def preprocess(self, payload: bytes, rotation: int) -> PreprocessedSketch:
+        """
+        Turn a raw sketch into the generation sketch, raising when it cannot apply the rotation.
+
+        Args:
+            payload (bytes): Encoded raw sketch image.
+            rotation (int): Clockwise rotation in degrees, one of 0, 90, 180, or 270.
+
+        Returns:
+            PreprocessedSketch: The processed image with a relative path, its bytes, and the ordered steps.
+        """
+        ...
+
+
+class StrokePreprocessor:
+    """
+    Default preprocessor that straightens the paper, isolates the strokes, and crops and resizes them.
+    """
+
+    def preprocess(self, payload: bytes, rotation: int) -> PreprocessedSketch:
+        """
+        Preprocess the sketch with preprocess_sketch.
+        """
+        return preprocess_sketch(payload, rotation)

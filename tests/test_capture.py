@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import pytest
 
-from sketchloop.capture import SPACE_KEY, InvalidSketchError, capture_from_camera
+from sketchloop.capture import SPACE_KEY, CameraCapture, InvalidSketchError, capture_from_camera
 
 
 class FakeCamera:
@@ -49,17 +49,23 @@ def no_windows(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.usefixtures("no_windows")
 def test_camera_capture() -> None:
     """
-    Pressing Space captures the previewed frame as a PNG raw sketch and releases the camera.
+    Pressing Space captures the previewed frame as a PNG raw sketch and releases the camera, also through CameraCapture.
     """
     camera = FakeCamera(available=True)
+    source = CameraCapture(0, open_camera=lambda index: camera)
 
-    image, payload = capture_from_camera(0, open_camera=lambda index: camera)
+    image, payload = source.capture()
+    direct = capture_from_camera(0, open_camera=lambda index: FakeCamera(available=True))
 
     # The capture is a PNG raw sketch with the frame's size, and the camera is released.
     image_ref_is_raw_png = image.path == "sketch-raw.png" and image.media_type == "image/png" and payload.startswith(b"\x89PNG")
     assert image_ref_is_raw_png, f"Expected a PNG raw sketch, got {image}"
     assert (image.width, image.height, image.mode) == (64, 48, "RGB"), f"Unexpected size or mode {image}"
     assert camera.released, "The camera must be released after capture"
+
+    # The capture source records camera input and gives the same sketch as capturing directly.
+    assert source.kind == "camera", f"CameraCapture must record source camera, got {source.kind}"
+    assert (image, payload) == direct, "CameraCapture must return the same sketch as capture_from_camera"
 
 
 @pytest.mark.usefixtures("no_windows")

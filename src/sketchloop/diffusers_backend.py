@@ -241,7 +241,7 @@ class DiffusersSketchGenerator:
         for source in self._list_model_sources():
             folder = self._model_dir / source.folder
             if not folder.is_dir():
-                message = f"Model folder {folder.as_posix()} is missing. Run python scripts/download_models.py and retry."
+                message = f"Model folder {folder.as_posix()} is missing. Run python scripts/download_models.py from the folder with your settings file and retry."  # noqa: E501
                 raise GenerationBackendError(message)
 
         # Import the heavy libraries only when a real model is needed.

@@ -7,15 +7,17 @@ from typing import Final
 
 from sketchloop.capture import InvalidSketchError, encode_frame, load_sketch_file
 from sketchloop.domain import (
-    Guidance, InvalidSelectionError, Iteration, SelectionEvent, SketchLoopError, record_no_selection, select_candidates)
+    Guidance, InvalidSelectionError, Iteration, SelectionEvent, SketchLoopError, SketchSource, record_no_selection,
+    select_candidates)
 from sketchloop.evaluation import Evaluator
-from sketchloop.experiments import RoundRecord, RoundStatus, SketchSource
+from sketchloop.experiments import ExperimentStore, RoundRecord, RoundStatus
 from sketchloop.generation import Generator
-from sketchloop.preprocessing import ROTATE_CODES
+from sketchloop.preprocessing import ROTATE_CODES, Preprocessor
 from sketchloop.session import RoundOutcome, SketchSession
 
 
 NO_SKETCH_MESSAGE: Final = "No sketch yet. Take a webcam picture or upload a PNG or JPEG, then generate."
+NO_FILES_MESSAGE: Final = "The browser interface shows saved image files, so it needs a store that keeps files in a folder."
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -119,11 +121,18 @@ class AppController:
     """
     Framework-free service the browser UI calls: one loaded generator and the current session, shared by all tabs.
     """
-    def __init__(self, generator: Generator, runs_dir: Path, evaluator: Evaluator | None = None) -> None:
+    def __init__(self, generator: Generator, store: ExperimentStore, evaluator: Evaluator | None = None, *,
+                 preprocessor: Preprocessor | None = None) -> None:
+        # The page shows candidates from their saved files, so refuse a store that keeps none.
+        if store.root is None:
+            raise SketchLoopError(NO_FILES_MESSAGE)
+
         self.generator = generator
+        self.store = store
         self.evaluator = evaluator
-        self.runs_dir = runs_dir
-        self.session = SketchSession(generator, runs_dir, evaluator)
+        self.preprocessor = preprocessor
+        self.runs_dir: Path = store.root
+        self.session = SketchSession(generator, store, evaluator, preprocessor=preprocessor)
 
     @property
     def max_candidates(self) -> int:
@@ -220,6 +229,6 @@ class AppController:
 
     def start_new_session(self) -> None:
         """
-        Start a fresh session folder with the same loaded generator.
+        Start a fresh session folder with the same loaded generator, store, evaluator, and preprocessor.
         """
-        self.session = SketchSession(self.generator, self.runs_dir, self.evaluator)
+        self.session = SketchSession(self.generator, self.store, self.evaluator, preprocessor=self.preprocessor)

@@ -224,6 +224,7 @@ __marimo__/
 /data/
 /runs/
 /models/
+/sketchloop.toml
 /tmp/
 /output/
 /.dist/

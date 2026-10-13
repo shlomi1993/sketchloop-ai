@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Final, Protocol
 
-from sketchloop.domain import ColorMode, ImageRef, SketchLoopError
+from sketchloop.domain import ColorMode, ImageRef, SketchLoopError, SketchSource
 
 
 # Supported formats by file signature, with the raw file extension and media type to store them under.
@@ -230,3 +230,70 @@ def preview_until_capture(camera: VideoSource, unavailable: str) -> np.ndarray:
         window_closed = sys.platform != "darwin" and cv2.getWindowProperty(PREVIEW_WINDOW_TITLE, cv2.WND_PROP_VISIBLE) < 1
         if key == ESC_KEY or window_closed:
             raise InvalidSketchError("Camera capture cancelled.")
+
+
+class CaptureSource(Protocol):
+    """
+    Where sketchloop run gets its raw sketches, such as a file or a webcam.
+    """
+
+    @property
+    def kind(self) -> SketchSource:
+        """
+        Return the value recorded as input.source for sketches from this source.
+        """
+        ...
+
+    def capture(self) -> tuple[ImageRef, bytes]:
+        """
+        Capture a raw sketch, which may be called again to recapture, raising InvalidSketchError when none is available.
+
+        Returns:
+            tuple[ImageRef, bytes]: The raw sketch reference and its encoded bytes.
+        """
+        ...
+
+
+class FileCapture:
+    """
+    Capture source that reads a PNG or JPEG sketch file, rereading it on each capture.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    @property
+    def kind(self) -> SketchSource:
+        """
+        Return "file".
+        """
+        return "file"
+
+    def capture(self) -> tuple[ImageRef, bytes]:
+        """
+        Load the sketch file.
+        """
+        return load_sketch_file(self.path)
+
+
+class CameraCapture:
+    """
+    Capture source that shows a webcam preview and captures a frame on Space.
+    """
+
+    def __init__(self, camera_index: int, open_camera: Callable[[int], VideoSource] = open_webcam) -> None:
+        self.camera_index = camera_index
+        self.open_camera = open_camera
+
+    @property
+    def kind(self) -> SketchSource:
+        """
+        Return "camera".
+        """
+        return "camera"
+
+    def capture(self) -> tuple[ImageRef, bytes]:
+        """
+        Capture a frame from the webcam as a PNG raw sketch.
+        """
+        return capture_from_camera(self.camera_index, self.open_camera)

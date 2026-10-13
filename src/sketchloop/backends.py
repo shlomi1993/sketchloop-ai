@@ -1,4 +1,5 @@
 from enum import StrEnum
+from pathlib import Path
 from typing import Final
 
 from sketchloop.diffusers_backend import DiffusersSketchGenerator, GenerationMode
@@ -21,13 +22,15 @@ RERUNNABLE_BACKENDS: Final = {
 }
 
 
-def make_generator(backend: GenerationBackend, mode: GenerationMode | None = None) -> Generator:
+def make_generator(backend: GenerationBackend, mode: GenerationMode | None = None, *,
+                   models_dir: Path = Path("models")) -> Generator:
     """
     Create a generation backend, without loading any model yet.
 
     Args:
         backend (GenerationBackend): Backend to create.
         mode (GenerationMode | None, optional): Diffusers mode, or None for the device default. Defaults to None.
+        models_dir (Path, optional): Folder with the downloaded diffusers models, ignored by the fake. Defaults to models.
 
     Returns:
         Generator: The generation backend.
@@ -35,4 +38,4 @@ def make_generator(backend: GenerationBackend, mode: GenerationMode | None = Non
     if backend == GenerationBackend.FAKE:
         return FakeGenerator()
 
-    return DiffusersSketchGenerator(mode=mode)
+    return DiffusersSketchGenerator(models_dir, mode=mode)

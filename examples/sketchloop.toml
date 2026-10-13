@@ -1,0 +1,33 @@
+# SketchLoop settings. Copy to sketchloop.toml in the folder you run sketchloop from, or pass --config PATH.
+# Command-line flags override these values. Remove a line to use the built-in default.
+
+[generator]
+backend = "diffusers"  # fake or diffusers
+
+[generator.diffusers]
+mode = "fast"  # fast or quality, omit for the device default
+models_dir = "models"  # relative to this file, also used by scripts/download_models.py
+
+[capture]
+source = "camera"  # file or camera, for sketchloop run
+camera_index = 0
+
+[preprocessing]
+name = "strokes"
+rotation = 0  # 0, 90, 180, or 270, for sketchloop run
+raw = false
+
+[evaluator]
+name = "none"
+
+[storage]
+store = "folder"
+runs_dir = "runs"  # relative to this file
+
+[run]
+candidates = 4
+# seed = 7  # omit for a random seed
+
+[ui]
+candidates = 2
+capture_interval_seconds = 0.5
