@@ -32,6 +32,7 @@ For durable interface, storage, dependency, or scope decisions, add an ADR using
 
 ## Communication style
 
+- Keep replies to the owner short and conversational, about three to five lines. Lead with the answer, summarize subagent reports instead of relaying them, and offer detail rather than dumping it. Written deliverables such as docs, ADRs, and agent prompts keep their normal depth.
 - Avoid semicolons in user-facing messages. Use separate sentences or natural connecting words instead.
 - In Markdown and other prose, avoid long parenthetical asides and write them as part of coherent, easy-to-read sentences. Short labels in parentheses are fine, such as a license (Apache 2.0), a version, an abbreviation, or a requirement ID.
 
@@ -104,6 +105,12 @@ from sketchloop.domain import Candidate, Iteration
 Never copy proposal identities, identifiers, affiliations, contact information, signatures, raw extracted text, screenshots, or PDF metadata into repository files, examples, test fixtures, issues, or commit messages. Do not encode private values in a denylist. Use synthetic data and relative paths; keep credentials and research artifacts in ignored local storage. See `docs/PRIVACY.md`.
 
 Run the checks and review the full diff before committing. Ignoring a file does not remove it from the index or history. Do not push, publish, upload participant data, or invoke paid services without authorization for that action. Routine local edits and tests need no extra confirmation.
+
+## Commits
+
+- Run the check script as its own command and read a passing result before any commit or push. Never pipe it through `tail` or chain it into `git commit`, because the pipe's exit code hides a failure.
+- Before committing, show the owner the commit sequence, each message with its files, and wait for a fresh approval, even if a plan was approved earlier.
+- Write each commit message as one sentence, with no body and no co-author or other attribution trailer.
 
 ## Definition of done
 
