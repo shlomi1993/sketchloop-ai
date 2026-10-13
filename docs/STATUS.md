@@ -13,6 +13,12 @@ T06 is done (R07), and the owner verified the browser UI on 2026-10-12 ([design]
 - **Dependencies:** `pip install -e .` now installs the model and UI libraries, and `[dev]` is the only extra ([ADR 0013](decisions/0013-default-dependencies.md)). Linux CI installs CPU-only torch.
 - **Preprocessing:** a tilted sheet is now straightened by its corners or, when partly off-frame, by its visible edges, and the removed tilt is recorded. This is verified on synthetic images only.
 
+T07 is implemented and tested offline (R08, R10), and the owner has not yet tried it by hand ([design](design/t07-modularity.md), [ADR 0014](decisions/0014-replaceable-components-and-settings.md)):
+- **Interfaces:** capture (`FileCapture`, `CameraCapture`), preprocessing (`StrokePreprocessor`), and storage (`FolderStore`, and `MemoryStore` for tests) sit behind protocols next to the existing `Generator` and `Evaluator`. `SketchSession` and `AppController` depend only on these protocols, and a test runs a whole session with every component substituted.
+- **Settings:** an optional `sketchloop.toml` in the working folder, or `--config PATH`, chooses the backend and mode, image source, preprocessor, evaluator, store, runs folder, models folder, and run and UI defaults. Flags override the file, and bad settings exit with one line naming the key before anything is created. `rerun` takes only storage, the evaluator, and the models folder from settings. `examples/sketchloop.toml` shows every key.
+- **Saving:** a failed save raises a one-line `StoreError` without absolute paths. `session.json` is retried on the next round, a failed selection save can be retried, and an interrupted atomic write leaves no `.tmp` file. Records keep schema version 1.
+- **Models folder:** `generator.diffusers.models_dir` sets where the weights are, and `scripts/download_models.py` reads the same settings file.
+
 In place:
 - Installer (`install.py`), offline checks in `scripts/check.py` for publication guard, syntax, TOML, Markdown links, Ruff lint, and pytest, and GitHub Actions CI for Python 3.11/3.12.
 - Project docs: specification, architecture, experiment contract, roadmap, privacy policy, references with citations, research notes area, and a thesis outline.
@@ -23,7 +29,7 @@ Known hardware: Windows laptop without a GPU, laptop camera or USB webcam. A GPU
 
 ## Next action
 
-Start T07 in [ROADMAP.md](ROADMAP.md) with `/start-task`. Before or alongside it, try the tilt correction with a real diagonal sheet under the webcam, and rerun a diffusers round with `sketchloop rerun` to see the reported differences on a real backend. Later, improve conditioning for thin pencil strokes and run the diffusers backend on the Apple M2 Pro.
+The owner reviews T06 and T07 and requests adjustments, including a manual try of a `sketchloop.toml` with `run` and `ui`. Then start T08 in [ROADMAP.md](ROADMAP.md) with `/start-task`. Also try the tilt correction with a real diagonal sheet under the webcam, and rerun a diffusers round with `sketchloop rerun` to see the reported differences on a real backend. Later, improve conditioning for thin pencil strokes and run the diffusers backend on the Apple M2 Pro.
 
 ## Open questions
 
@@ -31,7 +37,7 @@ Software license for the repository. Saving the requested prompt and settings wh
 
 ## Validation
 
-On Windows 11 with Python 3.12, `.venv\Scripts\python.exe scripts/check.py` passes all checks and 74 tests, and `python -m pytest -m model` passed the real-model test in about 75 s before T06. The T06 tests use the fake backend offline. The owner checked the browser UI by hand on 2026-10-12, and this record does not say whether that run used the real model. The installer was verified earlier on Python 3.14 in a fresh copy, but not rerun on Windows. The owner captured a real sketch with the laptop webcam through `sketchloop --camera` on 2026-10-08, and the full flow completed. The owner ran the diffusers backend on the laptop CPU on 2026-10-09.
+On Windows 11 with Python 3.12, `.venv\Scripts\python.exe scripts/check.py` passes all checks and 88 tests, and `python -m pytest -m model` passed the real-model test in about 75 s before T06. The T06 and T07 tests use the fake backend offline, and the model download through the settings file was not run. The owner checked the browser UI by hand on 2026-10-12, and this record does not say whether that run used the real model. The installer was verified earlier on Python 3.14 in a fresh copy, but not rerun on Windows. The owner captured a real sketch with the laptop webcam through `sketchloop --camera` on 2026-10-08, and the full flow completed. The owner ran the diffusers backend on the laptop CPU on 2026-10-09.
 
 ## Handoff discipline
 

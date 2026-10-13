@@ -15,8 +15,8 @@ The intended loop is **draw → capture → preprocess → generate alternatives
 | T04 | Several rounds in one session | ✅ Done |
 | T05 | `sketchloop show` and `sketchloop rerun` reopen and rerun an earlier session | ✅ Done |
 | T06 | `sketchloop ui` runs sessions in a local browser page | ✅ Done |
-| T07 | Switch model, camera, or storage through a setting | ⏳ Next |
-| T08 | Timing per stage | ⬜ Planned |
+| T07 | `sketchloop.toml` switches the model, image source, evaluator, or storage | ✅ Done |
+| T08 | Timing per stage | ⏳ Next |
 | T09 | Full demo and evaluation report | ⬜ Planned |
 
 Details are in the [roadmap](docs/ROADMAP.md) and [current status](docs/STATUS.md).
