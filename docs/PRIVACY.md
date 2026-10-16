@@ -12,6 +12,10 @@ The original PDF and copies, extracted text, page renders, participant data, cam
 
 Do not place the private values themselves in a committed blacklist or test. Synthetic regression inputs should be obviously fictional. The publication guard checks paths, common identifier/contact/absolute-home-path patterns, and credentials without printing matched content. It inspects both current publishable files and staged blob contents. Pattern scanning cannot recognize every personal name or sensitive fact, so manual diff review remains required.
 
+The guard flags tracked or force-staged files excluded by working or staged Git ignore rules. Untracked ignored files
+are not scanned. PDF and model-weight suffixes match any letter case. Environment-file and content checks run independently
+of ignore rules. Text scanning supports UTF-8 and BOM-marked UTF-16. Other binary content requires manual review.
+
 ## Before a public push
 
 1. Run `python scripts/check.py` in the activated environment and inspect `git status --short` and the full proposed diff.

@@ -218,8 +218,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Private source material and local research artifacts
-*.pdf
-*.PDF
+*.[pP][dD][fF]
 /private/
 /data/
 /runs/
@@ -232,10 +231,10 @@ __marimo__/
 .env.*
 !.env.example
 .DS_Store
-*.safetensors
-*.ckpt
-*.pt
-*.pth
+*.[sS][aA][fF][eE][tT][eE][nN][sS][oO][rR][sS]
+*.[cC][kK][pP][tT]
+*.[pP][tT]
+*.[pP][tT][hH]
 
 # Personal agent settings (shared settings in .claude/settings.json are tracked)
 .claude/settings.local.json

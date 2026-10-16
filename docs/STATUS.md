@@ -19,6 +19,11 @@ T07 is implemented and tested offline (R08, R10), and the owner has not yet trie
 - **Saving:** a failed save raises a one-line `StoreError` without absolute paths. `session.json` is retried on the next round, a failed selection save can be retried, and an interrupted atomic write leaves no `.tmp` file. Records keep schema version 1.
 - **Models folder:** `generator.diffusers.models_dir` sets where the weights are, and `scripts/download_models.py` reads the same settings file.
 
+Standalone tools resolve paths from their own files without requiring an application install.
+
+The publication guard uses working and staged Git ignore rules to catch ignored tracked or force-staged files (R10).
+It retains environment-file checks and scans UTF-8 and BOM-marked UTF-16 text. See [PRIVACY.md](PRIVACY.md).
+
 In place:
 - Installer (`install.py`), offline checks in `scripts/check.py` for publication guard, syntax, TOML, Markdown links, Ruff lint, and pytest, and GitHub Actions CI for Python 3.11/3.12.
 - Project docs: specification, architecture, experiment contract, roadmap, privacy policy, references with citations, research notes area, and a thesis outline.
@@ -36,6 +41,15 @@ The owner reviews T06 and T07 and requests adjustments, including a manual try o
 Software license for the repository. Saving the requested prompt and settings when preprocessing fails is a deferred record change. The page script that starts the webcam stream clicks Gradio's own controls, so it must be rechecked when Gradio is upgraded. Streamed webcam frames arrive as JPEG, so check whether faint pencil strokes survive. The one-minute CPU target in ADR 0006 is not met: one fast-mode image takes about 35-60 s of sampling and about 100 s in total on the laptop CPU.
 
 ## Validation
+
+Privacy tests are consolidated into 12 cases covering private artifacts, public article exceptions, renamed PDFs,
+sensitive patterns, staged ignore rules despite unstaged edits, and staged secrets in UTF-8 and both UTF-16 byte orders.
+They share temporary-repository setup and check publication behavior instead of helper details. No open questions were
+added by this change. The full repository check passed with 83 tests and the real-model test deselected.
+
+After restoring standalone root resolution, the full repository check again passed with 83 tests. With site-packages
+disabled and the working directory outside the checkout, the privacy guard ran successfully and the article script
+resolved its target without importing the application or downloading files.
 
 On Windows 11 with Python 3.12, `.venv\Scripts\python.exe scripts/check.py` passes all checks and 88 tests, and `python -m pytest -m model` passed the real-model test in about 75 s before T06. The T06 and T07 tests use the fake backend offline, and the model download through the settings file was not run. The owner checked the browser UI by hand on 2026-10-12, and this record does not say whether that run used the real model. The installer was verified earlier on Python 3.14 in a fresh copy, but not rerun on Windows. The owner captured a real sketch with the laptop webcam through `sketchloop --camera` on 2026-10-08, and the full flow completed. The owner ran the diffusers backend on the laptop CPU on 2026-10-09.
 

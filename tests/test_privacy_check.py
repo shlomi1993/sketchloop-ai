@@ -1,28 +1,19 @@
+import codecs
 import pytest
-import subprocess
 
 from pathlib import Path
 
-from privacy_check import check, content_findings, path_findings
+from privacy_check import check, content_findings, git
 
 
-@pytest.mark.parametrize("name", ["project.pdf", "copies/brief.PDF", "runs/run/image.png", ".env.local",
-                                  "docs/articles/nested/paper.pdf", "docs/paper.pdf"],)
-def test_private_artifact_paths(name: str) -> None:
+@pytest.fixture
+def repository(tmp_path: Path) -> Path:
     """
-    Private artifact paths must be flagged by name alone.
+    Provide an isolated Git repository with the project's ignore rules.
     """
-    # The guard flags the path by name.
-    assert path_findings(name), f"{name} must be flagged as private"
-
-
-@pytest.mark.parametrize("name", ["docs/PROJECT.md", ".env.example", "docs/articles/Open Paper.pdf"])
-def test_public_paths(name: str) -> None:
-    """
-    Publishable paths, including open article PDFs in docs/articles/, must pass.
-    """
-    # The guard lets the path pass.
-    assert not path_findings(name), f"{name} must be publishable"
+    git("init", root=tmp_path)
+    (tmp_path / ".gitignore").write_bytes((Path(__file__).resolve().parents[1] / ".gitignore").read_bytes())
+    return tmp_path
 
 
 def test_renamed_pdf() -> None:
@@ -45,39 +36,71 @@ def test_synthetic_sensitive_patterns(value: str) -> None:
     assert content_findings(value.encode()), "Sensitive pattern must be flagged"
 
 
-def test_public_project_text() -> None:
+def test_publication_paths(repository: Path) -> None:
     """
-    Ordinary project text must not trigger a finding.
+    Keep local artifacts private and reject force-staged artifacts while allowing public examples.
     """
-    # The guard lets plain project text pass.
-    assert not content_findings(b"R06: preserve model revision and iteration lineage."), "Plain project text must pass"
+    # Create private artifacts and allowed public examples under the real ignore policy.
+    private_paths = ["project.PdF", "model.SafeTensors", "model.CKPT", "model.PT", "model.PtH",
+                     "private/artifact.txt", ".env.local", "docs/articles/nested/paper.pdf"]
+    public_paths = ["docs/PROJECT.md", ".env.example", "docs/articles/Open Paper.pdf"]
+    for relative_path in private_paths + public_paths:
+        path = repository / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("Synthetic artifact")
+    (repository / "docs/articles/Open Paper.pdf").write_bytes(b"%P" + b"DF-1.7\nSynthetic article")
+
+    # Ignored research artifacts stay local while public text and article PDFs pass.
+    assert not check(repository), "Local artifacts and allowed public files must pass"
+    git("add", "-f", "--", ".", root=repository)
+    findings = check(repository)
+
+    # Force-staged private artifacts must be blocked in both worktree and index checks.
+    for relative_path in private_paths:
+        for location in ("worktree", "index"):
+            expected = f"{location} {relative_path}: ignored artifact path"
+            assert expected in findings, f"Private artifact escaped publication checks: {relative_path}"
+
+    # The public exceptions must still pass after staging.
+    for relative_path in public_paths:
+        assert not any(relative_path in finding for finding in findings), f"Public file blocked: {relative_path}"
 
 
-def test_index_and_ignored_pdf(tmp_path: Path) -> None:
+@pytest.mark.parametrize("folder", ["", "nested"])
+def test_staged_ignore_rules_survive_unstaged_edits(repository: Path, folder: str) -> None:
     """
-    The guard must skip ignored files but catch private content staged in the index.
+    Detect staged private artifacts even after working ignore rules are removed.
     """
-    def git(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+    # Stage a private artifact together with root or nested ignore rules.
+    base = repository / folder
+    artifact = base / "private/artifact.txt"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("Synthetic artifact")
+    ignore_file = base / ".gitignore"
+    ignore_file.write_text("/private/\n")
+    git("add", "-f", "--", ".", root=repository)
 
-    # An ignored PDF stays local, so it must not fail the guard.
-    git("init")
-    (tmp_path / ".gitignore").write_text("*.pdf\n")
-    (tmp_path / "project.pdf").write_bytes(b"%P" + b"DF-1.7\n")
-    assert not check(tmp_path), "Ignored private source must not block local work"
+    # Removing the working copy's rule must not hide a file excluded by the staged policy.
+    ignore_file.write_text("")
+    relative_path = artifact.relative_to(repository).as_posix()
+    assert f"index {relative_path}: ignored artifact path" in check(repository), "Staged ignore rules must protect the index"
 
-    # Force-staging it puts it in the index, where the guard must catch it.
-    git("add", "-f", "project.pdf")
-    assert any("index project.pdf" in item for item in check(tmp_path)), "Force-staged PDF must be flagged"
-    git("rm", "--cached", "project.pdf")
 
-    # Stage a secret, then clean the worktree copy, so only the index blob still holds it.
+@pytest.mark.parametrize("encoding,bom", [("utf-8", b""), ("utf-16-le", codecs.BOM_UTF16_LE), ("utf-16-be", codecs.BOM_UTF16_BE)])
+def test_staged_secret_survives_clean_worktree(repository: Path, encoding: str, bom: bytes) -> None:
+    """
+    Detect staged secrets in supported encodings without disclosing them or flagging clean working text.
+    """
+    # Stage a synthetic credential using each supported text encoding.
     secret = "sk-" + "x" * 25
-    (tmp_path / "notes.md").write_text(secret)
-    git("add", "notes.md")
-    (tmp_path / "notes.md").write_text("Clean working copy")
+    notes = repository / "notes.txt"
+    notes.write_bytes(bom + f"Synthetic credential: {secret}".encode(encoding))
+    git("add", "notes.txt", root=repository)
+    assert "worktree notes.txt: possible API credential" in check(repository), "Worktree credentials must be detected"
 
-    # The guard must flag the staged blob without echoing the secret.
-    results = check(tmp_path)
-    assert any("index notes.md" in item for item in results), "Staged secret must be flagged despite a clean worktree"
-    assert not any(secret in item for item in results), "Do not print matches"
+    # Cleaning the working copy must not hide the secret still staged in the index.
+    notes.write_bytes(bom + "Clean working copy".encode(encoding))
+    findings = check(repository)
+    assert "index notes.txt: possible API credential" in findings, "Staged credentials must be detected"
+    assert not any("worktree notes.txt" in finding for finding in findings), "Clean text must not trigger findings"
+    assert not any(secret in finding for finding in findings), "Findings must not disclose credentials"
