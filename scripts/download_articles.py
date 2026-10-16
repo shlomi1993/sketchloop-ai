@@ -7,10 +7,7 @@ from urllib.request import urlretrieve
 ROOT = Path(__file__).resolve().parents[1]
 TARGET_DIR = ROOT / "docs" / "articles" / "local"
 
-# Why a script instead of committing the PDFs: these papers use arXiv's default license, which lets only arXiv
-# distribute them. Committing them to this public repository would be redistribution, so each reader downloads them
-# from arXiv into the git-ignored docs/articles/local/ folder. Openly licensed papers (for example CC BY, like
-# "Rethinking Sketching") are committed directly in docs/articles/ instead. See docs/PRIVACY.md and docs/REFERENCES.md.
+# Keep these PDFs local because their licenses restrict redistribution. See docs/PRIVACY.md.
 ARTICLES = {
     "Latent Diffusion Models.pdf": "https://arxiv.org/pdf/2112.10752",
     "ControlNet.pdf": "https://arxiv.org/pdf/2302.05543",

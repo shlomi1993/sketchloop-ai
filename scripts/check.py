@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tomllib
 
-from urllib.parse import unquote, urlsplit
+from urllib.parse import SplitResult, unquote, urlsplit
 
 from privacy_check import ROOT, main as privacy_main, public_paths
 
@@ -42,7 +42,8 @@ def main() -> int:
         elif path.suffix == ".md":
             text = path.read_text(encoding="utf-8")
             for target in re.findall(r"\[[^\]]*\]\(([^)]+)\)", text):
-                parsed = urlsplit(target)
+                target: str
+                parsed: SplitResult = urlsplit(target)
 
                 # External URLs and in-page anchors are not checked offline.
                 if parsed.scheme or target.startswith("#"):

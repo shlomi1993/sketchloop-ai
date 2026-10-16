@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     downloaded_bytes = 0
     for source in MODEL_SOURCES:
         folder = models_dir / source.folder
-        print(f"{source.repo_id} -> {folder.as_posix()}", flush=True)
+        print(f"Downloading {source.repo_id} to {folder.as_posix()}.", flush=True)
         before_bytes = folder_bytes(folder) if folder.is_dir() else 0
         try:
             snapshot_download(source.repo_id, revision=source.revision, local_dir=folder, allow_patterns=source.allow_patterns)
