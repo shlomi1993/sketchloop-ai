@@ -21,6 +21,11 @@ T07 is implemented and tested offline (R08, R10), and the owner has not yet trie
 
 Standalone tools resolve paths from their own files without requiring an application install.
 
+The [article abstract guide](articles/abstracts.md) covers all 15 papers with a recommended reading sequence, concise
+takeaways, and project uses mapped to roadmap tasks. Provisional substitutes remain marked.
+Both documents follow roadmap task (Step) order.
+Reading progress is recorded in [READING-LIST.md](articles/READING-LIST.md).
+
 The publication guard uses working and staged Git ignore rules to catch ignored tracked or force-staged files (R10).
 It retains environment-file checks and scans UTF-8 and BOM-marked UTF-16 text. See [PRIVACY.md](PRIVACY.md).
 
@@ -41,6 +46,9 @@ The owner reviews T06 and T07 and requests adjustments, including a manual try o
 Software license for the repository. Saving the requested prompt and settings when preprocessing fails is a deferred record change. The page script that starts the webcam stream clicks Gradio's own controls, so it must be rechecked when Gradio is upgraded. Streamed webcam frames arrive as JPEG, so check whether faint pencil strokes survive. The one-minute CPU target in ADR 0006 is not met: one fast-mode image takes about 35-60 s of sampling and about 100 s in total on the laptop CPU.
 
 ## Validation
+
+The abstract guide was checked against all 15 reading-list entries and their source abstracts. Repository checks passed
+with 83 tests, and each takeaway was verified to be one sentence.
 
 Privacy tests are consolidated into 12 cases covering private artifacts, public article exceptions, renamed PDFs,
 sensitive patterns, staged ignore rules despite unstaged edits, and staged secrets in UTF-8 and both UTF-16 byte orders.
