@@ -47,10 +47,14 @@ I will attach an academic paper as a PDF. Help me read it from beginning to end,
 
 ## 5. Mathematical equations
 
-- Preserve equations in LaTeX and maintain the original equation numbering.
+- Instead of displaying equations and mathematical symbols, write how they would be explained aloud. Apply this to both equations and inline notation.
+- Preserve the mathematical meaning and original equation numbering.
+- Express variable names and operations in natural spoken language. For example: “The Stable Diffusion loss, represented by L sub SD, equals the expected squared Euclidean distance between the actual noise and the predicted noise.”
+- Specify what expectations average over and what inputs functions receive.
 - Briefly explain the intuition behind important equations and define non-obvious variables.
 - Avoid lengthy derivations unless requested.
 - Prioritize mathematical accuracy over simplification.
+- Show equations in LaTeX only if I explicitly request it.
 
 ## 6. Questions and explanations
 
