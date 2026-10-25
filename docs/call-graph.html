@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SketchLoop Call Graph</title>
+<style>
+/* Layout: one reading column for prose, figures break wider and scroll sideways on phones. Slate paper, indigo accent (the Gradio theme's hues). */
+:root {
+  --paper: #f5f6f9;
+  --surface: #ffffff;
+  --ink: #1c2230;
+  --ink-soft: #4a5263;
+  --muted: #646d80;
+  --line: #c8cedb;
+  --accent: #4338ca;
+  --tint: #ebedfd;
+  --display: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #12151c; --surface: #1a1f2a; --ink: #e4e7ee; --ink-soft: #b3bacb; --muted: #9aa2b4;
+    --line: #3a4253; --accent: #a5b4fc; --tint: #222a46; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #12151c; --surface: #1a1f2a; --ink: #e4e7ee; --ink-soft: #b3bacb; --muted: #9aa2b4;
+  --line: #3a4253; --accent: #a5b4fc; --tint: #222a46; color-scheme: dark;
+}
+body { background: var(--paper); color: var(--ink); font: 15.5px/1.6 var(--sans); }
+.page {
+  max-width: 1180px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 64px;
+  display: grid; gap: 40px;
+}
+.prose { max-width: 68ch; display: grid; gap: 12px; }
+h1, h2 { font-family: var(--display); text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
+h1 { font-size: 2.1rem; line-height: 1.15; }
+h2 { font-size: 1.35rem; }
+p { margin: 0; }
+.eyebrow { font: 600 0.75rem/1 var(--sans); letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); }
+.lede { color: var(--ink-soft); font-size: 1.05rem; }
+code { font-family: var(--mono); font-size: 0.88em; background: var(--tint); padding: 1px 5px; border-radius: 4px; }
+section { display: grid; gap: 14px; }
+figure { margin: 0; display: grid; gap: 10px; }
+.scroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.scroll svg { display: block; width: 100%; min-width: 960px; height: auto; }
+figcaption { color: var(--muted); font-size: 0.92rem; max-width: 80ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 0.88rem; color: var(--ink-soft); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.sw { width: 26px; height: 0; border-top: 2px solid var(--accent); }
+.sw.dash { border-top: 1.5px dashed var(--ink-soft); }
+.sw.box { width: 18px; height: 12px; border: 1.2px solid var(--accent); background: var(--tint); border-radius: 3px; }
+ol.steps { margin: 0; padding-left: 1.4em; display: grid; gap: 8px; max-width: 80ch; }
+ol.steps li::marker { font-weight: 600; color: var(--accent); }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 0.92rem; }
+th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 0.75rem var(--sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-family: var(--mono); font-size: 0.86rem; white-space: nowrap; }
+ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 80ch; }
+
+/* Diagram drawing classes, all from tokens so both themes read. */
+.d .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+.d .grp { fill: none; stroke: var(--line); stroke-width: 1; }
+.d .proto { fill: var(--tint); stroke: var(--accent); stroke-width: 1.2; }
+.d .hotbox { fill: var(--surface); stroke: var(--accent); stroke-width: 2; }
+.d .side { fill: var(--surface); stroke: var(--ink-soft); stroke-width: 1.1; stroke-dasharray: 5 3; }
+.d .edge { fill: none; stroke: var(--ink-soft); stroke-width: 1.3; }
+.d .hot { fill: none; stroke: var(--accent); stroke-width: 2; }
+.d .impl { fill: none; stroke: var(--ink-soft); stroke-width: 1.2; stroke-dasharray: 4 3; }
+.d .sep { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 5; }
+.d .ah { fill: var(--ink-soft); }
+.d .ahh { fill: var(--accent); }
+.d text { fill: var(--ink); }
+.d .n { font: 600 12.5px var(--mono); }
+.d .e { font: 600 12.5px var(--sans); }
+.d .s { font: 11px var(--sans); fill: var(--muted); }
+.d .sm { font: 11px var(--mono); fill: var(--muted); }
+.d .l { font: 600 13px var(--sans); }
+.d .ls { font: 11px var(--sans); fill: var(--muted); }
+.d .t { font: 11px var(--sans); fill: var(--ink-soft); }
+.d .acc { fill: var(--accent); }
+</style>
+</head>
+<body>
+
+<main class="page">
+  <header class="prose">
+    <div class="eyebrow">sketchloop-ai · state after T07</div>
+    <h1>How the browser page reaches the model and the disk</h1>
+    <p class="lede">SketchLoop turns a pencil sketch on paper into AI alternatives. A webcam sees the paper, Stable Diffusion 1.5 with ControlNet scribble draws candidates in the prompt's style, the person explicitly picks some, and every round is saved so it can be shown and rerun later.</p>
+    <p>The code is layered so that each layer only calls the one below it. The browser page talks to <code>AppController</code>, which owns one <code>SketchSession</code>. The session runs each round through four replaceable protocols. A settings file decides which implementation sits behind each protocol.</p>
+  </header>
+
+  <section>
+    <h2>1 · Startup: <code>sketchloop ui</code> wires the parts together</h2>
+    <figure>
+      <div class="scroll">
+        <svg class="d" viewBox="0 0 1140 240" role="img" aria-label="Startup: the ui command parses flags, merges them over sketchloop.toml, validates component names, then launch_ui creates the generator, store, evaluator and preprocessor, injects them into AppController, and serves the Gradio page on 127.0.0.1.">
+          <defs>
+            <marker id="s-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+          </defs>
+          <!-- Row 1: parse and resolve settings -->
+          <rect class="box" x="20" y="20" width="200" height="60" rx="6"/>
+          <text class="n" x="120" y="45" text-anchor="middle">sketchloop ui</text>
+          <text class="s" x="120" y="63" text-anchor="middle">flags and optional --config</text>
+          <rect class="box" x="320" y="20" width="200" height="60" rx="6"/>
+          <text class="n" x="420" y="45" text-anchor="middle">cli.parse_args</text>
+          <text class="s" x="420" y="63" text-anchor="middle">subcommand and its options</text>
+          <rect class="box" x="620" y="20" width="200" height="60" rx="6"/>
+          <text class="n" x="720" y="45" text-anchor="middle">settings.py</text>
+          <text class="s" x="720" y="63" text-anchor="middle">sketchloop.toml, flags win</text>
+          <rect class="box" x="920" y="20" width="200" height="60" rx="6"/>
+          <text class="n" x="1020" y="45" text-anchor="middle">check_component_names</text>
+          <text class="s" x="1020" y="63" text-anchor="middle">components.py, bad name exits</text>
+          <path class="edge" d="M220,50 H318" marker-end="url(#s-ah)"/>
+          <text class="t" x="269" y="42" text-anchor="middle">args</text>
+          <path class="edge" d="M520,50 H618" marker-end="url(#s-ah)"/>
+          <text class="t" x="569" y="42" text-anchor="middle">load, override</text>
+          <path class="edge" d="M820,50 H918" marker-end="url(#s-ah)"/>
+          <text class="t" x="869" y="42" text-anchor="middle">validate</text>
+          <!-- Wrap to row 2 -->
+          <path class="edge" d="M1020,80 V118 H100 V158" marker-end="url(#s-ah)"/>
+          <text class="t" x="560" y="111" text-anchor="middle">then runs the ui command with the effective Settings</text>
+          <!-- Row 2: build and serve -->
+          <rect class="box" x="20" y="160" width="180" height="62" rx="6"/>
+          <text class="n" x="110" y="186" text-anchor="middle">cli.launch_ui</text>
+          <text class="s" x="110" y="204" text-anchor="middle">telemetry off, imports ui</text>
+          <rect class="box" x="250" y="160" width="180" height="62" rx="6"/>
+          <text class="n" x="340" y="181" text-anchor="middle">factories</text>
+          <text class="sm" x="340" y="198" text-anchor="middle">backends.make_generator</text>
+          <text class="sm" x="340" y="213" text-anchor="middle">components.make_*</text>
+          <rect class="hotbox" x="480" y="160" width="180" height="62" rx="6"/>
+          <text class="n" x="570" y="186" text-anchor="middle">AppController</text>
+          <text class="s" x="570" y="204" text-anchor="middle">holds generator and session</text>
+          <rect class="box" x="710" y="160" width="180" height="62" rx="6"/>
+          <text class="n" x="800" y="186" text-anchor="middle">ui.launch_app</text>
+          <text class="s" x="800" y="204" text-anchor="middle">build_app, then launch</text>
+          <rect class="box" x="940" y="160" width="180" height="62" rx="6"/>
+          <text class="n" x="1030" y="186" text-anchor="middle">Gradio server</text>
+          <text class="s" x="1030" y="204" text-anchor="middle">127.0.0.1 only, no share link</text>
+          <path class="edge" d="M200,191 H248" marker-end="url(#s-ah)"/>
+          <text class="t" x="225" y="152" text-anchor="middle">creates</text>
+          <path class="edge" d="M430,191 H478" marker-end="url(#s-ah)"/>
+          <text class="t" x="455" y="152" text-anchor="middle">injects</text>
+          <path class="edge" d="M660,191 H708" marker-end="url(#s-ah)"/>
+          <text class="t" x="685" y="152" text-anchor="middle">passed to</text>
+          <path class="edge" d="M890,191 H938" marker-end="url(#s-ah)"/>
+          <text class="t" x="915" y="152" text-anchor="middle">serves</text>
+        </svg>
+      </div>
+      <figcaption>The backend is created once, before the page opens, so a real model stays loaded across rounds. The model weights themselves load lazily on the first Generate. <code>run</code> and <code>rerun</code> use the same settings and factories but drive <code>SketchSession</code> from the terminal instead.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>2 · Runtime: who calls whom, from the page down to disk</h2>
+    <figure>
+      <div class="scroll">
+        <svg class="d" viewBox="0 0 1100 880" role="img" aria-label="Call graph. Browser events call handlers in ui.py, which call AppController methods, which call SketchSession. SketchSession.run_round calls, in order, the Preprocessor, Generator, Evaluator and ExperimentStore protocols, implemented by StrokePreprocessor, FakeGenerator or DiffusersSketchGenerator, NoOpEvaluator, and MemoryStore or FolderStore. FolderStore writes run folders and the diffusers backend reads model weights.">
+          <defs>
+            <marker id="m-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+            <marker id="m-ahh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahh"/></marker>
+          </defs>
+
+          <!-- Lane separators -->
+          <line class="sep" x1="20" y1="96" x2="1080" y2="96"/>
+          <line class="sep" x1="20" y1="258" x2="1080" y2="258"/>
+          <line class="sep" x1="20" y1="381" x2="1080" y2="381"/>
+          <line class="sep" x1="20" y1="486" x2="1080" y2="486"/>
+          <line class="sep" x1="20" y1="638" x2="1080" y2="638"/>
+
+          <!-- Lane labels -->
+          <text class="l" x="20" y="48">Browser page</text>
+          <text class="ls" x="20" y="64">Gradio events</text>
+          <text class="l" x="20" y="150">ui.py</text>
+          <text class="ls" x="20" y="166">handlers in build_app()</text>
+          <text class="ls" x="20" y="182">the only Gradio importer</text>
+          <text class="l" x="20" y="302">app.py</text>
+          <text class="ls" x="20" y="318">AppController</text>
+          <text class="ls" x="20" y="334">framework-free service</text>
+          <text class="l" x="20" y="432">session.py</text>
+          <text class="ls" x="20" y="448">SketchSession</text>
+          <text class="ls" x="20" y="464">orchestrates rounds</text>
+          <text class="l" x="20" y="572">Protocols</text>
+          <text class="ls" x="20" y="588">replaceable seams</text>
+          <text class="l" x="20" y="680">Implementations</text>
+          <text class="ls" x="20" y="696">picked by settings</text>
+          <text class="l" x="20" y="832">Files on disk</text>
+
+          <!-- Row A: browser events -->
+          <rect class="box" x="240" y="30" width="152" height="44" rx="6"/>
+          <text class="e" x="316" y="57" text-anchor="middle">Webcam stream</text>
+          <rect class="hotbox" x="412" y="30" width="152" height="44" rx="6"/>
+          <text class="e acc" x="488" y="57" text-anchor="middle">Generate</text>
+          <rect class="box" x="584" y="30" width="152" height="44" rx="6"/>
+          <text class="e" x="660" y="57" text-anchor="middle">Record my choice</text>
+          <rect class="box" x="756" y="30" width="152" height="44" rx="6"/>
+          <text class="e" x="832" y="57" text-anchor="middle">Start a new session</text>
+          <rect class="box" x="928" y="30" width="152" height="44" rx="6"/>
+          <text class="e" x="1004" y="57" text-anchor="middle">Page load</text>
+          <path class="edge" d="M316,74 V118" marker-end="url(#m-ah)"/>
+          <path class="hot" d="M488,74 V118" marker-end="url(#m-ahh)"/>
+          <path class="edge" d="M660,74 V118" marker-end="url(#m-ah)"/>
+          <path class="edge" d="M832,74 V118" marker-end="url(#m-ah)"/>
+          <path class="edge" d="M1004,74 V118" marker-end="url(#m-ah)"/>
+
+          <!-- Row B: ui.py handlers -->
+          <rect class="box" x="240" y="120" width="152" height="48" rx="6"/>
+          <text class="n" x="316" y="141" text-anchor="middle">keep_frame</text>
+          <text class="s" x="316" y="158" text-anchor="middle">every 0.5 s</text>
+          <rect class="hotbox" x="412" y="120" width="152" height="48" rx="6"/>
+          <text class="n" x="488" y="141" text-anchor="middle">run_generation</text>
+          <text class="s" x="488" y="158" text-anchor="middle">Generate handler</text>
+          <rect class="box" x="584" y="120" width="152" height="48" rx="6"/>
+          <text class="n" x="660" y="141" text-anchor="middle">save_selection</text>
+          <text class="s" x="660" y="158" text-anchor="middle">sends shown iteration ID</text>
+          <rect class="box" x="756" y="120" width="152" height="48" rx="6"/>
+          <text class="n" x="832" y="141" text-anchor="middle">start_session</text>
+          <text class="s" x="832" y="158" text-anchor="middle">clears the display</text>
+          <rect class="box" x="928" y="120" width="152" height="48" rx="6"/>
+          <text class="n" x="1004" y="141" text-anchor="middle">restore_view</text>
+          <text class="s" x="1004" y="158" text-anchor="middle">and show_history</text>
+          <path class="edge" d="M316,168 V202" marker-end="url(#m-ah)"/>
+          <rect class="box" x="240" y="204" width="152" height="42" rx="21"/>
+          <text class="n" x="316" y="222" text-anchor="middle">latest_frames</text>
+          <text class="s" x="316" y="238" text-anchor="middle">newest frame, BGR</text>
+          <path class="hot" d="M392,214 L438,172" marker-end="url(#m-ahh)"/>
+          <text class="t" x="404" y="194" text-anchor="end">read</text>
+          <path class="hot" d="M488,168 V288" marker-end="url(#m-ahh)"/>
+          <path class="edge" d="M660,168 V288" marker-end="url(#m-ah)"/>
+          <path class="edge" d="M832,168 V288" marker-end="url(#m-ah)"/>
+          <path class="edge" d="M1004,168 V288" marker-end="url(#m-ah)"/>
+
+          <!-- Row C: AppController -->
+          <rect class="grp" x="404" y="280" width="684" height="72" rx="8"/>
+          <rect class="hotbox" x="412" y="290" width="152" height="52" rx="6"/>
+          <text class="n" x="488" y="312" text-anchor="middle">run_round</text>
+          <text class="s" x="488" y="330" text-anchor="middle">checks sketch, prompt, rotation</text>
+          <rect class="box" x="584" y="290" width="152" height="52" rx="6"/>
+          <text class="n" x="660" y="312" text-anchor="middle">record_selection</text>
+          <text class="s" x="660" y="330" text-anchor="middle">refuses a stale page</text>
+          <rect class="box" x="756" y="290" width="152" height="52" rx="6"/>
+          <text class="n" x="832" y="312" text-anchor="middle">start_new_session</text>
+          <text class="s" x="832" y="330" text-anchor="middle">keeps the same generator</text>
+          <rect class="box" x="928" y="290" width="152" height="52" rx="6"/>
+          <text class="n" x="1004" y="312" text-anchor="middle">latest_round</text>
+          <text class="sm" x="1004" y="330" text-anchor="middle">list_history</text>
+          <rect class="box" x="240" y="284" width="140" height="64" rx="6"/>
+          <text class="n" x="310" y="305" text-anchor="middle">capture.py</text>
+          <text class="sm" x="310" y="322" text-anchor="middle">load_sketch_file</text>
+          <text class="sm" x="310" y="338" text-anchor="middle">encode_frame</text>
+          <path class="hot" d="M412,316 H383" marker-end="url(#m-ahh)"/>
+          <path class="hot" d="M488,342 V418" marker-end="url(#m-ahh)"/>
+          <path class="edge" d="M660,342 V418" marker-end="url(#m-ah)"/>
+          <path class="edge" d="M832,342 V418" marker-end="url(#m-ah)"/>
+          <text class="t" x="838" y="400">creates new</text>
+          <path class="edge" d="M1004,342 V418" marker-end="url(#m-ah)"/>
+          <text class="t" x="1010" y="400">reads</text>
+
+          <!-- Row D: SketchSession -->
+          <rect class="grp" x="404" y="410" width="684" height="72" rx="8"/>
+          <rect class="hotbox" x="412" y="420" width="152" height="52" rx="6"/>
+          <text class="n" x="488" y="442" text-anchor="middle">run_round</text>
+          <text class="s" x="488" y="460" text-anchor="middle">each stage timed</text>
+          <rect class="box" x="584" y="420" width="152" height="52" rx="6"/>
+          <text class="n" x="660" y="442" text-anchor="middle">record_selection</text>
+          <text class="s" x="660" y="460" text-anchor="middle">latest round, only once</text>
+          <rect class="box" x="756" y="420" width="324" height="52" rx="6"/>
+          <text class="n" x="918" y="442" text-anchor="middle">rounds · selections · records</text>
+          <text class="s" x="918" y="460" text-anchor="middle">this session's history, each round linked to the previous one</text>
+          <rect class="side" x="240" y="414" width="140" height="64" rx="6"/>
+          <text class="n" x="310" y="435" text-anchor="middle">cli.py</text>
+          <text class="sm" x="310" y="451" text-anchor="middle">run · rerun</text>
+          <text class="s" x="310" y="467" text-anchor="middle">terminal front end</text>
+          <path class="edge" d="M380,446 H410" marker-end="url(#m-ah)"/>
+
+          <!-- Fan-out from SketchSession.run_round, in call order -->
+          <path class="hot" d="M488,472 V520"/>
+          <path class="hot" d="M337.5,520 H982.5"/>
+          <path class="hot" d="M337.5,520 V558" marker-end="url(#m-ahh)"/>
+          <path class="hot" d="M552.5,520 V558" marker-end="url(#m-ahh)"/>
+          <path class="hot" d="M767.5,520 V558" marker-end="url(#m-ahh)"/>
+          <path class="hot" d="M982.5,520 V558" marker-end="url(#m-ahh)"/>
+          <text class="t" x="331" y="546" text-anchor="end">1 preprocess</text>
+          <text class="t" x="546" y="546" text-anchor="end">2 generate</text>
+          <text class="t" x="761" y="546" text-anchor="end">3 evaluate</text>
+          <text class="t" x="976" y="546" text-anchor="end">4 save</text>
+          <path class="edge" d="M660,472 V500 H1040 V558" marker-end="url(#m-ah)"/>
+          <text class="t" x="850" y="497" text-anchor="middle">save_round again, with the selection</text>
+
+          <!-- Row E: protocols -->
+          <rect class="proto" x="240" y="560" width="195" height="52" rx="6"/>
+          <text class="n" x="337.5" y="582" text-anchor="middle">Preprocessor</text>
+          <text class="s" x="337.5" y="600" text-anchor="middle">preprocessing.py</text>
+          <rect class="proto" x="455" y="560" width="195" height="52" rx="6"/>
+          <text class="n" x="552.5" y="582" text-anchor="middle">Generator</text>
+          <text class="s" x="552.5" y="600" text-anchor="middle">generation.py, validates requests</text>
+          <rect class="proto" x="670" y="560" width="195" height="52" rx="6"/>
+          <text class="n" x="767.5" y="582" text-anchor="middle">Evaluator</text>
+          <text class="s" x="767.5" y="600" text-anchor="middle">evaluation.py</text>
+          <rect class="proto" x="885" y="560" width="195" height="52" rx="6"/>
+          <text class="n" x="982.5" y="582" text-anchor="middle">ExperimentStore</text>
+          <text class="s" x="982.5" y="600" text-anchor="middle">experiments.py, raises StoreError</text>
+
+          <!-- Implements connectors -->
+          <path class="impl" d="M285,650 V614" marker-end="url(#m-ah)"/>
+          <path class="impl" d="M500,650 V614" marker-end="url(#m-ah)"/>
+          <path class="impl" d="M455,744 H445 V626 H500"/>
+          <path class="impl" d="M715,650 V614" marker-end="url(#m-ah)"/>
+          <path class="impl" d="M930,650 V614" marker-end="url(#m-ah)"/>
+          <path class="impl" d="M885,728 H875 V626 H930"/>
+
+          <!-- Row F: implementations -->
+          <rect class="box" x="240" y="650" width="195" height="108" rx="6"/>
+          <text class="n" x="337.5" y="671" text-anchor="middle">StrokePreprocessor</text>
+          <text class="s" x="337.5" y="690" text-anchor="middle">grayscale, rotate</text>
+          <text class="s" x="337.5" y="706" text-anchor="middle">straighten the paper</text>
+          <text class="s" x="337.5" y="722" text-anchor="middle">isolate strokes, crop</text>
+          <text class="s" x="337.5" y="738" text-anchor="middle">thicken, resize to 512 px</text>
+          <rect class="box" x="455" y="650" width="195" height="44" rx="6"/>
+          <text class="n" x="552.5" y="668" text-anchor="middle">FakeGenerator</text>
+          <text class="s" x="552.5" y="685" text-anchor="middle">labeled noise, offline tests</text>
+          <rect class="box" x="455" y="706" width="195" height="76" rx="6"/>
+          <text class="n" x="552.5" y="725" text-anchor="middle">DiffusersSketchGenerator</text>
+          <text class="s" x="552.5" y="742" text-anchor="middle">SD 1.5 + ControlNet scribble</text>
+          <text class="s" x="552.5" y="757" text-anchor="middle">fast mode: LCM-LoRA, 4 steps</text>
+          <text class="s" x="552.5" y="772" text-anchor="middle">loads on the first round</text>
+          <rect class="box" x="670" y="650" width="195" height="44" rx="6"/>
+          <text class="n" x="767.5" y="668" text-anchor="middle">NoOpEvaluator</text>
+          <text class="s" x="767.5" y="685" text-anchor="middle">no scores yet, CLIP later</text>
+          <rect class="box" x="885" y="650" width="195" height="44" rx="6"/>
+          <text class="n" x="982.5" y="668" text-anchor="middle">MemoryStore</text>
+          <text class="s" x="982.5" y="685" text-anchor="middle">tests, keeps no files</text>
+          <rect class="box" x="885" y="706" width="195" height="44" rx="6"/>
+          <text class="n" x="982.5" y="724" text-anchor="middle">FolderStore</text>
+          <text class="s" x="982.5" y="741" text-anchor="middle">default, atomic JSON writes</text>
+
+          <!-- Row G: files -->
+          <path class="edge" d="M552.5,782 V804" marker-end="url(#m-ah)"/>
+          <text class="t" x="560" y="798">reads weights</text>
+          <rect class="box" x="455" y="806" width="195" height="56" rx="6"/>
+          <text class="n" x="552.5" y="828" text-anchor="middle">models/</text>
+          <text class="s" x="552.5" y="846" text-anchor="middle">from scripts/download_models.py</text>
+          <path class="edge" d="M982.5,750 V804" marker-end="url(#m-ah)"/>
+          <text class="t" x="990" y="782">writes</text>
+          <rect class="box" x="670" y="806" width="410" height="56" rx="6"/>
+          <text class="n" x="875" y="828" text-anchor="middle">runs/&lt;session&gt;/</text>
+          <text class="sm" x="875" y="846" text-anchor="middle">session.json · round-N/round.json · sketch-raw.* · sketch.png · candidates/</text>
+        </svg>
+      </div>
+      <div class="legend">
+        <span><i class="sw"></i>Path of one Generate click</span>
+        <span><i class="sw dash"></i>Implements the protocol above it</span>
+        <span><i class="sw box"></i>Protocol, swappable through settings</span>
+      </div>
+      <figcaption>Each layer calls only the layer below it. The page never touches the model or the files, <code>AppController</code> never imports Gradio, and <code>SketchSession</code> knows only the four protocols. After Generate and Record, Gradio also runs <code>show_history</code>, which calls <code>list_history</code>.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>3 · One round, step by step</h2>
+    <ol class="steps">
+      <li>The browser streams webcam frames, and <code>keep_frame</code> keeps only the newest one, converted to OpenCV's BGR order. Generate becomes clickable once there is a sketch and a non-blank prompt.</li>
+      <li><code>run_generation</code> takes that frame, or the uploaded file path, and calls <code>AppController.run_round</code>. All session-changing handlers share one concurrency group, so a choice cannot interleave with a running round.</li>
+      <li><code>AppController</code> checks the sketch, prompt, and rotation before writing anything, then turns the input into an <code>ImageRef</code> and bytes with <code>encode_frame</code> or <code>load_sketch_file</code>.</li>
+      <li><code>SketchSession.run_round</code> saves <code>session.json</code> once, preprocesses the sketch unless raw is ticked, builds a <code>GenerationRequest</code>, and calls the generator, which validates the request against its capabilities first. The new iteration is linked to the previous round's ID, then the evaluator scores the candidates.</li>
+      <li>The store writes the raw sketch, the processed sketch, the candidates, and <code>round.json</code>. If any stage fails, a failed record naming the stage is saved instead and the error reaches the page as a one-line message.</li>
+      <li><code>AppController</code> turns the outcome into a <code>RoundView</code> with image paths, captions, the fake-backend flag, and the iteration ID, and <code>ui.py</code> renders the gallery and checkboxes.</li>
+      <li>Record my choice sends back the iteration ID the page showed. <code>AppController</code> refuses an older round or a second choice, <code>domain.py</code> builds the <code>SelectionEvent</code>, and the session rewrites <code>round.json</code> with it.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>4 · Module map</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Module</th><th>Job</th><th>Called by</th></tr></thead>
+        <tbody>
+          <tr><td>ui.py</td><td>Gradio page: webcam or upload, prompt, Generate, gallery, choice, history</td><td>cli.launch_ui</td></tr>
+          <tr><td>app.py</td><td><code>AppController</code>: input checks, view building, stale-page protection</td><td>ui.py</td></tr>
+          <tr><td>session.py</td><td><code>SketchSession</code>: runs and times stages, links rounds, records failures</td><td>app.py, cli.py run and rerun</td></tr>
+          <tr><td>capture.py</td><td>Load PNG or JPEG files, encode frames, OpenCV camera capture</td><td>app.py, cli.py, components.py</td></tr>
+          <tr><td>preprocessing.py</td><td><code>Preprocessor</code> protocol and the stroke pipeline with recorded steps</td><td>session.py</td></tr>
+          <tr><td>generation.py</td><td><code>Generator</code> protocol, capabilities, request validation</td><td>both backends, session.py</td></tr>
+          <tr><td>diffusers_backend.py</td><td>Real model: SD 1.5 + ControlNet scribble, fast and quality modes</td><td>backends.make_generator</td></tr>
+          <tr><td>fakes.py</td><td>Deterministic labeled fake backend</td><td>backends.make_generator, tests</td></tr>
+          <tr><td>evaluation.py</td><td><code>Evaluator</code> protocol and the no-op scorer</td><td>session.py</td></tr>
+          <tr><td>experiments.py</td><td>Records, <code>FolderStore</code>, <code>MemoryStore</code>, loading, checksums, rerun comparison</td><td>session.py, cli.py show and rerun</td></tr>
+          <tr><td>domain.py</td><td>Typed records: <code>ImageRef</code>, <code>Guidance</code>, <code>Iteration</code>, <code>SelectionEvent</code>, errors</td><td>everything</td></tr>
+          <tr><td>settings.py</td><td>Read <code>sketchloop.toml</code>, apply flag overrides, check types</td><td>cli.py</td></tr>
+          <tr><td>components.py</td><td>Name registries that build capture, preprocessor, evaluator, store</td><td>cli.py</td></tr>
+          <tr><td>backends.py</td><td><code>make_generator</code> for the fake or diffusers backend</td><td>cli.py</td></tr>
+          <tr><td>cli.py</td><td>Subcommands <code>run</code>, <code>show</code>, <code>rerun</code>, <code>ui</code></td><td>the <code>sketchloop</code> command</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>5 · Rules the wiring enforces</h2>
+    <ul class="rules">
+      <li>Swapping a component means adding a registry entry in <code>components.py</code> or <code>backends.py</code> and naming it in settings. The session and UI do not change.</li>
+      <li>Human choice stays explicit. Ticking nothing is recorded as an explicit choice of none, and scores never select anything.</li>
+      <li>A failed round stays visible as failed, with the stage it failed in, and never overwrites an earlier round.</li>
+      <li>Fake output is labeled on every caption and status line, so it cannot be mistaken for model output.</li>
+      <li>Selections must name the iteration the page showed, which protects against a stale browser tab.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

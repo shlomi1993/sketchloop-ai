@@ -20,6 +20,8 @@ flowchart LR
     S --> R
 ```
 
+[The call graph](call-graph.html) shows how the implemented modules call each other, from the browser UI down to the files on disk. Open it in a browser.
+
 The orchestrator records all stage inputs, effective configuration, outputs, errors, and timing, not just generation. The UI invokes application operations and does not own model logic or persistence.
 
 | Planned boundary | Responsibility | Replaceability rule |
