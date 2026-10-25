@@ -68,6 +68,7 @@
 
       "Bash(.venv/Scripts/python.exe *)",
       "Bash(.venv/bin/python *)",
+      "Bash(.venv/bin/python scripts/check.py)",
       "Bash(python *)",
       "Bash(py *)",
       "Bash(pytest *)",
@@ -103,6 +104,7 @@
       "Bash(cp *)",
       "Bash(mv *)",
       "Bash(git *)",
+      "Bash(git add *)",
 
       "PowerShell(Get-ChildItem *)",
       "PowerShell(Get-Content *)",
