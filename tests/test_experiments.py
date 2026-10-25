@@ -231,19 +231,20 @@ def test_session_runs_with_substituted_components(tmp_path: Path, constant_evalu
     with pytest.raises(UnsupportedConfigurationError):
         session.run_round(raw_sketch, raw_payload, Guidance(prompt="vase"), source=camera.kind, n_candidates=99)
 
-    # The session history lists every failed attempt, including round 5, whose failed record was not saved.
+    # The session history lists every attempt, and the failed save of round 2 is recorded as a saving failure.
     history = [(record.number, record.status) for record in session.records]
-    assert history == [(1, "complete"), (3, "complete"), (4, "failed"), (5, "failed")], f"Bad history {history}"
+    assert history == [(1, "complete"), (2, "failed"), (3, "complete"), (4, "failed"), (5, "failed")], f"Bad history {history}"
+    assert session.records[1].failure.stage == "saving", f"Expected a saving failure, got {session.records[1].failure}"
 
     session_id = session.session_id
     records = {number: record for (stored_id, number), record in store.rounds.items() if stored_id == session_id}
     files_by_round = {number: sorted(path for stored_id, file_round, path in store.files if file_round == number)
                       for number in records}
 
-    # The store holds one session and rounds 1, 3, and 4, since the failed save left round 2 empty and was never reused.
+    # The store holds one session, round 2 as failed after its save failed, and no round 5, whose failed record was not saved.
     statuses = {number: record.status for number, record in records.items()}
     assert list(store.sessions) == [session_id], f"Expected one stored session record, got {list(store.sessions)}"
-    assert statuses == {1: "complete", 3: "complete", 4: "failed"}, f"Unexpected stored rounds {statuses}"
+    assert statuses == {1: "complete", 2: "failed", 3: "complete", 4: "failed"}, f"Unexpected stored rounds {statuses}"
     assert [outcome.number for outcome in session.rounds] == [1, 3], "A failed save must append no outcome"
 
     # Stored selections equal the session's, and round 3 links to round 1 across the failed save.

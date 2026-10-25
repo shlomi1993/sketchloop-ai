@@ -48,7 +48,7 @@ TRACKED_PACKAGES: Final = (
     "huggingface_hub",
 )
 
-FailureStage: TypeAlias = Literal["preprocessing", "generation", "evaluation"]
+FailureStage: TypeAlias = Literal["preprocessing", "generation", "evaluation", "saving"]
 RoundStatus: TypeAlias = Literal["complete", "failed"]
 RecordT = TypeVar("RecordT")
 

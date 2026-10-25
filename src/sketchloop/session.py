@@ -139,6 +139,11 @@ class SketchSession:
             timings["evaluation"] = time.perf_counter() - started
             record = draft(status="complete", steps=steps, request=request, iteration=iteration, timings_seconds=timings,
                            evaluator=type(self.evaluator).__name__, scores=scores, selection=None, failure=None)
+
+            # Store the raw and processed sketches and the candidates, then the record without a selection.
+            stage = "saving"
+            files = {raw_sketch.path: raw_payload, sketch.path: sketch_payload} | dict(output.payloads)
+            self.store.save_round(self.session_id, record, files)
         except Exception as error:
             # Keep a failed record in the history even when it cannot be saved, so the attempt stays visible.
             sketches = {raw_sketch.path: raw_payload} | ({request.sketch.path: sketch_payload} if request else {})
@@ -153,9 +158,6 @@ class SketchSession:
                 error.add_note(f"The failed round was not saved either: {store_error}")
             raise
 
-        # Store the raw and processed sketches and the candidates, then the record without a selection.
-        files = {raw_sketch.path: raw_payload, sketch.path: sketch_payload} | dict(output.payloads)
-        self.store.save_round(self.session_id, record, files)
         self.records.append(record)
         folder = self.store.locate_round(self.session_id, number)
         outcome = RoundOutcome(number=number, folder=folder, raw_sketch=raw_sketch, steps=steps, iteration=iteration,
