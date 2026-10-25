@@ -6,17 +6,16 @@ from pathlib import Path
 from typing import Final, TypeAlias
 
 from sketchloop.app import AppController, HistoryRow, RoundView
-from sketchloop.domain import SketchLoopError
-from sketchloop.experiments import SketchSource
+from sketchloop.domain import SketchLoopError, SketchSource
 
 
 HISTORY_HEADERS: Final = ["Round", "Status", "Prompt", "Outcome"]
-SOURCE_CHOICES: Final = [("Live webcam", "webcam"), ("Upload a file", "upload")]
+SOURCE_CHOICES: Final = [("Live webcam", SketchSource.WEBCAM), ("Upload a file", SketchSource.UPLOAD)]
 ROTATION_CHOICES: Final = [0, 90, 180, 270]
 PROMPT_PLACEHOLDER: Final = "Describe the style, for example: a sculptural oak lounge chair, soft studio light"
 
 # A webcam facing the person drawing sees the paper upside down, so webcam sketches turn 180 degrees by default.
-DEFAULT_ROTATION_BY_SOURCE: Final = {"webcam": 180, "upload": 0}
+DEFAULT_ROTATION_BY_SOURCE: Final = {SketchSource.WEBCAM: 180, SketchSource.UPLOAD: 0}
 
 # The page's stylesheet and script, kept as real files next to this module and shipped as package data.
 STATIC_DIR: Final = Path(__file__).parent / "static"
@@ -78,7 +77,7 @@ def can_generate(choice: str, has_webcam_frame: bool, upload_path: str | None, p
     """
     Tell whether the chosen source has a sketch and the prompt is not blank, so generation can start.
     """
-    has_sketch = has_webcam_frame if choice == "webcam" else upload_path is not None
+    has_sketch = has_webcam_frame if choice == SketchSource.WEBCAM else upload_path is not None
     return has_sketch and bool((prompt_text or "").strip())
 
 
@@ -111,7 +110,7 @@ def build_app(controller: AppController, *, default_candidates: int, default_see
         gr.Blocks: The page.
     """
     # The latest streamed webcam frame in OpenCV channel order, shared by every tab like the session itself.
-    latest_frames: dict[str, np.ndarray] = {}
+    latest_frames: dict[SketchSource, np.ndarray] = {}
 
     with gr.Blocks(title="SketchLoop", analytics_enabled=False, delete_cache=(3600, 3600)) as app:
         # Header with the backend in use and how tabs share the session.
@@ -122,7 +121,7 @@ def build_app(controller: AppController, *, default_candidates: int, default_see
         with gr.Row(equal_height=False):
             with gr.Column(scale=3, elem_classes="card"):
                 gr.Markdown("### 1 · Sketch", elem_classes="step-title")
-                source = gr.Radio(choices=SOURCE_CHOICES, value="webcam", show_label=False)
+                source = gr.Radio(choices=SOURCE_CHOICES, value=SketchSource.WEBCAM, show_label=False)
                 webcam = gr.Image(label="Live webcam", sources=["webcam"], streaming=True, type="numpy",
                                   webcam_options=gr.WebcamOptions(mirror=False), height=360, elem_id="webcam")
                 upload = gr.Image(label="Sketch file", sources=["upload"], type="filepath", image_mode=None, visible=False,
@@ -137,7 +136,7 @@ def build_app(controller: AppController, *, default_candidates: int, default_see
                     candidates = gr.Slider(minimum=1, maximum=controller.max_candidates, step=1, value=default_candidates,
                                            label="Candidates per round")
                     seed = gr.Number(label="Seed (blank for random)", value=default_seed, precision=0, minimum=0)
-                    rotation = gr.Dropdown(choices=ROTATION_CHOICES, value=DEFAULT_ROTATION_BY_SOURCE["webcam"],
+                    rotation = gr.Dropdown(choices=ROTATION_CHOICES, value=DEFAULT_ROTATION_BY_SOURCE[SketchSource.WEBCAM],
                                            label="Rotation (degrees clockwise)")
                     raw = gr.Checkbox(label="Use the raw sketch (skip preprocessing and rotation)")
 
@@ -161,7 +160,8 @@ def build_app(controller: AppController, *, default_candidates: int, default_see
 
         def toggle_source(choice: str, use_raw: bool) -> tuple[gr.Image, gr.Image, gr.Dropdown]:
             rotation_choice = gr.Dropdown(value=pick_rotation(choice, use_raw), interactive=not use_raw)
-            return gr.Image(visible=choice == "webcam"), gr.Image(visible=choice == "upload"), rotation_choice
+            is_webcam = choice == SketchSource.WEBCAM
+            return gr.Image(visible=is_webcam), gr.Image(visible=not is_webcam), rotation_choice
 
         def toggle_raw(use_raw: bool, choice: str) -> gr.Dropdown:
             return gr.Dropdown(value=pick_rotation(choice, use_raw), interactive=not use_raw)
@@ -169,22 +169,24 @@ def build_app(controller: AppController, *, default_candidates: int, default_see
         def keep_frame(frame: np.ndarray | None, choice: str, upload_path: str | None, prompt_text: str | None) -> gr.Button:
             # Keep only the newest frame, converted from the browser's RGB to OpenCV's BGR order.
             if frame is not None:
-                latest_frames["webcam"] = np.ascontiguousarray(frame[:, :, ::-1])
+                latest_frames[SketchSource.WEBCAM] = np.ascontiguousarray(frame[:, :, ::-1])
 
-            return gr.Button(interactive=can_generate(choice, "webcam" in latest_frames, upload_path, prompt_text))
+            return gr.Button(interactive=can_generate(choice, SketchSource.WEBCAM in latest_frames, upload_path, prompt_text))
 
         def update_generate_button(choice: str, upload_path: str | None, prompt_text: str | None) -> gr.Button:
-            return gr.Button(interactive=can_generate(choice, "webcam" in latest_frames, upload_path, prompt_text))
+            return gr.Button(interactive=can_generate(choice, SketchSource.WEBCAM in latest_frames, upload_path, prompt_text))
 
-        def run_generation(choice: SketchSource, upload_path: str | None, prompt_text: str, candidate_count: float,
+        def run_generation(choice: str, upload_path: str | None, prompt_text: str, candidate_count: float,
                            seed_value: float | None, rotation_degrees: int, use_raw: bool,
                            progress: gr.Progress = gr.Progress(track_tqdm=True)) -> RoundOutputs:
             # Generate from the newest webcam frame or the uploaded file, showing the message of a refused or failed round.
             progress(None, desc=PROGRESS_MESSAGE)
-            sketch = latest_frames.get("webcam") if choice == "webcam" else None if upload_path is None else Path(upload_path)
+            source = SketchSource(choice)
+            upload = None if upload_path is None else Path(upload_path)
+            sketch = latest_frames.get(source) if source == SketchSource.WEBCAM else upload
             seed_number = None if seed_value is None else int(seed_value)
             try:
-                view = controller.run_round(sketch, choice, prompt_text, n_candidates=int(candidate_count), seed=seed_number,
+                view = controller.run_round(sketch, source, prompt_text, n_candidates=int(candidate_count), seed=seed_number,
                                             rotation=int(rotation_degrees or 0), use_raw=use_raw)
             except (SketchLoopError, OSError) as error:
                 raise gr.Error(str(error)) from error

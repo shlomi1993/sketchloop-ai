@@ -435,7 +435,7 @@ def ask_next_round(capture_source: CaptureSource, console: Console, prompt: str,
             or None to quit.
     """
     while True:
-        next_step = ask_next_step(console, capture_source.kind == "camera")
+        next_step = ask_next_step(console, capture_source.kind == SketchSource.CAMERA)
         if next_step is None:
             return None
 
@@ -445,7 +445,7 @@ def ask_next_round(capture_source: CaptureSource, console: Console, prompt: str,
             if step == NextStep.RECAPTURE:
                 return prompt, capture_source.capture(), capture_source.kind
             if step == NextStep.FILE:
-                return prompt, load_sketch_file(Path(value)), "file"
+                return prompt, load_sketch_file(Path(value)), SketchSource.FILE
         except (SketchLoopError, OSError) as error:
             console.print(f"{error} Choose again.", style="red", markup=False, soft_wrap=True)
             continue

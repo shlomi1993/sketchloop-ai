@@ -33,10 +33,11 @@ def run_two_rounds(runs_dir: Path) -> SketchSession:
     """
     raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
     session = SketchSession(FakeGenerator(), FolderStore(runs_dir))
-    round1 = session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source="file", n_candidates=2, seed=7)
+    chair = Guidance(prompt="chair")
+    round1 = session.run_round(raw_sketch, raw_payload, chair, source=SketchSource.FILE, n_candidates=2, seed=7)
     session.record_selection(select_candidates(round1.iteration, [round1.iteration.result.candidates[0].id]))
-    round2 = session.run_round(raw_sketch, raw_payload, Guidance(prompt="lamp", controls={"steps": 8}), source="camera",
-                               use_raw=True)
+    lamp = Guidance(prompt="lamp", controls={"steps": 8})
+    round2 = session.run_round(raw_sketch, raw_payload, lamp, source=SketchSource.CAMERA, use_raw=True)
     session.record_selection(record_no_selection(round2.iteration))
     return session
 
@@ -50,7 +51,7 @@ def test_records_round_trip(tmp_path: Path) -> None:
     round1_files = sorted(path.relative_to(round1_folder).as_posix() for path in round1_folder.rglob("*.*"))
     raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
     with pytest.raises(UnsupportedConfigurationError):
-        session.run_round(raw_sketch, raw_payload, Guidance(prompt="vase"), source="webcam", n_candidates=99)
+        session.run_round(raw_sketch, raw_payload, Guidance(prompt="vase"), source=SketchSource.WEBCAM, n_candidates=99)
     (session.folder / "round-1" / "round.json.tmp").write_text("{", encoding="utf-8")
 
     saved = load_session(session.folder)
@@ -136,7 +137,7 @@ class StillCamera(CaptureSource):
         """
         Record sketches from this source as camera input.
         """
-        return "camera"
+        return SketchSource.CAMERA
 
     def capture(self) -> tuple[ImageRef, bytes]:
         """

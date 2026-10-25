@@ -13,7 +13,7 @@ from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias, TypeVar, get_args
+from typing import Final, Literal, TypeAlias, TypeVar
 
 from sketchloop.domain import (SCHEMA_VERSION, BackendIdentity, Candidate, ControlValue, EffectiveSettings,
                                GenerationRequest, GenerationResult, Guidance, ImageRef, Iteration, SelectionEvent,
@@ -118,7 +118,7 @@ def require_known_source(source: object) -> None:
     """
     Refuse a round source that is neither a known value nor Unavailable.
     """
-    valid_source = isinstance(source, Unavailable) or source in get_args(SketchSource)
+    valid_source = isinstance(source, Unavailable) or source in list(SketchSource)
     require(valid_source, f"Round source must be file, camera, webcam, or upload, got {source!r}.")
 
 
@@ -158,6 +158,10 @@ class RoundRecord:
             candidate_ids = {candidate.id for candidate in self.iteration.result.candidates} if self.iteration else set()
             belongs = self.iteration is not None and self.selection.iteration_id == self.iteration.id
             require(belongs and set(self.selection.selected_candidate_ids) <= candidate_ids, "Selection is outside its round.")
+
+        # Hold a known source as the enum, so a source loaded from JSON text compares and prints like a recorded one.
+        if not isinstance(self.source, Unavailable):
+            object.__setattr__(self, "source", SketchSource(self.source))
 
         # Copy into read-only views so the recorded values cannot change after the fact.
         object.__setattr__(self, "timings_seconds", MappingProxyType(dict(self.timings_seconds)))

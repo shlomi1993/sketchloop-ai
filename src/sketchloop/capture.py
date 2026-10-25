@@ -293,7 +293,7 @@ class FileCapture(CaptureSource):
         """
         Return "file".
         """
-        return "file"
+        return SketchSource.FILE
 
     def capture(self) -> tuple[ImageRef, bytes]:
         """
@@ -316,7 +316,7 @@ class CameraCapture(CaptureSource):
         """
         Return "camera".
         """
-        return "camera"
+        return SketchSource.CAMERA
 
     def capture(self) -> tuple[ImageRef, bytes]:
         """

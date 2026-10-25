@@ -182,7 +182,7 @@ class ExampleCamera(CaptureSource):
         """
         Record sketches from this source as camera input.
         """
-        return "camera"
+        return SketchSource.CAMERA
 
     def capture(self) -> tuple[ImageRef, bytes]:
         """

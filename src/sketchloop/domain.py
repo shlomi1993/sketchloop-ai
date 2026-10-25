@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, get_args
 
@@ -14,7 +15,6 @@ SCHEMA_VERSION: Final = 1
 ControlValue: TypeAlias = bool | int | float | str
 ColorMode: TypeAlias = Literal["L", "RGB", "RGBA"]
 ExecutionKind: TypeAlias = Literal["fake", "in_process", "remote"]
-SketchSource: TypeAlias = Literal["file", "camera", "webcam", "upload"]
 IssueCode: TypeAlias = Literal[
     "unknown_control", "wrong_type", "out_of_range", "invalid_choice", "unsupported_feature", "too_many_candidates"
 ]
@@ -23,6 +23,16 @@ IssueCode: TypeAlias = Literal[
 _CONTROL_NAME = re.compile(r"[a-z][a-z0-9_]*")
 _MEDIA_TYPE = re.compile(r"[a-z0-9][a-z0-9.+-]*/[a-z0-9][a-z0-9.+-]*")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+class SketchSource(StrEnum):
+    """
+    Where a round's raw sketch came from, recorded as input.source.
+    """
+    FILE = "file"
+    CAMERA = "camera"
+    WEBCAM = "webcam"
+    UPLOAD = "upload"
 
 
 class SketchLoopError(Exception):
