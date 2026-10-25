@@ -7,15 +7,15 @@ import zlib
 from collections.abc import Mapping
 from typing import Final
 
-from sketchloop.domain import (BackendIdentity, Candidate, ControlValue, EffectiveSettings, GenerationRequest,
-                               GenerationResult, ImageRef, Unavailable)
-from sketchloop.generation import ControlSpec, GenerationOutput, Generator, GeneratorCapabilities, validate_request
+from sketchloop.domain import (BackendIdentity, Candidate, ColorMode, ControlValue, EffectiveSettings, ExecutionKind,
+                               GenerationRequest, GenerationResult, ImageRef, Unavailable)
+from sketchloop.generation import ControlKind, ControlSpec, GenerationOutput, Generator, GeneratorCapabilities, validate_request
 
 # Controls typical of an image-to-image diffusion backend, so tests exercise realistic validation.
 _DEFAULT_CONTROLS = (
-    ControlSpec(name="steps", kind="int", minimum=1, maximum=50, default=4),
-    ControlSpec(name="guidance_scale", kind="float", minimum=0, maximum=20, default=7.5),
-    ControlSpec(name="strength", kind="float", minimum=0, maximum=1, default=0.75)
+    ControlSpec(name="steps", kind=ControlKind.INT, minimum=1, maximum=50, default=4),
+    ControlSpec(name="guidance_scale", kind=ControlKind.FLOAT, minimum=0, maximum=20, default=7.5),
+    ControlSpec(name="strength", kind=ControlKind.FLOAT, minimum=0, maximum=1, default=0.75)
 )
 _DEFAULT_CAPABILITIES = GeneratorCapabilities(
     controls=_DEFAULT_CONTROLS, max_candidates=8, supports_negative_prompt=True, supports_seed=True
@@ -70,13 +70,13 @@ class FakeGenerator(Generator):
             seed = (request.seed or 0) + index
             payload = self._render(request, controls, index, seed)
             candidate_id = uuid.uuid4().hex
-            image = ImageRef(path=f"candidates/candidate-{index + 1}.png", width=self._size[0], height=self._size[1], mode="L",
-                             media_type="image/png", sha256=hashlib.sha256(payload).hexdigest())
+            image = ImageRef(path=f"candidates/candidate-{index + 1}.png", width=self._size[0], height=self._size[1],
+                             mode=ColorMode.L, media_type="image/png", sha256=hashlib.sha256(payload).hexdigest())
             candidates.append(Candidate(id=candidate_id, index=index, image=image, seed=seed))
             payloads[image.path] = payload
 
         # Label the backend as fake so its output is never mistaken for a real model run.
-        backend = BackendIdentity(adapter=self.ADAPTER_NAME, adapter_version="1", execution="fake",
+        backend = BackendIdentity(adapter=self.ADAPTER_NAME, adapter_version="1", execution=ExecutionKind.FAKE,
                                   model_id=Unavailable("fake backend has no model"))
         prompt, negative_prompt = request.guidance.prompt, request.guidance.negative_prompt
         effective = EffectiveSettings(prompt=prompt, negative_prompt=negative_prompt, controls=controls)

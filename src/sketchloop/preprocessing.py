@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Final
 
 from sketchloop.capture import InvalidSketchError
-from sketchloop.domain import ControlValue, ImageRef
+from sketchloop.domain import ColorMode, ControlValue, ImageRef
 
 
 # Generation conditioning treats pixels this much darker than the paper as strokes, and the crop keeps a margin around them.
@@ -459,7 +459,7 @@ def encode_processed_sketch(image: np.ndarray) -> tuple[ImageRef, bytes]:
         path="sketch.png",
         width=width,
         height=height,
-        mode="L",
+        mode=ColorMode.L,
         media_type="image/png",
         sha256=hashlib.sha256(payload).hexdigest()
     )

@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any, Final
 
 from sketchloop.capture import InvalidSketchError
-from sketchloop.domain import (BackendIdentity, Candidate, ControlValue, EffectiveSettings, GenerationRequest,
-                               GenerationResult, ImageRef, SketchLoopError, first_line)
-from sketchloop.generation import ControlSpec, GenerationOutput, Generator, GeneratorCapabilities, validate_request
+from sketchloop.domain import (BackendIdentity, Candidate, ColorMode, ControlValue, EffectiveSettings, ExecutionKind,
+                               GenerationRequest, GenerationResult, ImageRef, SketchLoopError, first_line)
+from sketchloop.generation import ControlKind, ControlSpec, GenerationOutput, Generator, GeneratorCapabilities, validate_request
 from sketchloop.preprocessing import STROKE_CONTRAST
 
 
@@ -239,9 +239,9 @@ class DiffusersSketchGenerator(Generator):
         # Negative prompts need classifier-free guidance, which the low LCM guidance scale effectively disables.
         settings = MODE_SETTINGS[self.mode]
         controls = (
-            ControlSpec(name="steps", kind="int", minimum=1, maximum=50, default=settings.steps),
-            ControlSpec(name="guidance_scale", kind="float", minimum=0, maximum=20, default=settings.guidance_scale),
-            ControlSpec(name="conditioning_scale", kind="float", minimum=0, maximum=2, default=1.0)
+            ControlSpec(name="steps", kind=ControlKind.INT, minimum=1, maximum=50, default=settings.steps),
+            ControlSpec(name="guidance_scale", kind=ControlKind.FLOAT, minimum=0, maximum=20, default=settings.guidance_scale),
+            ControlSpec(name="conditioning_scale", kind=ControlKind.FLOAT, minimum=0, maximum=2, default=1.0)
         )
         supports_negative_prompt = self.mode == GenerationMode.QUALITY
         self._capabilities = GeneratorCapabilities(controls=controls, max_candidates=8,
@@ -350,8 +350,8 @@ class DiffusersSketchGenerator(Generator):
 
             payload, image_height, image_width = encode_rgb_png(image)
             candidate_id = uuid.uuid4().hex
-            image_ref = ImageRef(path=f"candidates/candidate-{index + 1}.png", width=image_width, height=image_height, mode="RGB",
-                                 media_type="image/png", sha256=hashlib.sha256(payload).hexdigest())
+            image_ref = ImageRef(path=f"candidates/candidate-{index + 1}.png", width=image_width, height=image_height,
+                                 mode=ColorMode.RGB, media_type="image/png", sha256=hashlib.sha256(payload).hexdigest())
             candidates.append(Candidate(id=candidate_id, index=index, image=image_ref, seed=seed))
             payloads[image_ref.path] = payload
 
@@ -361,7 +361,8 @@ class DiffusersSketchGenerator(Generator):
         # Name each model with the revision its local folder was downloaded at.
         sources = self._list_model_sources()
         model_id = " + ".join(f"{source.repo_id}@{local_revision(self._model_dir / source.folder)}" for source in sources)
-        return BackendIdentity(adapter=self.ADAPTER_NAME, adapter_version="1", execution="in_process", model_id=model_id)
+        return BackendIdentity(adapter=self.ADAPTER_NAME, adapter_version="1", execution=ExecutionKind.IN_PROCESS,
+                               model_id=model_id)
 
     def _collect_effective_settings(self, request: GenerationRequest, controls: dict[str, ControlValue],
                             candidates: list[Candidate], resolution: str) -> EffectiveSettings:

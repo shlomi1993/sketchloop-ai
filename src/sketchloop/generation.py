@@ -3,16 +3,31 @@ import hashlib
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from types import MappingProxyType
-from typing import Literal, TypeAlias, get_args
 
 from sketchloop.domain import (ControlValue, GenerationRequest, GenerationResult, InvalidRecordError, IssueCode,
                                UnsupportedConfigurationError, ValidationIssue, require)
 
-ControlKind: TypeAlias = Literal["int", "float", "bool", "choice"]
+
+
+class ControlKind(StrEnum):
+    """
+    Kind of value a backend control takes.
+    """
+    INT = "int"
+    FLOAT = "float"
+    BOOL = "bool"
+    CHOICE = "choice"
+
 
 # Python types each control kind accepts, where float controls also take ints.
-_ACCEPTED_TYPES_BY_KIND: dict[str, tuple[type, ...]] = {"int": (int,), "float": (int, float), "bool": (bool,), "choice": (str,)}
+_ACCEPTED_TYPES_BY_KIND: dict[ControlKind, tuple[type, ...]] = {
+    ControlKind.INT: (int,),
+    ControlKind.FLOAT: (int, float),
+    ControlKind.BOOL: (bool,),
+    ControlKind.CHOICE: (str,),
+}
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -29,15 +44,17 @@ class ControlSpec:
 
     def __post_init__(self) -> None:
         # Only numeric controls may have bounds, and the bounds must be ordered.
-        require(self.kind in get_args(ControlKind), f"Control {self.name} kind must be int, float, bool, or choice.")
-        numeric = self.kind in ("int", "float")
+        require(self.kind in list(ControlKind), f"Control {self.name} kind must be int, float, bool, or choice.")
+        object.__setattr__(self, "kind", ControlKind(self.kind))
+        numeric = self.kind in (ControlKind.INT, ControlKind.FLOAT)
         has_bounds = self.minimum is not None or self.maximum is not None
         require(numeric or not has_bounds, f"Control {self.name} may have bounds only if it is an int or float.")
         bounds_ordered = self.minimum is None or self.maximum is None or self.minimum <= self.maximum
         require(bounds_ordered, f"Control {self.name} minimum must not exceed its maximum.")
 
         # Choice controls, and only they, need a list of distinct options.
-        require((self.kind == "choice") == bool(self.choices), f"Control {self.name} needs choices exactly when a choice.")
+        is_choice = self.kind == ControlKind.CHOICE
+        require(is_choice == bool(self.choices), f"Control {self.name} needs choices exactly when a choice.")
         require(len(set(self.choices)) == len(self.choices), f"Control {self.name} choices must be unique.")
 
         # A default must pass the same checks as a value the person supplies.
@@ -122,18 +139,18 @@ class Generator(ABC):
 
 def _control_problem(spec: ControlSpec, value: ControlValue) -> tuple[IssueCode, str] | None:
     # Bools pass isinstance checks for int and float, so reject them unless the control is a bool.
-    if not isinstance(value, _ACCEPTED_TYPES_BY_KIND[spec.kind]) or (isinstance(value, bool) and spec.kind != "bool"):
-        return "wrong_type", f"Expected {spec.kind}, got {type(value).__name__}."
+    if not isinstance(value, _ACCEPTED_TYPES_BY_KIND[spec.kind]) or (isinstance(value, bool) and spec.kind != ControlKind.BOOL):
+        return IssueCode.WRONG_TYPE, f"Expected {spec.kind}, got {type(value).__name__}."
 
     # Choice values must be one of the listed options.
-    if spec.kind == "choice" and value not in spec.choices:
-        return "invalid_choice", f"Use one of {', '.join(spec.choices)}."
+    if spec.kind == ControlKind.CHOICE and value not in spec.choices:
+        return IssueCode.INVALID_CHOICE, f"Use one of {', '.join(spec.choices)}."
 
     # Numeric values must fall within the declared bounds.
     if spec.minimum is not None and value < spec.minimum:
-        return "out_of_range", f"{value} is below the minimum {spec.minimum}."
+        return IssueCode.OUT_OF_RANGE, f"{value} is below the minimum {spec.minimum}."
     if spec.maximum is not None and value > spec.maximum:
-        return "out_of_range", f"{value} is above the maximum {spec.maximum}."
+        return IssueCode.OUT_OF_RANGE, f"{value} is above the maximum {spec.maximum}."
 
     return None
 
@@ -153,15 +170,15 @@ def request_issues(request: GenerationRequest, capabilities: GeneratorCapabiliti
     issues = []
     if request.n_candidates > capabilities.max_candidates:
         message = f"Requested {request.n_candidates}, the backend allows at most {capabilities.max_candidates}."
-        issues.append(ValidationIssue(field="n_candidates", code="too_many_candidates", message=message))
+        issues.append(ValidationIssue(field="n_candidates", code=IssueCode.TOO_MANY_CANDIDATES, message=message))
 
     # Report optional features the backend lacks instead of silently ignoring them.
     if request.seed is not None and not capabilities.supports_seed:
-        issues.append(ValidationIssue(field="seed", code="unsupported_feature", message="Omit the seed."))
+        issues.append(ValidationIssue(field="seed", code=IssueCode.UNSUPPORTED_FEATURE, message="Omit the seed."))
 
     if request.guidance.negative_prompt is not None and not capabilities.supports_negative_prompt:
         message = "Negative prompts are unsupported. Omit it."
-        issues.append(ValidationIssue(field="guidance.negative_prompt", code="unsupported_feature", message=message))
+        issues.append(ValidationIssue(field="guidance.negative_prompt", code=IssueCode.UNSUPPORTED_FEATURE, message=message))
 
     # Check each control against its spec, in sorted order so the issue list is stable.
     specs = {spec.name: spec for spec in capabilities.controls}
@@ -171,7 +188,7 @@ def request_issues(request: GenerationRequest, capabilities: GeneratorCapabiliti
         # Name the supported controls so the person can correct a typo.
         if name not in specs:
             message = f"Unknown control. Supported: {', '.join(sorted(specs)) or 'none'}."
-            issues.append(ValidationIssue(field=field, code="unknown_control", message=message))
+            issues.append(ValidationIssue(field=field, code=IssueCode.UNKNOWN_CONTROL, message=message))
             continue
 
         # Record a type, choice, or range problem for a known control.

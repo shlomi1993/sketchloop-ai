@@ -16,7 +16,7 @@ FORMAT_BY_SIGNATURE: Final = {
     b"\x89PNG\r\n\x1a\n": (".png", "image/png"),
     b"\xff\xd8\xff": (".jpg", "image/jpeg")
 }
-MODE_BY_CHANNELS: Final[dict[int, ColorMode]] = {1: "L", 3: "RGB", 4: "RGBA"}
+MODE_BY_CHANNELS: Final[dict[int, ColorMode]] = {1: ColorMode.L, 3: ColorMode.RGB, 4: ColorMode.RGBA}
 
 # Camera preview window title and the keys that capture or cancel, as returned by cv2.waitKey.
 PREVIEW_WINDOW_TITLE: Final = "sketchloop - Space to capture, Esc to cancel"

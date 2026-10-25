@@ -7,17 +7,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias, get_args
+from typing import Final, TypeAlias
 
 
 # Persisted records carry this version so later readers can migrate older runs.
 SCHEMA_VERSION: Final = 1
 ControlValue: TypeAlias = bool | int | float | str
-ColorMode: TypeAlias = Literal["L", "RGB", "RGBA"]
-ExecutionKind: TypeAlias = Literal["fake", "in_process", "remote"]
-IssueCode: TypeAlias = Literal[
-    "unknown_control", "wrong_type", "out_of_range", "invalid_choice", "unsupported_feature", "too_many_candidates"
-]
 
 # Formats checked with fullmatch, so the patterns need no anchors.
 _CONTROL_NAME = re.compile(r"[a-z][a-z0-9_]*")
@@ -33,6 +28,36 @@ class SketchSource(StrEnum):
     CAMERA = "camera"
     WEBCAM = "webcam"
     UPLOAD = "upload"
+
+
+class ColorMode(StrEnum):
+    """
+    Color layout of a stored image, named as Pillow names it.
+    """
+    L = "L"
+    RGB = "RGB"
+    RGBA = "RGBA"
+
+
+class ExecutionKind(StrEnum):
+    """
+    How a backend ran: the test-only fake, in this process, or on a remote service.
+    """
+    FAKE = "fake"
+    IN_PROCESS = "in_process"
+    REMOTE = "remote"
+
+
+class IssueCode(StrEnum):
+    """
+    Why a request breaks a backend's capabilities.
+    """
+    UNKNOWN_CONTROL = "unknown_control"
+    WRONG_TYPE = "wrong_type"
+    OUT_OF_RANGE = "out_of_range"
+    INVALID_CHOICE = "invalid_choice"
+    UNSUPPORTED_FEATURE = "unsupported_feature"
+    TOO_MANY_CANDIDATES = "too_many_candidates"
 
 
 class SketchLoopError(Exception):
@@ -138,9 +163,12 @@ class ImageRef:
         # Check the image metadata needed to reopen and verify the stored file.
         require(_is_int(self.width) and self.width >= 1, f"Image width must be an int >= 1, got {self.width!r}.")
         require(_is_int(self.height) and self.height >= 1, f"Image height must be an int >= 1, got {self.height!r}.")
-        require(self.mode in get_args(ColorMode), f"Image mode must be L, RGB, or RGBA, got {self.mode!r}.")
+        require(self.mode in list(ColorMode), f"Image mode must be L, RGB, or RGBA, got {self.mode!r}.")
         require(_MEDIA_TYPE.fullmatch(self.media_type), f"Media type must be type/subtype, got {self.media_type!r}.")
         require(_SHA256.fullmatch(self.sha256), "Image sha256 must be 64 lowercase hex characters.")
+
+        # Hold the mode as the enum, so a mode loaded from JSON text matches a recorded one.
+        object.__setattr__(self, "mode", ColorMode(self.mode))
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -189,15 +217,18 @@ class BackendIdentity:
 
     def __post_init__(self) -> None:
         require(_is_text(self.adapter) and _is_text(self.adapter_version), "Adapter and version must be non-empty.")
-        require(self.execution in get_args(ExecutionKind), "Execution must be fake, in_process, or remote.")
+        require(self.execution in list(ExecutionKind), "Execution must be fake, in_process, or remote.")
         require(isinstance(self.model_id, Unavailable) or _is_text(self.model_id), "Model ID must be non-empty.")
+
+        # Hold the execution kind as the enum, so one loaded from JSON text matches a recorded one.
+        object.__setattr__(self, "execution", ExecutionKind(self.execution))
 
     @property
     def is_fake(self) -> bool:
         """
         Tell whether the result came from the test-only fake backend.
         """
-        return self.execution == "fake"
+        return self.execution == ExecutionKind.FAKE
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
