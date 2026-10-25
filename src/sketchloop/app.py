@@ -131,7 +131,6 @@ class AppController:
         self.store = store
         self.evaluator = evaluator
         self.preprocessor = preprocessor
-        self.runs_dir: Path = store.root
         self.session = SketchSession(generator, store, evaluator, preprocessor=preprocessor)
 
     @property

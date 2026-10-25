@@ -117,7 +117,7 @@ def test_app_rejects_input_before_writing(tmp_path: Path, controller: AppControl
         controller.run_round(sketch, source, prompt, n_candidates=2, **options)
 
     # No session folder is created for refused input.
-    assert not controller.runs_dir.exists(), "Refused input must not create a session folder"
+    assert not controller.store.root.exists(), "Refused input must not create a session folder"
 
 
 def test_app_selection_rules(controller: AppController, sketch_file: Path) -> None:

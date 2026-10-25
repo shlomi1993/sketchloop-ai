@@ -256,4 +256,4 @@ def launch_app(controller: AppController, *, default_candidates: int, default_se
                     capture_interval_seconds=capture_interval_seconds)
     head = f"<script>{SCRIPT_PATH.read_text(encoding='utf-8')}</script>"
     app.launch(server_name="127.0.0.1", share=False, ssr_mode=False, inbrowser=True, theme=THEME, css_paths=[STYLESHEET_PATH],
-               head=head, allowed_paths=[str(controller.runs_dir.resolve())], max_file_size="20mb", show_error=False)
+               head=head, allowed_paths=[str(controller.store.root.resolve())], max_file_size="20mb", show_error=False)

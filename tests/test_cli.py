@@ -318,7 +318,7 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     exit_codes = (exit_code, config_exit, fake_flag_exit)
     assert exit_codes == (0, 0, 0) and len(launches) == 3, f"Expected three launches, got {exit_codes} and {launches}"
     controller, options = launches[0]
-    assert isinstance(controller, AppController) and controller.runs_dir == runs_dir, f"Bad controller {controller}"
+    assert isinstance(controller, AppController) and controller.store.root == runs_dir, f"Bad controller {controller}"
     assert options["default_candidates"] == 2 and options["default_seed"] == 5, f"Unexpected launch options {options}"
 
     # Telemetry is off before the UI module runs.
@@ -336,7 +336,7 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     resolved_calls = [(mode, model_dir.resolve()) for mode, model_dir in diffusers_calls]
     assert resolved_calls == [expected_call], f"Expected one diffusers backend {expected_call}, got {diffusers_calls}"
     assert config_options["default_candidates"] == 3, f"The file's ui.candidates must apply, got {config_options}"
-    controller_runs = config_controller.runs_dir.resolve()
+    controller_runs = config_controller.store.root.resolve()
     assert controller_runs == (config_dir / "file-runs").resolve(), f"Runs must sit next to the file, got {controller_runs}"
 
     # --backend fake beats the file without a mode conflict, so no diffusers backend is created.
