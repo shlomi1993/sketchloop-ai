@@ -199,6 +199,9 @@ class DiffusersSketchGenerator(Generator):
     Stable Diffusion 1.5 with the ControlNet v1.1 scribble model, loaded lazily from local folders.
     """
 
+    # Saved in every round record and looked up by rerun, so never rename it.
+    ADAPTER_NAME: Final = "sketchloop.diffusers"
+
     def __init__(self, model_dir: Path = Path("models"), *, mode: GenerationMode | None = None,
                  device: TorchDevice | None = None, runner: PipelineRunner | None = None) -> None:
         self._model_dir = model_dir
@@ -337,7 +340,7 @@ class DiffusersSketchGenerator(Generator):
         # Name each model with the revision its local folder was downloaded at.
         sources = self._list_model_sources()
         model_id = " + ".join(f"{source.repo_id}@{local_revision(self._model_dir / source.folder)}" for source in sources)
-        return BackendIdentity(adapter="sketchloop.diffusers", adapter_version="1", execution="in_process", model_id=model_id)
+        return BackendIdentity(adapter=self.ADAPTER_NAME, adapter_version="1", execution="in_process", model_id=model_id)
 
     def _collect_effective_settings(self, request: GenerationRequest, controls: dict[str, ControlValue],
                             candidates: list[Candidate], resolution: str) -> EffectiveSettings:

@@ -17,8 +17,8 @@ class GenerationBackend(StrEnum):
 
 # Backends a rerun can recreate, by the adapter name a round recorded.
 RERUNNABLE_BACKENDS: Final = {
-    "sketchloop.fake": GenerationBackend.FAKE,
-    "sketchloop.diffusers": GenerationBackend.DIFFUSERS
+    FakeGenerator.ADAPTER_NAME: GenerationBackend.FAKE,
+    DiffusersSketchGenerator.ADAPTER_NAME: GenerationBackend.DIFFUSERS
 }
 
 

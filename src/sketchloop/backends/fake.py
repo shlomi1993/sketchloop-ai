@@ -5,6 +5,7 @@ import uuid
 import zlib
 
 from collections.abc import Mapping
+from typing import Final
 
 from sketchloop.domain import (BackendIdentity, Candidate, ControlValue, EffectiveSettings, GenerationRequest,
                                GenerationResult, ImageRef, Unavailable)
@@ -25,6 +26,9 @@ class FakeGenerator(Generator):
     """
     Deterministic test-only generator that labels its output as fake.
     """
+
+    # Saved in every round record and looked up by rerun, so never rename it.
+    ADAPTER_NAME: Final = "sketchloop.fake"
 
     def __init__(self, capabilities: GeneratorCapabilities | None = None, *, size: tuple[int, int] = (256, 256)) -> None:
         self._capabilities = capabilities or _DEFAULT_CAPABILITIES
@@ -72,7 +76,7 @@ class FakeGenerator(Generator):
             payloads[image.path] = payload
 
         # Label the backend as fake so its output is never mistaken for a real model run.
-        backend = BackendIdentity(adapter="sketchloop.fake", adapter_version="1", execution="fake",
+        backend = BackendIdentity(adapter=self.ADAPTER_NAME, adapter_version="1", execution="fake",
                                   model_id=Unavailable("fake backend has no model"))
         prompt, negative_prompt = request.guidance.prompt, request.guidance.negative_prompt
         effective = EffectiveSettings(prompt=prompt, negative_prompt=negative_prompt, controls=controls)
