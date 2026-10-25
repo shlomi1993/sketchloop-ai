@@ -6,7 +6,7 @@ import pytest
 from pathlib import Path
 from typing import Any
 
-from sketchloop.backends.diffusers import DiffusersSketchGenerator, GenerationBackendError
+from sketchloop.backends.diffusers import DiffusersSketchGenerator, GenerationBackendError, PipelineRunner
 from sketchloop.domain import GenerationRequest, Guidance, ImageRef
 from sketchloop.preprocessing import preprocess_sketch
 
@@ -14,7 +14,7 @@ from sketchloop.preprocessing import preprocess_sketch
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class RecordingRunner:
+class RecordingRunner(PipelineRunner):
     """
     Test-only stand-in for the Diffusers pipeline that records each call and returns a flat gray image.
     """

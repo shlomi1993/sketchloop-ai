@@ -6,7 +6,7 @@ import sys
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
-from typing import Final, Protocol
+from typing import Final
 
 from sketchloop.domain import ColorMode, ImageRef, SketchLoopError, SketchSource
 
@@ -37,12 +37,13 @@ class InvalidSketchError(SketchLoopError, ValueError):
     """
 
 
-class VideoSource(Protocol):
+class VideoSource(ABC):
     """
-    The part of cv2.VideoCapture that camera capture uses, so tests can inject a fake camera.
+    A camera that camera capture reads frames from, so tests can inject a fake camera.
     """
 
-    def isOpened(self) -> bool:
+    @abstractmethod
+    def is_opened(self) -> bool:
         """
         Report whether the camera opened.
 
@@ -51,6 +52,7 @@ class VideoSource(Protocol):
         """
         ...
 
+    @abstractmethod
     def read(self) -> tuple[bool, np.ndarray | None]:
         """
         Read the next frame.
@@ -60,11 +62,39 @@ class VideoSource(Protocol):
         """
         ...
 
+    @abstractmethod
     def release(self) -> None:
         """
         Release the camera.
         """
         ...
+
+
+class OpenCVCamera(VideoSource):
+    """
+    A webcam opened with the native OpenCV backend: DirectShow on Windows, AVFoundation on macOS, the default elsewhere.
+    """
+
+    def __init__(self, camera_index: int) -> None:
+        self._capture = cv2.VideoCapture(camera_index, CAMERA_BACKEND_BY_PLATFORM.get(sys.platform, cv2.CAP_ANY))
+
+    def is_opened(self) -> bool:
+        """
+        Report whether OpenCV opened the camera.
+        """
+        return self._capture.isOpened()
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        """
+        Read the next frame from OpenCV.
+        """
+        return self._capture.read()
+
+    def release(self) -> None:
+        """
+        Release the camera in OpenCV.
+        """
+        self._capture.release()
 
 
 def count_channels(pixels: np.ndarray) -> int:
@@ -127,13 +157,6 @@ def raw_image_ref(pixels: np.ndarray, payload: bytes, extension: str, media_type
     )
 
 
-def open_webcam(camera_index: int) -> VideoSource:
-    """
-    Open a camera with the native OpenCV backend: DirectShow on Windows, AVFoundation on macOS, the default elsewhere.
-    """
-    return cv2.VideoCapture(camera_index, CAMERA_BACKEND_BY_PLATFORM.get(sys.platform, cv2.CAP_ANY))
-
-
 def encode_frame(frame: np.ndarray) -> tuple[ImageRef, bytes]:
     """
     Encode an 8-bit BGR or grayscale camera frame losslessly as the PNG raw sketch.
@@ -153,7 +176,7 @@ def encode_frame(frame: np.ndarray) -> tuple[ImageRef, bytes]:
     return raw_image_ref(frame, payload, ".png", "image/png"), payload
 
 
-def capture_from_camera(camera_index: int, open_camera: Callable[[int], VideoSource] = open_webcam) -> tuple[ImageRef, bytes]:
+def capture_from_camera(camera_index: int, open_camera: Callable[[int], VideoSource] = OpenCVCamera) -> tuple[ImageRef, bytes]:
     """
     Show a live camera preview, capture a frame on Space, and describe it as a PNG raw sketch.
 
@@ -211,10 +234,10 @@ def preview_until_capture(camera: VideoSource, unavailable: str) -> np.ndarray:
     has_shown_frame = False
     while True:
         # Skip empty frames during warm-up, but fail once the camera was lost or never delivered a frame.
-        grabbed, frame = camera.read() if camera.isOpened() else (False, None)
+        grabbed, frame = camera.read() if camera.is_opened() else (False, None)
         if not grabbed or frame is None:
             empty_reads += 1
-            if has_shown_frame or not camera.isOpened() or empty_reads >= WARM_UP_ATTEMPTS:
+            if has_shown_frame or not camera.is_opened() or empty_reads >= WARM_UP_ATTEMPTS:
                 raise InvalidSketchError(unavailable)
 
             cv2.waitKey(PREVIEW_FRAME_MILLISECONDS)
@@ -284,7 +307,7 @@ class CameraCapture(CaptureSource):
     Capture source that shows a webcam preview and captures a frame on Space.
     """
 
-    def __init__(self, camera_index: int, open_camera: Callable[[int], VideoSource] = open_webcam) -> None:
+    def __init__(self, camera_index: int, open_camera: Callable[[int], VideoSource] = OpenCVCamera) -> None:
         self.camera_index = camera_index
         self.open_camera = open_camera
 

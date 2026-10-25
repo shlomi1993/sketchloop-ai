@@ -10,7 +10,7 @@ R02 and R08 require replaceable components behind documented interfaces. [ADR 00
 
 The five component interfaces become abstract base classes (`abc.ABC` with `@abstractmethod`), and every implementation subclasses its interface: `FakeGenerator` and `DiffusersSketchGenerator` subclass `Generator`, `NoOpEvaluator` subclasses `Evaluator`, `FileCapture` and `CameraCapture` subclass `CaptureSource`, `StrokePreprocessor` subclasses `Preprocessor`, and `FolderStore` and `MemoryStore` subclass `ExperimentStore`. A researcher adding a component imports and subclasses the base class, which states the contract in one place and fails when the object is created if a method is missing.
 
-Method names and signatures are unchanged. Two protocols stay because they describe objects the project does not define: `VideoSource` matches OpenCV's `VideoCapture`, and `PipelineRunner` matches a plain function returned by the diffusers backend.
+Method names and signatures are unchanged. Amended: the two internal interfaces first kept as protocols are now abstract base classes too, so the project uses no `typing.Protocol`. `VideoSource` has `is_opened`, `read`, and `release`, and `OpenCVCamera` wraps `cv2.VideoCapture` to implement it. `PipelineRunner` is implemented by `DiffusersRunner`, which wraps the loaded pipeline. An object the project does not define is wrapped in a subclass rather than matched structurally.
 
 Alternatives were keeping the protocols and adding a type checker such as Pyright or mypy to the checks, or doing both. The owner preferred an explicit base class that a new backend must import.
 

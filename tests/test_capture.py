@@ -2,19 +2,19 @@ import cv2
 import numpy as np
 import pytest
 
-from sketchloop.capture import SPACE_KEY, CameraCapture, InvalidSketchError, capture_from_camera
+from sketchloop.capture import SPACE_KEY, CameraCapture, InvalidSketchError, VideoSource, capture_from_camera
 
 
-class FakeCamera:
+class FakeCamera(VideoSource):
     """
-    Test double for cv2.VideoCapture that serves one synthetic frame, or none when unavailable.
+    Test camera that serves one synthetic frame, or none when unavailable.
     """
 
     def __init__(self, available: bool) -> None:
         self.available = available
         self.released = False
 
-    def isOpened(self) -> bool:
+    def is_opened(self) -> bool:
         """
         Report whether the fake camera is available.
         """

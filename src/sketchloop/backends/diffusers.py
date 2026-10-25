@@ -4,10 +4,11 @@ import numpy as np
 import random
 import uuid
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final, Protocol
+from typing import Any, Final
 
 from sketchloop.capture import InvalidSketchError
 from sketchloop.domain import (BackendIdentity, Candidate, ControlValue, EffectiveSettings, GenerationRequest,
@@ -95,11 +96,12 @@ MODE_SETTINGS: Final[dict[str, ModeSettings]] = {
 }
 
 
-class PipelineRunner(Protocol):
+class PipelineRunner(ABC):
     """
     Runs the loaded pipeline once for one seed, so tests can inject a stub instead of real weights.
     """
 
+    @abstractmethod
     def __call__(self, seed: int, **pipeline_kwargs: Any) -> np.ndarray:
         """
         Generate one image.
@@ -112,6 +114,30 @@ class PipelineRunner(Protocol):
             np.ndarray: RGB image of shape (height, width, 3) with values in [0, 1].
         """
         ...
+
+
+class DiffusersRunner(PipelineRunner):
+    """
+    Runs a loaded Diffusers pipeline with a fresh CPU random generator per seed.
+    """
+
+    def __init__(self, pipeline: Any, torch_module: Any) -> None:
+        self._pipeline = pipeline
+        self._torch = torch_module
+
+    def __call__(self, seed: int, **pipeline_kwargs: Any) -> np.ndarray:
+        """
+        Generate one image, seeding a CPU generator, which Diffusers recommends for reproducibility across devices.
+
+        Args:
+            seed (int): Seed for this candidate's random generator.
+            **pipeline_kwargs (Any): Keyword arguments for the Diffusers pipeline call.
+
+        Returns:
+            np.ndarray: RGB image of shape (height, width, 3) with values in [0, 1].
+        """
+        generator = self._torch.Generator(TorchDevice.CPU).manual_seed(seed)
+        return self._pipeline(**pipeline_kwargs, generator=generator, output_type="np").images[0]
 
 
 def select_device() -> TorchDevice:
@@ -285,12 +311,7 @@ class DiffusersSketchGenerator(Generator):
             message = f"Cannot load the diffusers models: {first_line(error).rstrip('.')}. Rerun scripts/download_models.py."
             raise GenerationBackendError(message) from error
 
-        # Seed a fresh CPU generator per candidate, which Diffusers recommends for reproducibility across devices.
-        def run(seed: int, **pipeline_kwargs: Any) -> np.ndarray:
-            generator = torch.Generator(TorchDevice.CPU).manual_seed(seed)
-            return pipeline(**pipeline_kwargs, generator=generator, output_type="np").images[0]
-
-        return run
+        return DiffusersRunner(pipeline, torch)
 
     def _build_pipeline_kwargs(self, request: GenerationRequest, controls: dict[str, ControlValue],
                          sketch_payload: bytes) -> dict[str, Any]:
