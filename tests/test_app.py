@@ -284,7 +284,7 @@ def test_ui_builds_offline(controller: AppController, monkeypatch: pytest.Monkey
     """
     import gradio
 
-    from sketchloop.ui import build_app, can_generate
+    from sketchloop.ui import build_app, can_generate, pick_rotation
 
     def refuse_launch(*args: object, **kwargs: object) -> None:
         """
@@ -303,3 +303,7 @@ def test_ui_builds_offline(controller: AppController, monkeypatch: pytest.Monkey
     readiness = [can_generate("webcam", True, None, "chair"), can_generate("upload", True, None, "chair"),
                  can_generate("webcam", True, None, "  "), can_generate("upload", False, "b.png", "chair")]
     assert readiness == [True, False, False, True], f"Unexpected Generate readiness {readiness}"
+
+    # The raw sketch always gets rotation 0, which the controller accepts, while each source keeps its default otherwise.
+    rotations = [pick_rotation("webcam", False), pick_rotation("upload", False), pick_rotation("webcam", True)]
+    assert rotations == [180, 0, 0], f"Unexpected rotations {rotations}"

@@ -99,6 +99,13 @@ def can_generate(choice: str, has_webcam_frame: bool, upload_path: str | None, p
     return has_sketch and bool((prompt_text or "").strip())
 
 
+def pick_rotation(choice: str, use_raw: bool) -> int:
+    """
+    Pick the rotation the page offers, 0 for the raw sketch, which skips preprocessing and so cannot be turned.
+    """
+    return 0 if use_raw else DEFAULT_ROTATION_BY_SOURCE[choice]
+
+
 def build_history_table(rows: Sequence[HistoryRow]) -> list[list[object]]:
     """
     Turn history rows into table rows, showing a missing prompt as not recorded.
@@ -149,7 +156,7 @@ def build_app(controller: AppController, *, default_candidates: int, default_see
                     seed = gr.Number(label="Seed (blank for random)", value=default_seed, precision=0, minimum=0)
                     rotation = gr.Dropdown(choices=ROTATION_CHOICES, value=DEFAULT_ROTATION_BY_SOURCE["webcam"],
                                            label="Rotation (degrees clockwise)")
-                    raw = gr.Checkbox(label="Use the raw sketch (skip preprocessing)")
+                    raw = gr.Checkbox(label="Use the raw sketch (skip preprocessing and rotation)")
 
         # Step 3: the status, the candidates beside the sketch the model received, and the explicit choice.
         with gr.Column(elem_classes="card"):
@@ -169,8 +176,12 @@ def build_app(controller: AppController, *, default_candidates: int, default_see
             history = gr.Dataframe(headers=HISTORY_HEADERS, interactive=False, show_label=False)
         round_state = gr.State(None)
 
-        def toggle_source(choice: str) -> tuple[gr.Image, gr.Image, int]:
-            return gr.Image(visible=choice == "webcam"), gr.Image(visible=choice == "upload"), DEFAULT_ROTATION_BY_SOURCE[choice]
+        def toggle_source(choice: str, use_raw: bool) -> tuple[gr.Image, gr.Image, gr.Dropdown]:
+            rotation_choice = gr.Dropdown(value=pick_rotation(choice, use_raw), interactive=not use_raw)
+            return gr.Image(visible=choice == "webcam"), gr.Image(visible=choice == "upload"), rotation_choice
+
+        def toggle_raw(use_raw: bool, choice: str) -> gr.Dropdown:
+            return gr.Dropdown(value=pick_rotation(choice, use_raw), interactive=not use_raw)
 
         def keep_frame(frame: np.ndarray | None, choice: str, upload_path: str | None, prompt_text: str | None) -> gr.Button:
             # Keep only the newest frame, converted from the browser's RGB to OpenCV's BGR order.
@@ -216,8 +227,10 @@ def build_app(controller: AppController, *, default_candidates: int, default_see
         def show_history() -> list[list[object]]:
             return build_history_table(controller.list_history())
 
-        # Switch the visible input and its default rotation, and keep the newest webcam frame at the chosen interval.
-        source.change(toggle_source, source, [webcam, upload, rotation])
+        # Switch the visible input and its default rotation, lock rotation at 0 for the raw sketch, and keep the newest
+        # webcam frame at the chosen interval.
+        source.change(toggle_source, [source, raw], [webcam, upload, rotation])
+        raw.change(toggle_raw, [raw, source], [rotation])
         rotation.change(None, rotation, None, js=ROTATE_PREVIEW_JS)
         webcam.stream(keep_frame, [webcam, source, upload, prompt], [generate], stream_every=capture_interval_seconds,
                       show_progress="hidden", time_limit=None)
