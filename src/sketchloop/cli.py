@@ -19,8 +19,8 @@ from sketchloop.components import (NO_RUN_SKETCH_MESSAGE, check_component_names,
 from sketchloop.domain import (Guidance, ImageRef, Iteration, SelectionEvent, SketchLoopError, SketchSource,
                                record_no_selection, select_candidates)
 from sketchloop.experiments import (SESSION_FILE, ExperimentRecordError, ExperimentStore, RerunComparison, RerunLink,
-                                    RoundRecord, SavedSession, StoreError, compare_rounds, format_value, load_session,
-                                    rebuild_request)
+                                    RoundRecord, RoundStage, RoundStatus, SavedSession, StoreError, compare_rounds,
+                                    format_value, load_session, rebuild_request)
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import ROTATE_CODES, PreprocessedSketch
 from sketchloop.session import RoundOutcome, SketchSession
@@ -347,7 +347,7 @@ def show_round(outcome: RoundOutcome, console: Console) -> None:
     console.print(f"Raw sketch: {(outcome.folder / outcome.raw_sketch.path).as_posix()}", markup=False, soft_wrap=True)
     console.print(f"Generation sketch: {(outcome.folder / sketch.path).as_posix()}", markup=False, soft_wrap=True)
     console.print(f"Preprocessing: {', '.join(step.name for step in outcome.steps) or 'skipped'}", soft_wrap=True)
-    console.print(f"Generation time: {outcome.timings_seconds['generation']:.1f} s")
+    console.print(f"Generation time: {outcome.timings_seconds[RoundStage.GENERATION]:.1f} s")
 
     # Warn clearly when the images are not from a real model.
     if outcome.iteration.result.backend.is_fake:
@@ -666,7 +666,7 @@ def find_rerunnable_round(saved: SavedSession, round_number: int) -> RoundRecord
     Returns:
         RoundRecord: The round.
     """
-    completed = [record.number for record in saved.rounds if record.status == "complete"]
+    completed = [record.number for record in saved.rounds if record.status == RoundStatus.COMPLETE]
     if round_number not in completed:
         listed = ", ".join(str(number) for number in completed) or "none"
         session_id = saved.session.session_id

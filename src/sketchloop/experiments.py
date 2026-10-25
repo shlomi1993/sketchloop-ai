@@ -10,10 +10,11 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from enum import StrEnum
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias, TypeVar
+from typing import Final, TypeVar
 
 from sketchloop.domain import (SCHEMA_VERSION, BackendIdentity, Candidate, ControlValue, EffectiveSettings,
                                GenerationRequest, GenerationResult, Guidance, ImageRef, Iteration, SelectionEvent,
@@ -48,9 +49,25 @@ TRACKED_PACKAGES: Final = (
     "huggingface_hub",
 )
 
-FailureStage: TypeAlias = Literal["preprocessing", "generation", "evaluation", "saving"]
-RoundStatus: TypeAlias = Literal["complete", "failed"]
 RecordT = TypeVar("RecordT")
+
+
+class RoundStage(StrEnum):
+    """
+    A timed stage of a round, recorded as a stage timing and as the stage a failure happened in.
+    """
+    PREPROCESSING = "preprocessing"
+    GENERATION = "generation"
+    EVALUATION = "evaluation"
+    SAVING = "saving"
+
+
+class RoundStatus(StrEnum):
+    """
+    Whether a round produced candidates or failed.
+    """
+    COMPLETE = "complete"
+    FAILED = "failed"
 
 
 class ExperimentRecordError(SketchLoopError, ValueError):
@@ -109,9 +126,14 @@ class RoundFailure:
     """
     Where and how a round failed.
     """
-    stage: FailureStage  # Stage that raised the error
+    stage: RoundStage  # Stage that raised the error
     error: str  # Error class name
     message: str  # First line of the error message
+
+    def __post_init__(self) -> None:
+        # Hold a known stage as the enum, so a stage loaded from JSON text matches a recorded one.
+        require(self.stage in list(RoundStage), f"Failure stage must be one of {', '.join(RoundStage)}, got {self.stage!r}.")
+        object.__setattr__(self, "stage", RoundStage(self.stage))
 
 
 def require_known_source(source: object) -> None:
@@ -147,7 +169,9 @@ class RoundRecord:
     def __post_init__(self) -> None:
         # A complete round has an iteration built from its request, and a failed one has only the failure.
         complete = self.iteration is not None and self.failure is None
-        require((self.status == "complete") == complete, "Round status must be complete exactly when it has a result.")
+        require(self.status in list(RoundStatus), f"Round status must be complete or failed, got {self.status!r}.")
+        object.__setattr__(self, "status", RoundStatus(self.status))
+        require((self.status == RoundStatus.COMPLETE) == complete, "Round status must be complete exactly when it has a result.")
         require(not complete or self.request is self.iteration.request, "A complete round's request must be its iteration's.")
         require(self.started_at.utcoffset() is not None, "Round started_at must be timezone-aware.")
         require_known_source(self.source)
@@ -219,7 +243,7 @@ def redact_paths(text: str) -> str:
     return ABSOLUTE_PATH_PATTERN.sub("<path>", text)
 
 
-def describe_failure(stage: FailureStage, error: BaseException) -> RoundFailure:
+def describe_failure(stage: RoundStage, error: BaseException) -> RoundFailure:
     """
     Summarize an exception as a round failure with its class name and the first line of its message, paths redacted.
     """

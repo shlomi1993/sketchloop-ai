@@ -10,8 +10,8 @@ from pathlib import Path
 from sketchloop.domain import (SCHEMA_VERSION, GenerationRequest, Guidance, ImageRef, InvalidSelectionError, Iteration,
                                SelectionEvent, SketchSource, Unavailable)
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
-from sketchloop.experiments import (ExperimentStore, FailureStage, RerunLink, RoundRecord, SessionRecord, StoreError,
-                                    collect_environment, describe_failure, require_known_source)
+from sketchloop.experiments import (ExperimentStore, RerunLink, RoundRecord, RoundStage, RoundStatus, SessionRecord,
+                                    StoreError, collect_environment, describe_failure, require_known_source)
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor, StrokePreprocessor
 
@@ -81,7 +81,7 @@ class SketchSession:
         # Preprocess and time it.
         started = time.perf_counter()
         processed = self.preprocessor.preprocess(raw_payload, rotation)
-        timings["preprocessing"] = time.perf_counter() - started
+        timings[RoundStage.PREPROCESSING] = time.perf_counter() - started
         return processed.image, processed.payload, processed.steps
 
     def run_round(self, raw_sketch: ImageRef, raw_payload: bytes, guidance: Guidance, *, source: SketchSource | Unavailable,
@@ -115,7 +115,7 @@ class SketchSession:
         draft = partial(RoundRecord, schema_version=SCHEMA_VERSION, number=number, started_at=datetime.now(timezone.utc),
                         raw_sketch=raw_sketch, source=source, use_raw=use_raw, rotation=rotation)
         timings: dict[str, float] = {}
-        stage: FailureStage = "preprocessing"
+        stage = RoundStage.PREPROCESSING
         steps: tuple[PreprocessingStep, ...] = ()
         request = None
 
@@ -124,30 +124,31 @@ class SketchSession:
             sketch, sketch_payload, steps = self._prepare_sketch(raw_sketch, raw_payload, rotation, use_raw, reuse, timings)
 
             # Generate and time the call, which includes the model load in the first round, then link to the previous round.
-            stage = "generation"
+            stage = RoundStage.GENERATION
             request = GenerationRequest(sketch=sketch, guidance=guidance, n_candidates=n_candidates, seed=seed)
             started = time.perf_counter()
             output = self.generator.generate(request, sketch_payload)
-            timings["generation"] = time.perf_counter() - started
+            timings[RoundStage.GENERATION] = time.perf_counter() - started
             parent_id = self.rounds[-1].iteration.id if self.rounds else None
             iteration = Iteration(parent_id=parent_id, request=request, result=output.result)
 
             # Score separately from generation and selection, and check the scores by building the record.
-            stage = "evaluation"
+            stage = RoundStage.EVALUATION
             started = time.perf_counter()
             scores = self.evaluator.evaluate(output.result.candidates, output.payloads, request)
-            timings["evaluation"] = time.perf_counter() - started
-            record = draft(status="complete", steps=steps, request=request, iteration=iteration, timings_seconds=timings,
-                           evaluator=type(self.evaluator).__name__, scores=scores, selection=None, failure=None)
+            timings[RoundStage.EVALUATION] = time.perf_counter() - started
+            record = draft(status=RoundStatus.COMPLETE, steps=steps, request=request, iteration=iteration,
+                           timings_seconds=timings, evaluator=type(self.evaluator).__name__, scores=scores, selection=None,
+                           failure=None)
 
             # Store the raw and processed sketches and the candidates, then the record without a selection.
-            stage = "saving"
+            stage = RoundStage.SAVING
             files = {raw_sketch.path: raw_payload, sketch.path: sketch_payload} | dict(output.payloads)
             self.store.save_round(self.session_id, record, files)
         except Exception as error:
             # Keep a failed record in the history even when it cannot be saved, so the attempt stays visible.
             sketches = {raw_sketch.path: raw_payload} | ({request.sketch.path: sketch_payload} if request else {})
-            failed = draft(status="failed", steps=steps, request=request, iteration=None, timings_seconds=timings,
+            failed = draft(status=RoundStatus.FAILED, steps=steps, request=request, iteration=None, timings_seconds=timings,
                            evaluator=None, scores={}, selection=None, failure=describe_failure(stage, error))
             self.records.append(failed)
 

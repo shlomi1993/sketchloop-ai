@@ -10,7 +10,7 @@ from sketchloop.domain import (
     Guidance, InvalidSelectionError, Iteration, SelectionEvent, SketchLoopError, SketchSource, record_no_selection,
     select_candidates)
 from sketchloop.evaluation import Evaluator
-from sketchloop.experiments import ExperimentStore, RoundRecord, RoundStatus
+from sketchloop.experiments import ExperimentStore, RoundRecord, RoundStage, RoundStatus
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import ROTATE_CODES, Preprocessor
 from sketchloop.session import RoundOutcome, SketchSession
@@ -91,7 +91,7 @@ def build_round_view(outcome: RoundOutcome, selections: Mapping[str, SelectionEv
                        for candidate in iteration.result.candidates)
     selection = selections.get(iteration.id)
     return RoundView(number=outcome.number, iteration_id=iteration.id, sketch_path=outcome.folder / iteration.request.sketch.path,
-                     candidates=candidates, is_fake=is_fake, generation_seconds=outcome.timings_seconds["generation"],
+                     candidates=candidates, is_fake=is_fake, generation_seconds=outcome.timings_seconds[RoundStage.GENERATION],
                      selection=None if selection is None else describe_selection(iteration, selection))
 
 
