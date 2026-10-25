@@ -1,6 +1,6 @@
 # Architecture guidance
 
-Status: proposed design for implementation, except the minimal Python scaffold established by ADR 0001. These choices implement the proposal; they are not additional requirements from it.
+Status: implemented through T07, with the decisions recorded in the ADRs linked below. These choices implement the proposal and are not additional requirements from it.
 
 ## Boundaries
 
@@ -44,9 +44,9 @@ Create modules when their first vertical slice needs them; empty directory trees
 
 Use typed records and small abstract base classes that each implementation subclasses ([ADR 0015](decisions/0015-abstract-base-classes-for-components.md)). The interfaces below were first written as protocols. Prefer plain serializable metadata with schema versions.
 
-T01a (accepted, not implemented) defines `sketchloop.domain`, `sketchloop.generation`, and a labelled fake in `sketchloop.fakes`, now `sketchloop.backends.fake`. See [the T01a design](design/t01a-contracts.md) and [ADR 0005](decisions/0005-domain-records-and-generator-contract.md). Records reference images through `ImageRef`, and bytes stay in transient generation output. `Generator.capabilities` declares supported controls, `validate_request` reports every unsupported setting, and `generate(request, sketch_payload)` returns candidates with adapter-reported effective settings and backend identity. [ADR 0009](decisions/0009-diffusers-backend.md) added the sketch bytes. Selection is an explicit event limited to the iteration's candidates. Iteration status, failures, and retries are deferred to T05.
+T01a, implemented, defines `sketchloop.domain`, `sketchloop.generation`, and a labelled fake in `sketchloop.fakes`, now `sketchloop.backends.fake`. See [the T01a design](design/t01a-contracts.md) and [ADR 0005](decisions/0005-domain-records-and-generator-contract.md). Records reference images through `ImageRef`, and bytes stay in transient generation output. `Generator.capabilities` declares supported controls, `validate_request` reports every unsupported setting, and `generate(request, sketch_payload)` returns candidates with adapter-reported effective settings and backend identity. [ADR 0009](decisions/0009-diffusers-backend.md) added the sketch bytes. Selection is an explicit event limited to the iteration's candidates. T05 added iteration status and failure records.
 
-Later contracts, still proposals:
+Later contracts, each first proposed here and now implemented as noted:
 
 - `CaptureSource.capture()` returns a captured image and metadata (T02). T02 implemented this as the functions `load_sketch_file` and `capture_from_camera`. [The T07 design](design/t07-modularity.md), implemented in T07, adds a `CaptureSource` protocol with `kind` and `capture()`, implemented by `FileCapture` and `CameraCapture` ([ADR 0014](decisions/0014-replaceable-components-and-settings.md)).
 - `Preprocessor.process(capture, config)` returns processed image(s) and ordered transformation metadata (T02). T02 implemented this as the function `preprocess_sketch`. T07 adds a `Preprocessor` protocol with `preprocess(payload, rotation)`, implemented by `StrokePreprocessor` and injected into `SketchSession`.
@@ -60,7 +60,7 @@ Define failure types for capture unavailable, invalid image, unsupported configu
 
 Start locally, with one user and manual triggering. A filesystem artifact store with versioned JSON metadata is a candidate baseline, not a committed schema. An external tracker can be added behind the store interface if justified. Do not require MLflow merely because it appears in the references.
 
-OpenCV, Diffusers, and Gradio are candidates for capture/processing, generation, and a thin local UI respectively. Evaluate them against actual camera, operating system, memory, accelerator, model license, and interaction requirements before adoption. No such dependency is installed in this scaffold. Record decisions and compatible dependency versions in ADRs.
+OpenCV, Diffusers, and Gradio were adopted for capture and processing, generation, and the local UI ([ADR 0008](decisions/0008-opencv-for-image-input.md), [ADR 0009](decisions/0009-diffusers-backend.md), [ADR 0012](decisions/0012-gradio-ui-and-input-source.md)), and [ADR 0013](decisions/0013-default-dependencies.md) records how they are installed. Record further dependency decisions and compatible versions in ADRs.
 
 The first model decision must cover sketch conditioning, visual quality, supported guidance, memory/latency, local versus remote execution, availability/version pinning, license, and replay limits. Known hardware: a Windows laptop without a GPU, a laptop or USB webcam, and possibly a GPU or Colab later. Keep the generator interface usable both in-process and against a remote runtime such as Colab. Do not choose a paid provider on behalf of the researcher. Contracts, synthetic fixtures, and offline orchestration can proceed while this remains open.
 
