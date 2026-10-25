@@ -10,8 +10,8 @@ from pathlib import Path
 from sketchloop.domain import (SCHEMA_VERSION, GenerationRequest, Guidance, ImageRef, InvalidSelectionError, Iteration,
                                SelectionEvent, SketchSource, Unavailable)
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
-from sketchloop.experiments import (ExperimentStore, FailureStage, RerunLink, RoundRecord, SessionRecord, collect_environment,
-                                    describe_failure, require_known_source)
+from sketchloop.experiments import (ExperimentStore, FailureStage, RerunLink, RoundRecord, SessionRecord, StoreError,
+                                    collect_environment, describe_failure, require_known_source)
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor, StrokePreprocessor
 
@@ -140,12 +140,17 @@ class SketchSession:
             record = draft(status="complete", steps=steps, request=request, iteration=iteration, timings_seconds=timings,
                            evaluator=type(self.evaluator).__name__, scores=scores, selection=None, failure=None)
         except Exception as error:
-            # Keep the sketches made so far and a failed record, so the attempt stays visible, then let the caller report it.
+            # Keep a failed record in the history even when it cannot be saved, so the attempt stays visible.
             sketches = {raw_sketch.path: raw_payload} | ({request.sketch.path: sketch_payload} if request else {})
             failed = draft(status="failed", steps=steps, request=request, iteration=None, timings_seconds=timings,
                            evaluator=None, scores={}, selection=None, failure=describe_failure(stage, error))
-            self.store.save_round(self.session_id, failed, sketches)
             self.records.append(failed)
+
+            # Save the failed record and the sketches made so far, keeping the stage's own error if that save fails too.
+            try:
+                self.store.save_round(self.session_id, failed, sketches)
+            except StoreError as store_error:
+                error.add_note(f"The failed round was not saved either: {store_error}")
             raise
 
         # Store the raw and processed sketches and the candidates, then the record without a selection.

@@ -226,6 +226,15 @@ def test_session_runs_with_substituted_components(tmp_path: Path, constant_evalu
     with pytest.raises(UnsupportedConfigurationError):
         session.run_round(raw_sketch, raw_payload, Guidance(prompt="vase"), source=camera.kind, n_candidates=99)
 
+    # A failure whose record cannot be saved still raises its own error rather than the save error.
+    store.armed = {"save_round"}
+    with pytest.raises(UnsupportedConfigurationError):
+        session.run_round(raw_sketch, raw_payload, Guidance(prompt="vase"), source=camera.kind, n_candidates=99)
+
+    # The session history lists every failed attempt, including round 5, whose failed record was not saved.
+    history = [(record.number, record.status) for record in session.records]
+    assert history == [(1, "complete"), (3, "complete"), (4, "failed"), (5, "failed")], f"Bad history {history}"
+
     session_id = session.session_id
     records = {number: record for (stored_id, number), record in store.rounds.items() if stored_id == session_id}
     files_by_round = {number: sorted(path for stored_id, file_round, path in store.files if file_round == number)
