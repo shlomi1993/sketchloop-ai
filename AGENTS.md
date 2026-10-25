@@ -109,7 +109,7 @@ Run the checks and review the full diff before committing. Ignoring a file does 
 ## Commits
 
 - Run the check script as its own command and read a passing result before any commit or push. Never pipe it through `tail` or chain it into `git commit`, because the pipe's exit code hides a failure.
-- Before committing, show the owner the commit sequence, each message with its files, and wait for a fresh approval, even if a plan was approved earlier.
+- Before committing, show the owner the commit sequence as a numbered list of commit messages, each with a nested list of its files, and wait for a fresh approval, even if a plan was approved earlier. After approval, make the commits one by one, then ask for a separate approval before pushing.
 - Write each commit message as one sentence, with no body and no co-author or other attribution trailer.
 
 ## Definition of done
