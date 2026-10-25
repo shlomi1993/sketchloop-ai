@@ -284,7 +284,7 @@ def test_ui_builds_offline(controller: AppController, monkeypatch: pytest.Monkey
     """
     import gradio
 
-    from sketchloop.ui import build_app, can_generate, pick_rotation
+    from sketchloop import ui
 
     def refuse_launch(*args: object, **kwargs: object) -> None:
         """
@@ -293,17 +293,23 @@ def test_ui_builds_offline(controller: AppController, monkeypatch: pytest.Monkey
         raise AssertionError("build_app must not launch the app")
 
     monkeypatch.setattr(gradio.Blocks, "launch", refuse_launch)
-    app = build_app(controller, default_candidates=2, default_seed=None)
+    app = ui.build_app(controller, default_candidates=2, default_seed=None)
 
     # The app is a Gradio Blocks object with analytics disabled.
     assert isinstance(app, gradio.Blocks), f"Expected gr.Blocks, got {type(app)}"
     assert app.analytics_enabled is False, "The UI must be built with analytics disabled"
 
     # Generate is enabled only when the chosen source has a sketch and the prompt is not blank.
-    readiness = [can_generate("webcam", True, None, "chair"), can_generate("upload", True, None, "chair"),
-                 can_generate("webcam", True, None, "  "), can_generate("upload", False, "b.png", "chair")]
+    readiness = [ui.can_generate("webcam", True, None, "chair"), ui.can_generate("upload", True, None, "chair"),
+                 ui.can_generate("webcam", True, None, "  "), ui.can_generate("upload", False, "b.png", "chair")]
     assert readiness == [True, False, False, True], f"Unexpected Generate readiness {readiness}"
 
     # The raw sketch always gets rotation 0, which the controller accepts, while each source keeps its default otherwise.
-    rotations = [pick_rotation("webcam", False), pick_rotation("upload", False), pick_rotation("webcam", True)]
+    rotations = [ui.pick_rotation("webcam", False), ui.pick_rotation("upload", False), ui.pick_rotation("webcam", True)]
     assert rotations == [180, 0, 0], f"Unexpected rotations {rotations}"
+
+    # The stylesheet exists, and the script defines every helper the events call.
+    script = ui.SCRIPT_PATH.read_text(encoding="utf-8")
+    called = re.findall(r"window\.sketchloop\.(\w+)", ui.OPEN_WEBCAM_JS + ui.ROTATE_PREVIEW_JS)
+    missing = [name for name in called if f"{name}(" not in script]
+    assert ui.STYLESHEET_PATH.is_file() and called and not missing, f"Script helpers missing: {missing}"

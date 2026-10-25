@@ -18,15 +18,14 @@ PROMPT_PLACEHOLDER: Final = "Describe the style, for example: a sculptural oak l
 # A webcam facing the person drawing sees the paper upside down, so webcam sketches turn 180 degrees by default.
 DEFAULT_ROTATION_BY_SOURCE: Final = {"webcam": 180, "upload": 0}
 
-# Gradio has no option to start the webcam, so the page presses its access control and then starts the frame stream.
-OPEN_WEBCAM_JS: Final = """() => {
-    const press = (selector) => {
-        const element = document.querySelector(selector);
-        (element?.closest("button") ?? element)?.click();
-    };
-    setTimeout(() => press('[title="grant webcam access"] button'), 500);
-    setTimeout(() => press('[title="start recording"]'), 2000);
-}"""
+# The page's stylesheet and script, kept as real files next to this module and shipped as package data.
+STATIC_DIR: Final = Path(__file__).parent / "static"
+STYLESHEET_PATH: Final = STATIC_DIR / "ui.css"
+SCRIPT_PATH: Final = STATIC_DIR / "ui.js"
+
+# Events call the helpers that ui.js defines on window.sketchloop.
+OPEN_WEBCAM_JS: Final = "() => window.sketchloop.openWebcam()"
+ROTATE_PREVIEW_JS: Final = "(degrees) => window.sketchloop.rotatePreview(degrees)"
 
 # Status lines guide the person through each step.
 NO_ROUNDS_STATUS: Final = "Draw on paper, point the webcam at it, describe the style, and press **Generate**."
@@ -37,22 +36,6 @@ SHARED_SESSION_NOTE: Final = "All browser tabs share one session, and reloading 
 
 # A calm, neutral look with one accent color, so the sketches and candidates stand out.
 THEME: Final = gr.themes.Default(primary_hue="indigo", neutral_hue="slate", radius_size="lg")
-CSS: Final = """
-.gradio-container { max-width: 1280px !important; margin: auto; }
-#header h1 { font-size: 2.2rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0; }
-#header p { color: var(--body-text-color-subdued); margin-top: 0.25rem; }
-.step-title h3 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-accent); margin: 0; }
-.card { background: var(--block-background-fill); border: 1px solid var(--border-color-primary); }
-.card { border-radius: 16px; padding: 16px; }
-#generate { min-height: 56px; font-size: 1.1rem; }
-#status { padding: 12px 16px; border-radius: 12px; background: var(--background-fill-secondary); }
-#webcam video { transform: rotate(var(--sketch-rotation, 180deg)); transition: transform 0.2s ease; }
-"""
-
-# Turn only the live preview by the chosen rotation, while the saved frame stays as captured and preprocessing turns it.
-ROTATE_PREVIEW_JS: Final = """(degrees) => {
-    document.querySelector("#webcam")?.style.setProperty("--sketch-rotation", `${degrees || 0}deg`);
-}"""
 
 # Outputs that show a round: gallery, generation sketch, candidate picks, displayed iteration ID, and status.
 RoundOutputs: TypeAlias = tuple[list[tuple[str, str]], str | None, gr.CheckboxGroup, str | None, str]
@@ -261,7 +244,7 @@ def build_app(controller: AppController, *, default_candidates: int, default_see
 def launch_app(controller: AppController, *, default_candidates: int, default_seed: int | None,
                capture_interval_seconds: float = 0.5) -> None:
     """
-    Serve the page on this machine only, with no share link, the theme, and access limited to the runs folder.
+    Serve the page on this machine only, with no share link, the theme, CSS, and script, and access limited to the runs folder.
 
     Args:
         controller (AppController): Service holding the generator and the session.
@@ -271,5 +254,6 @@ def launch_app(controller: AppController, *, default_candidates: int, default_se
     """
     app = build_app(controller, default_candidates=default_candidates, default_seed=default_seed,
                     capture_interval_seconds=capture_interval_seconds)
-    app.launch(server_name="127.0.0.1", share=False, ssr_mode=False, inbrowser=True, theme=THEME, css=CSS,
-               allowed_paths=[str(controller.runs_dir.resolve())], max_file_size="20mb", show_error=False)
+    head = f"<script>{SCRIPT_PATH.read_text(encoding='utf-8')}</script>"
+    app.launch(server_name="127.0.0.1", share=False, ssr_mode=False, inbrowser=True, theme=THEME, css_paths=[STYLESHEET_PATH],
+               head=head, allowed_paths=[str(controller.runs_dir.resolve())], max_file_size="20mb", show_error=False)

@@ -40,6 +40,9 @@ markers = ["model: runs a real generative model, needs downloaded weights"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+sketchloop = ["static/*.css", "static/*.js"]
+
 [tool.ruff]
 line-length = 130
 

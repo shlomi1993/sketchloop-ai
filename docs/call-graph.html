@@ -383,7 +383,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
       <table>
         <thead><tr><th>Module</th><th>Job</th><th>Called by</th></tr></thead>
         <tbody>
-          <tr><td>ui.py</td><td>Gradio page: webcam or upload, prompt, Generate, gallery, choice, history</td><td>cli.launch_ui</td></tr>
+          <tr><td>ui.py</td><td>Gradio page: webcam or upload, prompt, Generate, gallery, choice, history, with its CSS and script in <code>static/</code></td><td>cli.launch_ui</td></tr>
           <tr><td>app.py</td><td><code>AppController</code>: input checks, view building, stale-page protection</td><td>ui.py</td></tr>
           <tr><td>session.py</td><td><code>SketchSession</code>: runs and times stages, links rounds, records failures</td><td>app.py, cli.py run and rerun</td></tr>
           <tr><td>capture.py</td><td>Load PNG or JPEG files, encode frames, OpenCV camera capture</td><td>app.py, cli.py, components.py</td></tr>
