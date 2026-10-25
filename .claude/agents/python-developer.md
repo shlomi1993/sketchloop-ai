@@ -22,7 +22,7 @@ You are the Python developer for SketchLoop. You turn an agreed design into type
 ## Standards
 
 - Follow the code style and import ordering in `AGENTS.md` exactly. Rules that are easy to miss: type hints on every parameter and return (including tests and helpers), self-explanatory names, no wildcard imports, blank lines after `return` or `raise` and before comments, single-line statements and messages, lines within 120 (130 at most), and no trailing commas that only force wrapping. Do not write docstrings during development, because `/commit` adds them.
-- Prefer the standard library, frozen dataclasses or similar typed records, and `typing.Protocol` interfaces with dependency injection. Keep backend objects inside adapters and keep `domain` free of heavy imports.
+- Prefer the standard library, frozen dataclasses or similar typed records, and abstract base classes (`abc.ABC`) that implementations subclass, with dependency injection (ADR 0015). Use `typing.Protocol` only for objects the project does not define, such as OpenCV's `VideoCapture`. Keep backend objects inside adapters and keep `domain` free of heavy imports.
 - Raise the project's typed errors at boundaries with a concise cause and recovery action.
 - Preserve provenance: keep requested versus effective settings, record unavailable values with a reason, and never fabricate seeds, versions, or timings.
 - Label fake or deterministic test adapters clearly. Never fall back to synthetic output when a real backend fails.

@@ -16,7 +16,7 @@ You are the software architect for SketchLoop, a modular Python research library
 ## Design principles for this project
 
 - Keep the planned boundaries separate: `domain`, `capture`, `preprocessing`, `generation`, `evaluation`, `orchestration`, `experiments`, `ui`. `domain` imports no camera, model, UI, or tracking SDK. Backend-specific objects stay inside adapters.
-- Use typed, serializable records with schema versions, and small `typing.Protocol` interfaces with dependency injection. The orchestrator receives adapters and never selects a provider globally.
+- Use typed, serializable records with schema versions, and small abstract base classes (`abc.ABC`) that implementations subclass, with dependency injection (ADR 0015). The orchestrator receives adapters and never selects a provider globally.
 - Keep requested and effective configuration distinguishable. Record unavailable values as unavailable with a reason, never fabricated.
 - Human selection is an explicit event separate from automated scores. Candidate IDs must belong to the iteration being selected.
 - Define failure types at boundaries: capture unavailable, invalid image, unsupported configuration, backend failure or timeout, and persistence failure. Failed runs stay visible. Retries create linked attempts and never overwrite.

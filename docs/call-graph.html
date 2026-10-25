@@ -95,7 +95,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
     <div class="eyebrow">sketchloop-ai · state after T07</div>
     <h1>How the browser page reaches the model and the disk</h1>
     <p class="lede">SketchLoop turns a pencil sketch on paper into AI alternatives. A webcam sees the paper, Stable Diffusion 1.5 with ControlNet scribble draws candidates in the prompt's style, the person explicitly picks some, and every round is saved so it can be shown and rerun later.</p>
-    <p>The code is layered so that each layer only calls the one below it. The browser page talks to <code>AppController</code>, which owns one <code>SketchSession</code>. The session runs each round through four replaceable protocols. A settings file decides which implementation sits behind each protocol.</p>
+    <p>The code is layered so that each layer only calls the one below it. The browser page talks to <code>AppController</code>, which owns one <code>SketchSession</code>. The session runs each round through four replaceable abstract base classes. A settings file decides which subclass sits behind each one.</p>
   </header>
 
   <section>
@@ -163,7 +163,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
     <h2>2 · Runtime: who calls whom, from the page down to disk</h2>
     <figure>
       <div class="scroll">
-        <svg class="d" viewBox="0 0 1100 880" role="img" aria-label="Call graph. Browser events call handlers in ui.py, which call AppController methods, which call SketchSession. SketchSession.run_round calls, in order, the Preprocessor, Generator, Evaluator and ExperimentStore protocols, implemented by StrokePreprocessor, FakeGenerator or DiffusersSketchGenerator, NoOpEvaluator, and MemoryStore or FolderStore. FolderStore writes run folders and the diffusers backend reads model weights.">
+        <svg class="d" viewBox="0 0 1100 880" role="img" aria-label="Call graph. Browser events call handlers in ui.py, which call AppController methods, which call SketchSession. SketchSession.run_round calls, in order, the Preprocessor, Generator, Evaluator and ExperimentStore base classes, subclassed by StrokePreprocessor, FakeGenerator or DiffusersSketchGenerator, NoOpEvaluator, and MemoryStore or FolderStore. FolderStore writes run folders and the diffusers backend reads model weights.">
           <defs>
             <marker id="m-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
             <marker id="m-ahh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahh"/></marker>
@@ -188,7 +188,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <text class="l" x="20" y="432">session.py</text>
           <text class="ls" x="20" y="448">SketchSession</text>
           <text class="ls" x="20" y="464">orchestrates rounds</text>
-          <text class="l" x="20" y="572">Protocols</text>
+          <text class="l" x="20" y="572">Base classes</text>
           <text class="ls" x="20" y="588">replaceable seams</text>
           <text class="l" x="20" y="680">Implementations</text>
           <text class="ls" x="20" y="696">picked by settings</text>
@@ -295,7 +295,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <path class="edge" d="M660,472 V500 H1040 V558" marker-end="url(#m-ah)"/>
           <text class="t" x="850" y="497" text-anchor="middle">save_round again, with the selection</text>
 
-          <!-- Row E: protocols -->
+          <!-- Row E: base classes -->
           <rect class="proto" x="240" y="560" width="195" height="52" rx="6"/>
           <text class="n" x="337.5" y="582" text-anchor="middle">Preprocessor</text>
           <text class="s" x="337.5" y="600" text-anchor="middle">preprocessing.py</text>
@@ -357,10 +357,10 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
       </div>
       <div class="legend">
         <span><i class="sw"></i>Path of one Generate click</span>
-        <span><i class="sw dash"></i>Implements the protocol above it</span>
-        <span><i class="sw box"></i>Protocol, swappable through settings</span>
+        <span><i class="sw dash"></i>Subclasses the base class above it</span>
+        <span><i class="sw box"></i>Abstract base class, swappable through settings</span>
       </div>
-      <figcaption>Each layer calls only the layer below it. The page never touches the model or the files, <code>AppController</code> never imports Gradio, and <code>SketchSession</code> knows only the four protocols. After Generate and Record, Gradio also runs <code>show_history</code>, which calls <code>list_history</code>.</figcaption>
+      <figcaption>Each layer calls only the layer below it. The page never touches the model or the files, <code>AppController</code> never imports Gradio, and <code>SketchSession</code> knows only the four base classes. After Generate and Record, Gradio also runs <code>show_history</code>, which calls <code>list_history</code>.</figcaption>
     </figure>
   </section>
 
@@ -387,11 +387,11 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <tr><td>app.py</td><td><code>AppController</code>: input checks, view building, stale-page protection</td><td>ui.py</td></tr>
           <tr><td>session.py</td><td><code>SketchSession</code>: runs and times stages, links rounds, records failures</td><td>app.py, cli.py run and rerun</td></tr>
           <tr><td>capture.py</td><td>Load PNG or JPEG files, encode frames, OpenCV camera capture</td><td>app.py, cli.py, components.py</td></tr>
-          <tr><td>preprocessing.py</td><td><code>Preprocessor</code> protocol and the stroke pipeline with recorded steps</td><td>session.py</td></tr>
-          <tr><td>generation.py</td><td><code>Generator</code> protocol, capabilities, request validation</td><td>both backends, session.py</td></tr>
+          <tr><td>preprocessing.py</td><td><code>Preprocessor</code> base class and the stroke pipeline with recorded steps</td><td>session.py</td></tr>
+          <tr><td>generation.py</td><td><code>Generator</code> base class, capabilities, request validation</td><td>both backends, session.py</td></tr>
           <tr><td>diffusers_backend.py</td><td>Real model: SD 1.5 + ControlNet scribble, fast and quality modes</td><td>backends.make_generator</td></tr>
           <tr><td>fakes.py</td><td>Deterministic labeled fake backend</td><td>backends.make_generator, tests</td></tr>
-          <tr><td>evaluation.py</td><td><code>Evaluator</code> protocol and the no-op scorer</td><td>session.py</td></tr>
+          <tr><td>evaluation.py</td><td><code>Evaluator</code> base class and the no-op scorer</td><td>session.py</td></tr>
           <tr><td>experiments.py</td><td>Records, <code>FolderStore</code>, <code>MemoryStore</code>, loading, checksums, rerun comparison</td><td>session.py, cli.py show and rerun</td></tr>
           <tr><td>domain.py</td><td>Typed records: <code>ImageRef</code>, <code>Guidance</code>, <code>Iteration</code>, <code>SelectionEvent</code>, errors</td><td>everything</td></tr>
           <tr><td>settings.py</td><td>Read <code>sketchloop.toml</code>, apply flag overrides, check types</td><td>cli.py</td></tr>
