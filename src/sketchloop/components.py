@@ -3,8 +3,8 @@ from pathlib import Path
 from typing import Final, TypeAlias
 
 from sketchloop.backends import GenerationBackend
+from sketchloop.backends.diffusers import GenerationMode
 from sketchloop.capture import CameraCapture, CaptureSource, FileCapture
-from sketchloop.diffusers_backend import GenerationMode
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
 from sketchloop.experiments import ExperimentStore, FolderStore
 from sketchloop.preprocessing import Preprocessor, StrokePreprocessor

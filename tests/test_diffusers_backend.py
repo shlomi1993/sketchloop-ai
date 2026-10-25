@@ -6,7 +6,7 @@ import pytest
 from pathlib import Path
 from typing import Any
 
-from sketchloop.diffusers_backend import DiffusersSketchGenerator, GenerationBackendError
+from sketchloop.backends.diffusers import DiffusersSketchGenerator, GenerationBackendError
 from sketchloop.domain import GenerationRequest, Guidance, ImageRef
 from sketchloop.preprocessing import preprocess_sketch
 

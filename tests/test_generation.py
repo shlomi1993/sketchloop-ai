@@ -4,9 +4,9 @@ import pytest
 
 from typing import Any
 
+from sketchloop.backends.fake import FakeGenerator
 from sketchloop.domain import (ControlValue, GenerationRequest, Guidance, ImageRef, InvalidRecordError, InvalidSelectionError,
                                Iteration, Unavailable, UnsupportedConfigurationError, select_candidates)
-from sketchloop.fakes import FakeGenerator
 from sketchloop.generation import ControlSpec, GenerationOutput, GeneratorCapabilities
 
 

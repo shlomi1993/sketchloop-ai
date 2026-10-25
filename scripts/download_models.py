@@ -2,7 +2,7 @@ import argparse
 
 from pathlib import Path
 
-from sketchloop.diffusers_backend import MODEL_SOURCES, first_line
+from sketchloop.backends.diffusers import MODEL_SOURCES, first_line
 from sketchloop.settings import SettingsError, find_settings_file, load_settings
 
 

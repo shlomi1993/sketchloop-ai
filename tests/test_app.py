@@ -14,10 +14,10 @@ from typing import Final
 
 import sketchloop
 from sketchloop.app import NO_SKETCH_MESSAGE, AppController
+from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import InvalidSketchError
 from sketchloop.domain import InvalidSelectionError, SketchLoopError, UnsupportedConfigurationError
 from sketchloop.experiments import FolderStore, load_session
-from sketchloop.fakes import FakeGenerator
 
 
 def write_sketch_png(path: Path, channels: int) -> Path:

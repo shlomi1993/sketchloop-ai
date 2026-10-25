@@ -11,13 +11,13 @@ from pathlib import Path
 
 import sketchloop
 from sketchloop.app import AppController
+from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import CaptureSource, load_sketch_file
 from sketchloop.cli import main
 from sketchloop.components import CAPTURE_SOURCES, EVALUATORS, STORES
 from sketchloop.domain import ImageRef, SketchSource
 from sketchloop.evaluation import Evaluator
 from sketchloop.experiments import FolderStore, RoundRecord, SessionRecord, load_session
-from sketchloop.fakes import FakeGenerator
 from sketchloop.settings import StorageSettings
 
 

@@ -12,10 +12,10 @@ from typing import Final
 
 from sketchloop.app import AppController, describe_selection
 from sketchloop.backends import RERUNNABLE_BACKENDS, GenerationBackend, make_generator
+from sketchloop.backends.diffusers import GenerationMode
 from sketchloop.capture import CaptureSource, load_sketch_file
 from sketchloop.components import (NO_RUN_SKETCH_MESSAGE, check_component_names, make_capture_source, make_evaluator,
                                    make_preprocessor, make_store)
-from sketchloop.diffusers_backend import GenerationMode
 from sketchloop.domain import (Guidance, ImageRef, Iteration, SelectionEvent, SketchLoopError, SketchSource,
                                record_no_selection, select_candidates)
 from sketchloop.experiments import (SESSION_FILE, ExperimentRecordError, ExperimentStore, RerunComparison, RerunLink,

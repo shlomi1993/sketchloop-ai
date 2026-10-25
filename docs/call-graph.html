@@ -389,14 +389,14 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <tr><td>capture.py</td><td>Load PNG or JPEG files, encode frames, OpenCV camera capture</td><td>app.py, cli.py, components.py</td></tr>
           <tr><td>preprocessing.py</td><td><code>Preprocessor</code> base class and the stroke pipeline with recorded steps</td><td>session.py</td></tr>
           <tr><td>generation.py</td><td><code>Generator</code> base class, capabilities, request validation</td><td>both backends, session.py</td></tr>
-          <tr><td>diffusers_backend.py</td><td>Real model: SD 1.5 + ControlNet scribble, fast and quality modes</td><td>backends.make_generator</td></tr>
-          <tr><td>fakes.py</td><td>Deterministic labeled fake backend</td><td>backends.make_generator, tests</td></tr>
+          <tr><td>backends/diffusers.py</td><td>Real model: SD 1.5 + ControlNet scribble, fast and quality modes</td><td>backends.make_generator</td></tr>
+          <tr><td>backends/fake.py</td><td>Deterministic labeled fake backend</td><td>backends.make_generator, tests</td></tr>
           <tr><td>evaluation.py</td><td><code>Evaluator</code> base class and the no-op scorer</td><td>session.py</td></tr>
           <tr><td>experiments.py</td><td>Records, <code>FolderStore</code>, <code>MemoryStore</code>, loading, checksums, rerun comparison</td><td>session.py, cli.py show and rerun</td></tr>
           <tr><td>domain.py</td><td>Typed records: <code>ImageRef</code>, <code>Guidance</code>, <code>Iteration</code>, <code>SelectionEvent</code>, errors</td><td>everything</td></tr>
           <tr><td>settings.py</td><td>Read <code>sketchloop.toml</code>, apply flag overrides, check types</td><td>cli.py</td></tr>
           <tr><td>components.py</td><td>Name registries that build capture, preprocessor, evaluator, store</td><td>cli.py</td></tr>
-          <tr><td>backends.py</td><td><code>make_generator</code> for the fake or diffusers backend</td><td>cli.py</td></tr>
+          <tr><td>backends/__init__.py</td><td><code>make_generator</code> for the fake or diffusers backend</td><td>cli.py</td></tr>
           <tr><td>cli.py</td><td>Subcommands <code>run</code>, <code>show</code>, <code>rerun</code>, <code>ui</code></td><td>the <code>sketchloop</code> command</td></tr>
         </tbody>
       </table>
@@ -406,7 +406,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
   <section>
     <h2>5 · Rules the wiring enforces</h2>
     <ul class="rules">
-      <li>Swapping a component means adding a registry entry in <code>components.py</code> or <code>backends.py</code> and naming it in settings. The session and UI do not change.</li>
+      <li>Swapping a component means adding a registry entry in <code>components.py</code> or <code>backends/__init__.py</code> and naming it in settings. The session and UI do not change.</li>
       <li>Human choice stays explicit. Ticking nothing is recorded as an explicit choice of none, and scores never select anything.</li>
       <li>A failed round stays visible as failed, with the stage it failed in, and never overwrites an earlier round.</li>
       <li>Fake output is labeled on every caption and status line, so it cannot be mistaken for model output.</li>

@@ -30,7 +30,7 @@ The orchestrator records all stage inputs, effective configuration, outputs, err
 | `capture` | Acquire image plus capture metadata | File/synthetic source for tests; real camera adapter for delivery |
 | `preprocessing` | Named, configurable image transformations | Retain input and transformation provenance; no generation calls |
 | `generation` | Capabilities, request validation, candidate generation | Backend-specific objects stay inside adapters |
-| `backends` | Name the available backends and create one, whose `describe()` tells the person what runs | The CLI and UI create backends only through `make_generator` |
+| `backends` | Package holding each backend in its own module (`fake`, `diffusers`), naming the available backends, and creating one, whose `describe()` tells the person what runs | The CLI and UI create backends only through `make_generator` |
 | `components` | Map setting names to capture sources, preprocessors, evaluators, and stores | The CLI and UI build components only through it, while library callers inject objects directly |
 | `settings` | Read the optional `sketchloop.toml` or `--config` file and apply flag overrides | Standard library only; validates shape and types, while `components` checks names |
 | `evaluation` | Optional scoring/filtering of candidates | No hidden human-selection decisions; preserve original candidates |
@@ -44,7 +44,7 @@ Create modules when their first vertical slice needs them; empty directory trees
 
 Use typed records and small abstract base classes that each implementation subclasses ([ADR 0015](decisions/0015-abstract-base-classes-for-components.md)). The interfaces below were first written as protocols. Prefer plain serializable metadata with schema versions.
 
-T01a (accepted, not implemented) defines `sketchloop.domain`, `sketchloop.generation`, and a labelled fake in `sketchloop.fakes`. See [the T01a design](design/t01a-contracts.md) and [ADR 0005](decisions/0005-domain-records-and-generator-contract.md). Records reference images through `ImageRef`, and bytes stay in transient generation output. `Generator.capabilities` declares supported controls, `validate_request` reports every unsupported setting, and `generate(request, sketch_payload)` returns candidates with adapter-reported effective settings and backend identity. [ADR 0009](decisions/0009-diffusers-backend.md) added the sketch bytes. Selection is an explicit event limited to the iteration's candidates. Iteration status, failures, and retries are deferred to T05.
+T01a (accepted, not implemented) defines `sketchloop.domain`, `sketchloop.generation`, and a labelled fake in `sketchloop.fakes`, now `sketchloop.backends.fake`. See [the T01a design](design/t01a-contracts.md) and [ADR 0005](decisions/0005-domain-records-and-generator-contract.md). Records reference images through `ImageRef`, and bytes stay in transient generation output. `Generator.capabilities` declares supported controls, `validate_request` reports every unsupported setting, and `generate(request, sketch_payload)` returns candidates with adapter-reported effective settings and backend identity. [ADR 0009](decisions/0009-diffusers-backend.md) added the sketch bytes. Selection is an explicit event limited to the iteration's candidates. Iteration status, failures, and retries are deferred to T05.
 
 Later contracts, still proposals:
 

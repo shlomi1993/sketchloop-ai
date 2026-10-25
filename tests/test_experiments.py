@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from sketchloop.app import AppController
+from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import CaptureSource, encode_frame, load_sketch_file, raw_image_ref
 from sketchloop.cli import main
 from sketchloop.domain import (Guidance, ImageRef, SketchLoopError, SketchSource, Unavailable, UnsupportedConfigurationError,
@@ -16,7 +17,6 @@ from sketchloop.domain import (Guidance, ImageRef, SketchLoopError, SketchSource
 from sketchloop.evaluation import Evaluator
 from sketchloop.experiments import (MISSING_SOURCE_REASON, ExperimentRecordError, FolderStore, MemoryStore, RoundRecord,
                                     SessionRecord, StoreError, describe_failure, load_session)
-from sketchloop.fakes import FakeGenerator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor
 from sketchloop.session import SketchSession
 

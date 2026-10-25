@@ -2,8 +2,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
-from sketchloop.diffusers_backend import DiffusersSketchGenerator, GenerationMode
-from sketchloop.fakes import FakeGenerator
+from sketchloop.backends.diffusers import DiffusersSketchGenerator, GenerationMode
+from sketchloop.backends.fake import FakeGenerator
 from sketchloop.generation import Generator
 
 
