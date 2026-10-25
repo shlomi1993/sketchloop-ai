@@ -3,6 +3,7 @@ import hashlib
 import numpy as np
 import sys
 
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final, Protocol
@@ -232,18 +233,20 @@ def preview_until_capture(camera: VideoSource, unavailable: str) -> np.ndarray:
             raise InvalidSketchError("Camera capture cancelled.")
 
 
-class CaptureSource(Protocol):
+class CaptureSource(ABC):
     """
     Where sketchloop run gets its raw sketches, such as a file or a webcam.
     """
 
     @property
+    @abstractmethod
     def kind(self) -> SketchSource:
         """
         Return the value recorded as input.source for sketches from this source.
         """
         ...
 
+    @abstractmethod
     def capture(self) -> tuple[ImageRef, bytes]:
         """
         Capture a raw sketch, which may be called again to recapture, raising InvalidSketchError when none is available.
@@ -254,7 +257,7 @@ class CaptureSource(Protocol):
         ...
 
 
-class FileCapture:
+class FileCapture(CaptureSource):
     """
     Capture source that reads a PNG or JPEG sketch file, rereading it on each capture.
     """
@@ -276,7 +279,7 @@ class FileCapture:
         return load_sketch_file(self.path)
 
 
-class CameraCapture:
+class CameraCapture(CaptureSource):
     """
     Capture source that shows a webcam preview and captures a frame on Space.
     """

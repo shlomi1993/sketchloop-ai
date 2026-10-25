@@ -11,7 +11,7 @@ from pathlib import Path
 
 import sketchloop
 from sketchloop.app import AppController
-from sketchloop.capture import load_sketch_file
+from sketchloop.capture import CaptureSource, load_sketch_file
 from sketchloop.cli import main
 from sketchloop.components import CAPTURE_SOURCES, EVALUATORS, STORES
 from sketchloop.domain import ImageRef, SketchSource
@@ -169,7 +169,7 @@ def test_cli_rejects_invalid_options(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert not (tmp_path / "runs").exists(), "No session folder may be created for invalid options"
 
 
-class ExampleCamera:
+class ExampleCamera(CaptureSource):
     """
     Capture source standing in for a webcam, returning the example photo and counting captures.
     """

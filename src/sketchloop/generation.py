@@ -1,9 +1,10 @@
 import hashlib
 
+from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Literal, Protocol, TypeAlias, get_args
+from typing import Literal, TypeAlias, get_args
 
 from sketchloop.domain import (ControlValue, GenerationRequest, GenerationResult, InvalidRecordError, IssueCode,
                                UnsupportedConfigurationError, ValidationIssue, require)
@@ -84,17 +85,39 @@ class GenerationOutput:
             require(hashlib.sha256(payload).hexdigest() == images[path].sha256, f"Payload {path} fails its checksum.")
 
 
-class Generator(Protocol):
+class Generator(ABC):
     """
-    Interface every generation backend implements, local or remote.
+    Base class every generation backend subclasses, local or remote.
     """
 
     @property
-    def capabilities(self) -> GeneratorCapabilities: ...
+    @abstractmethod
+    def capabilities(self) -> GeneratorCapabilities:
+        """
+        Return the controls, candidate limit, and optional features the backend supports.
+        """
+        ...
 
-    def generate(self, request: GenerationRequest, sketch_payload: bytes) -> GenerationOutput: ...
+    @abstractmethod
+    def generate(self, request: GenerationRequest, sketch_payload: bytes) -> GenerationOutput:
+        """
+        Validate the request and generate its candidates from the sketch.
 
-    def describe(self) -> str: ...
+        Args:
+            request (GenerationRequest): Request to generate from.
+            sketch_payload (bytes): Encoded bytes of the request's sketch image.
+
+        Returns:
+            GenerationOutput: Candidates and their image bytes.
+        """
+        ...
+
+    @abstractmethod
+    def describe(self) -> str:
+        """
+        Say in one sentence which backend runs, for the terminal and the page header.
+        """
+        ...
 
 
 def _control_problem(spec: ControlSpec, value: ControlValue) -> tuple[IssueCode, str] | None:

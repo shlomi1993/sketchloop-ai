@@ -2,10 +2,11 @@ import cv2
 import hashlib
 import numpy as np
 
+from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final
 
 from sketchloop.capture import InvalidSketchError
 from sketchloop.domain import ControlValue, ImageRef
@@ -506,11 +507,12 @@ def preprocess_sketch(payload: bytes, rotation: int = 0) -> PreprocessedSketch:
     return PreprocessedSketch(image=image, payload=processed, steps=tuple(steps))
 
 
-class Preprocessor(Protocol):
+class Preprocessor(ABC):
     """
     Prepares a raw sketch for generation and records each applied step with the parameters it used.
     """
 
+    @abstractmethod
     def preprocess(self, payload: bytes, rotation: int) -> PreprocessedSketch:
         """
         Turn a raw sketch into the generation sketch, raising when it cannot apply the rotation.
@@ -525,7 +527,7 @@ class Preprocessor(Protocol):
         ...
 
 
-class StrokePreprocessor:
+class StrokePreprocessor(Preprocessor):
     """
     Default preprocessor that straightens the paper, isolates the strokes, and crops and resizes them.
     """

@@ -9,7 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from sketchloop.app import AppController
-from sketchloop.capture import encode_frame, load_sketch_file, raw_image_ref
+from sketchloop.capture import CaptureSource, encode_frame, load_sketch_file, raw_image_ref
 from sketchloop.cli import main
 from sketchloop.domain import (Guidance, ImageRef, SketchLoopError, SketchSource, Unavailable, UnsupportedConfigurationError,
                                record_no_selection, select_candidates)
@@ -17,7 +17,7 @@ from sketchloop.evaluation import Evaluator
 from sketchloop.experiments import (MISSING_SOURCE_REASON, ExperimentRecordError, FolderStore, MemoryStore, RoundRecord,
                                     SessionRecord, StoreError, describe_failure, load_session)
 from sketchloop.fakes import FakeGenerator
-from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep
+from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor
 from sketchloop.session import SketchSession
 
 
@@ -126,7 +126,7 @@ def test_invalid_records_rejected(tmp_path: Path, file_name: str, edit: Callable
         load_session(session.folder)
 
 
-class StillCamera:
+class StillCamera(CaptureSource):
     """
     Capture source standing in for a camera, returning the same synthetic PNG on every capture.
     """
@@ -147,7 +147,7 @@ class StillCamera:
         return encode_frame(page)
 
 
-class IdentityPreprocessor:
+class IdentityPreprocessor(Preprocessor):
     """
     Preprocessor that passes the sketch through unchanged as sketch.png with one identity step.
     """

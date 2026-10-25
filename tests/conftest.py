@@ -7,7 +7,7 @@ from sketchloop.domain import Candidate, GenerationRequest
 from sketchloop.evaluation import Evaluator
 
 
-class ConstantEvaluator:
+class ConstantEvaluator(Evaluator):
     """
     Evaluator that gives every candidate a score of 0.5.
     """

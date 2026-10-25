@@ -12,7 +12,7 @@ from typing import Any, Final, Protocol
 from sketchloop.capture import InvalidSketchError
 from sketchloop.domain import (BackendIdentity, Candidate, ControlValue, EffectiveSettings, GenerationRequest,
                                GenerationResult, ImageRef, SketchLoopError, first_line)
-from sketchloop.generation import ControlSpec, GenerationOutput, GeneratorCapabilities, validate_request
+from sketchloop.generation import ControlSpec, GenerationOutput, Generator, GeneratorCapabilities, validate_request
 from sketchloop.preprocessing import STROKE_CONTRAST
 
 
@@ -194,7 +194,7 @@ def local_revision(folder: Path) -> str:
     return metadata.read_text(encoding="utf-8").split("\n", 1)[0][:12] if metadata else "unknown-revision"
 
 
-class DiffusersSketchGenerator:
+class DiffusersSketchGenerator(Generator):
     """
     Stable Diffusion 1.5 with the ControlNet v1.1 scribble model, loaded lazily from local folders.
     """

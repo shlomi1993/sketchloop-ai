@@ -8,7 +8,7 @@ from collections.abc import Mapping
 
 from sketchloop.domain import (BackendIdentity, Candidate, ControlValue, EffectiveSettings, GenerationRequest,
                                GenerationResult, ImageRef, Unavailable)
-from sketchloop.generation import ControlSpec, GenerationOutput, GeneratorCapabilities, validate_request
+from sketchloop.generation import ControlSpec, GenerationOutput, Generator, GeneratorCapabilities, validate_request
 
 # Controls typical of an image-to-image diffusion backend, so tests exercise realistic validation.
 _DEFAULT_CONTROLS = (
@@ -21,7 +21,7 @@ _DEFAULT_CAPABILITIES = GeneratorCapabilities(
 )
 
 
-class FakeGenerator:
+class FakeGenerator(Generator):
     """
     Deterministic test-only generator that labels its output as fake.
     """

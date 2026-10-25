@@ -1,14 +1,15 @@
+from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
-from typing import Protocol
 
 from sketchloop.domain import Candidate, GenerationRequest
 
 
-class Evaluator(Protocol):
+class Evaluator(ABC):
     """
-    Interface for optional candidate scoring, kept separate from generation and human selection.
+    Base class for optional candidate scoring, kept separate from generation and human selection.
     """
 
+    @abstractmethod
     def evaluate(self, candidates: Sequence[Candidate], payloads: Mapping[str, bytes],
                  request: GenerationRequest) -> Mapping[str, float]:
         """
@@ -25,7 +26,7 @@ class Evaluator(Protocol):
         ...
 
 
-class NoOpEvaluator:
+class NoOpEvaluator(Evaluator):
     """
     Evaluator that gives no scores, used until a real scorer such as CLIP is added.
     """

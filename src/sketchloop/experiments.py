@@ -5,6 +5,7 @@ import os
 import platform
 import re
 
+from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -12,7 +13,7 @@ from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, TypeAlias, TypeVar, get_args
+from typing import Final, Literal, TypeAlias, TypeVar, get_args
 
 from sketchloop.domain import (SCHEMA_VERSION, BackendIdentity, Candidate, ControlValue, EffectiveSettings,
                                GenerationRequest, GenerationResult, Guidance, ImageRef, Iteration, SelectionEvent,
@@ -528,36 +529,41 @@ def write_files(folder: Path, files: Mapping[str, bytes]) -> None:
         target_file.write_bytes(payload)
 
 
-class ExperimentStore(Protocol):
+class ExperimentStore(ABC):
     """
     Write side of experiment storage: where sessions live, and saving session and round records with their files.
     """
 
     @property
+    @abstractmethod
     def root(self) -> Path | None:
         """
         Return the local folder that holds all saved sessions, or None when files are not kept on disk.
         """
         ...
 
+    @abstractmethod
     def locate_session(self, session_id: str) -> Path | None:
         """
         Return the session's folder, which may not exist yet, or None when files are not kept on disk.
         """
         ...
 
+    @abstractmethod
     def locate_round(self, session_id: str, number: int) -> Path | None:
         """
         Return the round's folder, or None when files are not kept on disk.
         """
         ...
 
+    @abstractmethod
     def save_session(self, record: SessionRecord) -> None:
         """
         Create the session and save its record, raising StoreError when it cannot.
         """
         ...
 
+    @abstractmethod
     def save_round(self, session_id: str, record: RoundRecord, files: Mapping[str, bytes]) -> None:
         """
         Save the files, then the record, replacing an earlier record of the same round number.
@@ -570,7 +576,7 @@ class ExperimentStore(Protocol):
         ...
 
 
-class FolderStore:
+class FolderStore(ExperimentStore):
     """
     Store that keeps each session in a folder under the runs folder, with session.json and round-<n>/round.json.
     """
@@ -644,7 +650,7 @@ class FolderStore:
             write_json_atomic(round_folder / ROUND_FILE, round_to_dict(record))
 
 
-class MemoryStore:
+class MemoryStore(ExperimentStore):
     """
     Store that keeps records and file bytes in process memory, for tests and library callers that need no files.
     """
