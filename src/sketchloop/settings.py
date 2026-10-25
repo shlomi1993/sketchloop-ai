@@ -3,8 +3,9 @@ import tomllib
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
+from enum import StrEnum
 from pathlib import Path
-from typing import Final, Literal, TypeAlias
+from typing import Final
 
 from sketchloop.domain import SketchLoopError
 
@@ -13,15 +14,26 @@ SETTINGS_FILE_NAME: Final = "sketchloop.toml"
 SECTIONS: Final = ("generator", "capture", "preprocessing", "evaluator", "storage", "run", "ui")
 ROTATIONS: Final = (0, 90, 180, 270)
 
-SettingKind: TypeAlias = Literal["text", "path", "integer", "number", "boolean"]
+
+
+class SettingKind(StrEnum):
+    """
+    Kind of TOML value a settings key takes.
+    """
+    TEXT = "text"
+    PATH = "path"
+    INTEGER = "integer"
+    NUMBER = "number"
+    BOOLEAN = "boolean"
+
 
 # How a wrong-type message names each kind of value.
-KIND_DESCRIPTIONS: Final[dict[str, str]] = {
-    "text": "text",
-    "path": "non-empty text",
-    "integer": "an integer",
-    "number": "a number",
-    "boolean": "true or false",
+KIND_DESCRIPTIONS: Final[dict[SettingKind, str]] = {
+    SettingKind.TEXT: "text",
+    SettingKind.PATH: "non-empty text",
+    SettingKind.INTEGER: "an integer",
+    SettingKind.NUMBER: "a number",
+    SettingKind.BOOLEAN: "true or false",
 }
 
 
@@ -43,22 +55,22 @@ class SettingRule:
 
 # Every key the settings file accepts, by dotted name. Component names are checked against the registries later.
 RULES: Final[dict[str, SettingRule]] = {
-    "generator.backend": SettingRule("text"),
-    "generator.diffusers.mode": SettingRule("text"),
-    "generator.diffusers.models_dir": SettingRule("path"),
-    "capture.source": SettingRule("text"),
-    "capture.camera_index": SettingRule("integer", minimum=0),
-    "preprocessing.name": SettingRule("text"),
-    "preprocessing.rotation": SettingRule("integer", choices=ROTATIONS),
-    "preprocessing.raw": SettingRule("boolean"),
-    "evaluator.name": SettingRule("text"),
-    "storage.store": SettingRule("text"),
-    "storage.runs_dir": SettingRule("path"),
-    "run.candidates": SettingRule("integer", minimum=1),
-    "run.seed": SettingRule("integer", minimum=0),
-    "ui.candidates": SettingRule("integer", minimum=1),
-    "ui.seed": SettingRule("integer", minimum=0),
-    "ui.capture_interval_seconds": SettingRule("number"),
+    "generator.backend": SettingRule(SettingKind.TEXT),
+    "generator.diffusers.mode": SettingRule(SettingKind.TEXT),
+    "generator.diffusers.models_dir": SettingRule(SettingKind.PATH),
+    "capture.source": SettingRule(SettingKind.TEXT),
+    "capture.camera_index": SettingRule(SettingKind.INTEGER, minimum=0),
+    "preprocessing.name": SettingRule(SettingKind.TEXT),
+    "preprocessing.rotation": SettingRule(SettingKind.INTEGER, choices=ROTATIONS),
+    "preprocessing.raw": SettingRule(SettingKind.BOOLEAN),
+    "evaluator.name": SettingRule(SettingKind.TEXT),
+    "storage.store": SettingRule(SettingKind.TEXT),
+    "storage.runs_dir": SettingRule(SettingKind.PATH),
+    "run.candidates": SettingRule(SettingKind.INTEGER, minimum=1),
+    "run.seed": SettingRule(SettingKind.INTEGER, minimum=0),
+    "ui.candidates": SettingRule(SettingKind.INTEGER, minimum=1),
+    "ui.seed": SettingRule(SettingKind.INTEGER, minimum=0),
+    "ui.capture_interval_seconds": SettingRule(SettingKind.NUMBER),
 }
 
 # Tables nested inside a section, such as [generator.diffusers].
@@ -211,11 +223,11 @@ def check_value(key: str, value: object, label: str) -> None:
     rule = RULES[key]
     is_integer = isinstance(value, int) and not isinstance(value, bool)
     type_checks = {
-        "text": isinstance(value, str),
-        "path": isinstance(value, str) and bool(value.strip()),
-        "integer": is_integer,
-        "number": is_integer or isinstance(value, float),
-        "boolean": isinstance(value, bool),
+        SettingKind.TEXT: isinstance(value, str),
+        SettingKind.PATH: isinstance(value, str) and bool(value.strip()),
+        SettingKind.INTEGER: is_integer,
+        SettingKind.NUMBER: is_integer or isinstance(value, float),
+        SettingKind.BOOLEAN: isinstance(value, bool),
     }
 
     # Refuse the wrong kind of value, since TOML booleans and integers are distinct.
@@ -229,7 +241,7 @@ def check_value(key: str, value: object, label: str) -> None:
     if rule.minimum is not None and value < rule.minimum:
         raise SettingsError(f"{label}: {key} must be at least {rule.minimum}, got {value}.")
 
-    if rule.kind == "number" and not (value > 0 and math.isfinite(value)):
+    if rule.kind == SettingKind.NUMBER and not (value > 0 and math.isfinite(value)):
         raise SettingsError(f"{label}: {key} must be greater than 0, got {value}.")
 
 
@@ -364,9 +376,9 @@ def load_settings(path: Path | None) -> Settings:
     values = read_settings_values(path)
     for key, value in values.items():
         # Resolve relative folders against the file's folder, so the file works from any working folder.
-        if RULES[key].kind == "path":
+        if RULES[key].kind == SettingKind.PATH:
             values[key] = path.parent / value
-        elif RULES[key].kind == "number":
+        elif RULES[key].kind == SettingKind.NUMBER:
             values[key] = float(value)
 
     return override_settings(Settings(), values)
