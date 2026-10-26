@@ -79,7 +79,7 @@ def test_cli_session_survives_errors(tmp_path: Path, monkeypatch: pytest.MonkeyP
     answers = iter(["f missing.png", "q"])
     monkeypatch.setattr("builtins.input", lambda *prompt: next(answers))
     if disk_full:
-        monkeypatch.setattr("sketchloop.experiments.os.replace", raise_disk_full)
+        monkeypatch.setattr("sketchloop.experiments.stores.os.replace", raise_disk_full)
 
     runs_dir = str(tmp_path / "runs")
     exit_code = main(["run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--candidates", candidates, "--runs-dir", runs_dir])

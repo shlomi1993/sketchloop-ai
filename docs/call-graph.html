@@ -307,7 +307,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <text class="s" x="767.5" y="600" text-anchor="middle">evaluation.py</text>
           <rect class="proto" x="885" y="560" width="195" height="52" rx="6"/>
           <text class="n" x="982.5" y="582" text-anchor="middle">ExperimentStore</text>
-          <text class="s" x="982.5" y="600" text-anchor="middle">experiments.py, raises StoreError</text>
+          <text class="s" x="982.5" y="600" text-anchor="middle">experiments/stores.py, StoreError</text>
 
           <!-- Implements connectors -->
           <path class="impl" d="M285,650 V614" marker-end="url(#m-ah)"/>
@@ -392,7 +392,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <tr><td>backends/diffusers.py</td><td>Real model: SD 1.5 + ControlNet scribble, fast and quality modes</td><td>backends.make_generator</td></tr>
           <tr><td>backends/fake.py</td><td>Deterministic labeled fake backend</td><td>backends.make_generator, tests</td></tr>
           <tr><td>evaluation.py</td><td><code>Evaluator</code> base class and the no-op scorer</td><td>session.py</td></tr>
-          <tr><td>experiments.py</td><td>Records, <code>FolderStore</code>, <code>MemoryStore</code>, loading, checksums, rerun comparison</td><td>session.py, cli/show.py, cli/rerun.py</td></tr>
+          <tr><td>experiments/</td><td>One module each for <code>records</code>, <code>provenance</code> (environment and redacted failures), <code>serialization</code>, <code>stores</code> (<code>FolderStore</code>, <code>MemoryStore</code>), <code>loading</code> with checksums, and <code>replay</code> (rerun requests and comparison)</td><td>session.py, cli/show.py, cli/rerun.py</td></tr>
           <tr><td>domain.py</td><td>Typed records: <code>ImageRef</code>, <code>Guidance</code>, <code>Iteration</code>, <code>SelectionEvent</code>, errors, and shared enums such as <code>SketchSource</code>, <code>Rotation</code>, and <code>GenerationBackend</code></td><td>everything</td></tr>
           <tr><td>settings.py</td><td>Read <code>sketchloop.toml</code>, apply flag overrides, check types</td><td>cli/arguments.py</td></tr>
           <tr><td>components.py</td><td>Name registries that build capture, preprocessor, evaluator, store</td><td>cli package</td></tr>
