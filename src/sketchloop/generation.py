@@ -10,7 +10,6 @@ from sketchloop.domain import (ControlValue, GenerationRequest, GenerationResult
                                UnsupportedConfigurationError, ValidationIssue, require)
 
 
-
 class ControlKind(StrEnum):
     """
     Kind of value a backend control takes.

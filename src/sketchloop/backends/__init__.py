@@ -1,18 +1,10 @@
-from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
 from sketchloop.backends.diffusers import DiffusersSketchGenerator, GenerationMode
 from sketchloop.backends.fake import FakeGenerator
+from sketchloop.domain import GenerationBackend
 from sketchloop.generation import Generator
-
-
-class GenerationBackend(StrEnum):
-    """
-    Generation backends the command line and the UI can create.
-    """
-    FAKE = "fake"
-    DIFFUSERS = "diffusers"
 
 
 # Backends a rerun can recreate, by the adapter name a round recorded.

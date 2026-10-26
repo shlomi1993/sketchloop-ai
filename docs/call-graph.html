@@ -393,7 +393,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <tr><td>backends/fake.py</td><td>Deterministic labeled fake backend</td><td>backends.make_generator, tests</td></tr>
           <tr><td>evaluation.py</td><td><code>Evaluator</code> base class and the no-op scorer</td><td>session.py</td></tr>
           <tr><td>experiments.py</td><td>Records, <code>FolderStore</code>, <code>MemoryStore</code>, loading, checksums, rerun comparison</td><td>session.py, cli.py show and rerun</td></tr>
-          <tr><td>domain.py</td><td>Typed records: <code>ImageRef</code>, <code>Guidance</code>, <code>Iteration</code>, <code>SelectionEvent</code>, errors</td><td>everything</td></tr>
+          <tr><td>domain.py</td><td>Typed records: <code>ImageRef</code>, <code>Guidance</code>, <code>Iteration</code>, <code>SelectionEvent</code>, errors, and shared enums such as <code>SketchSource</code>, <code>Rotation</code>, and <code>GenerationBackend</code></td><td>everything</td></tr>
           <tr><td>settings.py</td><td>Read <code>sketchloop.toml</code>, apply flag overrides, check types</td><td>cli.py</td></tr>
           <tr><td>components.py</td><td>Name registries that build capture, preprocessor, evaluator, store</td><td>cli.py</td></tr>
           <tr><td>backends/__init__.py</td><td><code>make_generator</code> for the fake or diffusers backend</td><td>cli.py</td></tr>

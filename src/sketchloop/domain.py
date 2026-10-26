@@ -39,6 +39,14 @@ class ColorMode(StrEnum):
     RGBA = "RGBA"
 
 
+class GenerationBackend(StrEnum):
+    """
+    Generation backends the command line and the UI can create.
+    """
+    FAKE = "fake"
+    DIFFUSERS = "diffusers"
+
+
 class ExecutionKind(StrEnum):
     """
     How a backend ran: the test-only fake, in this process, or on a remote service.
