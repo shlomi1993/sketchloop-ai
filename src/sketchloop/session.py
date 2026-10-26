@@ -8,7 +8,7 @@ from functools import partial
 from pathlib import Path
 
 from sketchloop.domain import (SCHEMA_VERSION, GenerationRequest, Guidance, ImageRef, InvalidSelectionError, Iteration,
-                               SelectionEvent, SketchSource, Unavailable)
+                               Rotation, SelectionEvent, SketchSource, Unavailable)
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
 from sketchloop.experiments import (ExperimentStore, RerunLink, RoundRecord, RoundStage, RoundStatus, SessionRecord,
                                     StoreError, collect_environment, describe_failure, require_known_source)
@@ -85,7 +85,7 @@ class SketchSession:
         return processed.image, processed.payload, processed.steps
 
     def run_round(self, raw_sketch: ImageRef, raw_payload: bytes, guidance: Guidance, *, source: SketchSource | Unavailable,
-                  rotation: int = 0, use_raw: bool = False, n_candidates: int = 1, seed: int | None = None,
+                  rotation: int = Rotation.DEG_000, use_raw: bool = False, n_candidates: int = 1, seed: int | None = None,
                   reuse: PreprocessedSketch | None = None) -> RoundOutcome:
         """
         Preprocess the sketch, generate and score candidates, save the files and record, and link to the previous round.

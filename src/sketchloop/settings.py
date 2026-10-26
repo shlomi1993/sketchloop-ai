@@ -7,13 +7,11 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
-from sketchloop.domain import SketchLoopError
+from sketchloop.domain import Rotation, SketchLoopError
 
 
 SETTINGS_FILE_NAME: Final = "sketchloop.toml"
 SECTIONS: Final = ("generator", "capture", "preprocessing", "evaluator", "storage", "run", "ui")
-ROTATIONS: Final = (0, 90, 180, 270)
-
 
 
 class SettingKind(StrEnum):
@@ -61,7 +59,7 @@ RULES: Final[dict[str, SettingRule]] = {
     "capture.source": SettingRule(SettingKind.TEXT),
     "capture.camera_index": SettingRule(SettingKind.INTEGER, minimum=0),
     "preprocessing.name": SettingRule(SettingKind.TEXT),
-    "preprocessing.rotation": SettingRule(SettingKind.INTEGER, choices=ROTATIONS),
+    "preprocessing.rotation": SettingRule(SettingKind.INTEGER, choices=tuple(Rotation)),
     "preprocessing.raw": SettingRule(SettingKind.BOOLEAN),
     "evaluator.name": SettingRule(SettingKind.TEXT),
     "storage.store": SettingRule(SettingKind.TEXT),
@@ -110,7 +108,7 @@ class PreprocessingSettings:
     The preprocessor and the rotation and raw defaults of sketchloop run.
     """
     name: str = "strokes"  # Registry name of the preprocessor
-    rotation: int = 0  # Clockwise degrees before preprocessing, for sketchloop run
+    rotation: int = Rotation.DEG_000  # Clockwise degrees before preprocessing, for sketchloop run
     raw: bool = False  # Generate from the raw sketch and skip preprocessing, for sketchloop run
 
 

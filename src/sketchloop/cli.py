@@ -16,13 +16,13 @@ from sketchloop.backends.diffusers import GenerationMode
 from sketchloop.capture import CaptureSource, load_sketch_file
 from sketchloop.components import (NO_RUN_SKETCH_MESSAGE, check_component_names, make_capture_source, make_evaluator,
                                    make_preprocessor, make_store)
-from sketchloop.domain import (Guidance, ImageRef, Iteration, SelectionEvent, SketchLoopError, SketchSource,
+from sketchloop.domain import (Guidance, ImageRef, Iteration, Rotation, SelectionEvent, SketchLoopError, SketchSource,
                                record_no_selection, select_candidates)
 from sketchloop.experiments import (SESSION_FILE, ExperimentRecordError, ExperimentStore, RerunComparison, RerunLink,
                                     RoundRecord, RoundStage, RoundStatus, SavedSession, StoreError, compare_rounds,
                                     format_value, load_session, rebuild_request)
 from sketchloop.generation import Generator
-from sketchloop.preprocessing import ROTATE_CODES, PreprocessedSketch
+from sketchloop.preprocessing import PreprocessedSketch
 from sketchloop.session import RoundOutcome, SketchSession
 from sketchloop.settings import (GeneratorSettings, Settings, SettingsError, StorageSettings, find_settings_file,
                                  load_settings, override_settings)
@@ -219,7 +219,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     run_parser.add_argument("--seed", type=make_int_parser(0), default=unset, help="base seed for reproducible candidates (settings run.seed, default random)")  # noqa: E501
     run_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for run outputs (settings storage.runs_dir, default runs)")  # noqa: E501
     run_parser.add_argument("--raw", action=argparse.BooleanOptionalAction, default=unset, help="generate from your original sketch instead of the processed one (settings preprocessing.raw, default off)")  # noqa: E501
-    run_parser.add_argument("--rotate", type=int, choices=list(ROTATE_CODES), default=unset, help="degrees to turn the sketch clockwise before processing (settings preprocessing.rotation, default 0)")  # noqa: E501
+    run_parser.add_argument("--rotate", type=int, choices=list(Rotation), default=unset, help="degrees to turn the sketch clockwise before processing (settings preprocessing.rotation, default 0)")  # noqa: E501
     run_parser.add_argument("--backend", type=GenerationBackend, choices=list(GenerationBackend), default=unset, help="generation backend to use (settings generator.backend, default fake)")  # noqa: E501
     run_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="diffusers mode (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
     run_parser.add_argument("--config", type=Path, help=CONFIG_HELP)

@@ -7,12 +7,12 @@ from typing import Final
 
 from sketchloop.capture import InvalidSketchError, encode_frame, load_sketch_file
 from sketchloop.domain import (
-    Guidance, InvalidSelectionError, Iteration, SelectionEvent, SketchLoopError, SketchSource, record_no_selection,
-    select_candidates)
+    Guidance, InvalidSelectionError, Iteration, Rotation, SelectionEvent, SketchLoopError, SketchSource,
+    record_no_selection, select_candidates)
 from sketchloop.evaluation import Evaluator
 from sketchloop.experiments import ExperimentStore, RoundRecord, RoundStage, RoundStatus
 from sketchloop.generation import Generator
-from sketchloop.preprocessing import ROTATE_CODES, Preprocessor
+from sketchloop.preprocessing import Preprocessor
 from sketchloop.session import RoundOutcome, SketchSession
 
 
@@ -154,14 +154,14 @@ class AppController:
         if not prompt.strip():
             raise SketchLoopError("Enter a prompt, then generate.")
 
-        if rotation not in ROTATE_CODES:
+        if rotation not in list(Rotation):
             raise SketchLoopError(f"Rotation must be one of 0, 90, 180, or 270, got {rotation}.")
 
         if rotation and use_raw:
             raise SketchLoopError("Rotation cannot be combined with the raw sketch option, which skips preprocessing.")
 
     def run_round(self, sketch: Path | np.ndarray | None, source: SketchSource, prompt: str, *, n_candidates: int,
-                  seed: int | None = None, rotation: int = 0, use_raw: bool = False) -> RoundView:
+                  seed: int | None = None, rotation: int = Rotation.DEG_000, use_raw: bool = False) -> RoundView:
         """
         Check the inputs, then run a round from a sketch file or a camera frame and return its view.
 

@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Final
 
 from sketchloop.capture import InvalidSketchError
-from sketchloop.domain import ColorMode, ControlValue, ImageRef
+from sketchloop.domain import ColorMode, ControlValue, ImageRef, Rotation
 
 
 # Generation conditioning treats pixels this much darker than the paper as strokes, and the crop keeps a margin around them.
@@ -40,7 +40,12 @@ MIN_TILT_DEGREES: Final = 1.0
 FRAME_EDGE_PIXELS: Final = 3
 
 # OpenCV rotation codes by clockwise angle in degrees.
-ROTATE_CODES: Final = {0: None, 90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+ROTATE_CODES: Final = {
+    Rotation.DEG_000: None,
+    Rotation.DEG_090: cv2.ROTATE_90_CLOCKWISE,
+    Rotation.DEG_180: cv2.ROTATE_180,
+    Rotation.DEG_270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+}
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -466,7 +471,7 @@ def encode_processed_sketch(image: np.ndarray) -> tuple[ImageRef, bytes]:
     return image_ref, payload
 
 
-def preprocess_sketch(payload: bytes, rotation: int = 0) -> PreprocessedSketch:
+def preprocess_sketch(payload: bytes, rotation: int = Rotation.DEG_000) -> PreprocessedSketch:
     """
     Turn a raw sketch photo into upright, thickened black strokes on white, cropped and resized to 512 px.
 

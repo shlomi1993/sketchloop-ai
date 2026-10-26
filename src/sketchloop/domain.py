@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -58,6 +58,16 @@ class IssueCode(StrEnum):
     INVALID_CHOICE = "invalid_choice"
     UNSUPPORTED_FEATURE = "unsupported_feature"
     TOO_MANY_CANDIDATES = "too_many_candidates"
+
+
+class Rotation(IntEnum):
+    """
+    Clockwise turn in degrees applied to a sketch before preprocessing.
+    """
+    DEG_000 = 0
+    DEG_090 = 90
+    DEG_180 = 180
+    DEG_270 = 270
 
 
 class SketchLoopError(Exception):

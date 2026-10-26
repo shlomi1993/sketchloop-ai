@@ -6,16 +6,15 @@ from pathlib import Path
 from typing import Final, TypeAlias
 
 from sketchloop.app import AppController, HistoryRow, RoundView
-from sketchloop.domain import SketchLoopError, SketchSource
+from sketchloop.domain import Rotation, SketchLoopError, SketchSource
 
 
 HISTORY_HEADERS: Final = ["Round", "Status", "Prompt", "Outcome"]
 SOURCE_CHOICES: Final = [("Live webcam", SketchSource.WEBCAM), ("Upload a file", SketchSource.UPLOAD)]
-ROTATION_CHOICES: Final = [0, 90, 180, 270]
 PROMPT_PLACEHOLDER: Final = "Describe the style, for example: a sculptural oak lounge chair, soft studio light"
 
 # A webcam facing the person drawing sees the paper upside down, so webcam sketches turn 180 degrees by default.
-DEFAULT_ROTATION_BY_SOURCE: Final = {SketchSource.WEBCAM: 180, SketchSource.UPLOAD: 0}
+DEFAULT_ROTATION_BY_SOURCE: Final = {SketchSource.WEBCAM: Rotation.DEG_180, SketchSource.UPLOAD: Rotation.DEG_000}
 
 # The page's stylesheet and script, kept as real files next to this module and shipped as package data.
 STATIC_DIR: Final = Path(__file__).parent / "static"
@@ -85,7 +84,7 @@ def pick_rotation(choice: str, use_raw: bool) -> int:
     """
     Pick the rotation the page offers, 0 for the raw sketch, which skips preprocessing and so cannot be turned.
     """
-    return 0 if use_raw else DEFAULT_ROTATION_BY_SOURCE[choice]
+    return Rotation.DEG_000 if use_raw else DEFAULT_ROTATION_BY_SOURCE[choice]
 
 
 def build_history_table(rows: Sequence[HistoryRow]) -> list[list[object]]:
@@ -136,7 +135,7 @@ def build_app(controller: AppController, *, default_candidates: int, default_see
                     candidates = gr.Slider(minimum=1, maximum=controller.max_candidates, step=1, value=default_candidates,
                                            label="Candidates per round")
                     seed = gr.Number(label="Seed (blank for random)", value=default_seed, precision=0, minimum=0)
-                    rotation = gr.Dropdown(choices=ROTATION_CHOICES, value=DEFAULT_ROTATION_BY_SOURCE[SketchSource.WEBCAM],
+                    rotation = gr.Dropdown(choices=list(Rotation), value=DEFAULT_ROTATION_BY_SOURCE[SketchSource.WEBCAM],
                                            label="Rotation (degrees clockwise)")
                     raw = gr.Checkbox(label="Use the raw sketch (skip preprocessing and rotation)")
 
