@@ -2,7 +2,6 @@ import codecs
 import pytest
 
 from pathlib import Path
-
 from privacy_check import check, content_findings, git
 
 
@@ -12,7 +11,7 @@ def repository(tmp_path: Path) -> Path:
     Provide an isolated Git repository with the project's ignore rules.
     """
     git("init", root=tmp_path)
-    (tmp_path / ".gitignore").write_bytes((Path(__file__).resolve().parents[1] / ".gitignore").read_bytes())
+    (tmp_path / ".gitignore").write_bytes((Path(__file__).resolve().parents[2] / ".gitignore").read_bytes())
     return tmp_path
 
 

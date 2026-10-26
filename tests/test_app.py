@@ -1,22 +1,16 @@
-import ast
 import cv2
 import hashlib
 import json
 import numpy as np
 import pytest
 import re
-import socket
-import subprocess
-import sys
 
 from pathlib import Path
-from typing import Final
 
-import sketchloop
 from sketchloop.app import NO_SKETCH_MESSAGE, AppController
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import InvalidSketchError
-from sketchloop.domain import InvalidSelectionError, Rotation, SketchLoopError, UnsupportedConfigurationError
+from sketchloop.domain import InvalidSelectionError, SketchLoopError, UnsupportedConfigurationError
 from sketchloop.experiments import FolderStore, load_session
 
 
@@ -211,137 +205,3 @@ def test_app_history_refresh_and_new_session(controller: AppController, sketch_f
     assert controller.session.generator is generator, "A new session must reuse the loaded generator"
     assert controller.session.folder != old_folder and restarted.number == 1, "A new session must number rounds from 1 anew"
     assert new_saved.rounds[0].iteration.parent_id is None, "The first round of a new session must not link to the old one"
-
-
-def list_imported_names(module_path: Path) -> set[str]:
-    """
-    List every module and name a module or package imports anywhere, including module.name pairs for from-imports.
-    """
-    files = sorted(module_path.glob("*.py")) if module_path.is_dir() else [module_path.with_suffix(".py")]
-    names: set[str] = set()
-    for node in (node for file in files for node in ast.walk(ast.parse(file.read_text(encoding="utf-8")))):
-        if isinstance(node, ast.Import):
-            names.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            names.add(node.module or "")
-            names.update(name for alias in node.names for name in (alias.name, f"{node.module}.{alias.name}"))
-
-    return names
-
-
-# Orchestration may import only protocols, records, and default components, never implementations it should receive.
-ORCHESTRATION_FORBIDDEN: Final = ("FolderStore", "MemoryStore", "write_json_atomic", "preprocess_sketch", "sketchloop.backends",
-                                  "sketchloop.components", "sketchloop.settings", "sketchloop.ui", "gradio")
-
-
-@pytest.mark.parametrize(("module", "forbidden"), [
-    ("session", (*ORCHESTRATION_FORBIDDEN, "write_files", "load_sketch_file", "capture_from_camera", "cv2")),
-    ("app", ORCHESTRATION_FORBIDDEN),
-    ("cli", ())
-])
-def test_import_boundaries(module: str, forbidden: tuple[str, ...]) -> None:
-    """
-    Session and controller import no store, preprocessing, capture, factory, or UI code, and no module loads gradio on import.
-    """
-    imported = list_imported_names(Path(sketchloop.__file__).parent / module)
-    found = sorted(name for name in imported if any(name == banned or name.startswith(f"{banned}.") for banned in forbidden))
-    code = "; ".join(["import sys", "sys.modules['gradio'] = None", f"import sketchloop.{module}",
-                      "assert 'sketchloop.ui' not in sys.modules"])
-    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
-
-    # The module's source imports nothing orchestration must receive by injection.
-    assert found == [], f"sketchloop.{module} imports {found}, which must be injected instead"
-
-    # A subprocess imports the module without touching gradio or the UI module.
-    assert result.returncode == 0, f"sketchloop.{module} imported gradio or sketchloop.ui: {result.stderr}"
-
-
-@pytest.fixture
-def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    """
-    Make every non-loopback socket connection fail and disable Gradio analytics, so a build that needs the network fails.
-    """
-    connect = socket.socket.connect
-
-    def refuse_remote_connection(sock: socket.socket, address: object) -> None:
-        """
-        Refuse a connection unless it targets loopback, which the Windows asyncio event loop uses internally.
-        """
-        # Allow loopback, since asyncio builds its self-pipe with a local socket pair.
-        if isinstance(address, tuple) and address[0] in ("127.0.0.1", "::1", "localhost"):
-            return connect(sock, address)
-
-        raise OSError(f"Network access is blocked in this test, refused {address!r}.")
-
-    monkeypatch.setattr(socket.socket, "connect", refuse_remote_connection)
-    monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
-    monkeypatch.setenv("HF_HUB_DISABLE_TELEMETRY", "1")
-
-
-@pytest.mark.usefixtures("no_network")
-def test_ui_builds_offline(controller: AppController, monkeypatch: pytest.MonkeyPatch) -> None:
-    """
-    The page builds offline without launching, analytics are off, and Generate waits for a sketch and prompt.
-    """
-    import gradio
-
-    from sketchloop import ui
-
-    def refuse_launch(*args: object, **kwargs: object) -> None:
-        """
-        Fail the test if the app is launched.
-        """
-        raise AssertionError("Building the page must not launch it")
-
-    monkeypatch.setattr(gradio.Blocks, "launch", refuse_launch)
-    app = ui.SketchPage(controller, default_candidates=2, default_seed=None).build()
-
-    # The app is a Gradio Blocks object with analytics disabled.
-    assert isinstance(app, gradio.Blocks), f"Expected gr.Blocks, got {type(app)}"
-    assert app.analytics_enabled is False, "The UI must be built with analytics disabled"
-
-    # Generate is enabled only when the chosen source has a sketch and the prompt is not blank.
-    readiness = [ui.can_generate("webcam", True, None, "chair"), ui.can_generate("upload", True, None, "chair"),
-                 ui.can_generate("webcam", True, None, "  "), ui.can_generate("upload", False, "b.png", "chair")]
-    assert readiness == [True, False, False, True], f"Unexpected Generate readiness {readiness}"
-
-    # The raw sketch always gets rotation 0, which the controller accepts, while each source keeps its default otherwise.
-    rotations = [ui.pick_rotation("webcam", False), ui.pick_rotation("upload", False), ui.pick_rotation("webcam", True)]
-    assert rotations == [180, 0, 0], f"Unexpected rotations {rotations}"
-
-    # The stylesheet turns the preview for every rotation but none, and the script starts the webcam on load by itself.
-    stylesheet = ui.STYLESHEET_PATH.read_text(encoding="utf-8")
-    missing = [rotation for rotation in Rotation if rotation and f"#webcam.rotate-{rotation} " not in stylesheet]
-    assert not missing, f"ui.css has no preview rule for rotations {missing}"
-    assert 'addEventListener("load"' in ui.SCRIPT_PATH.read_text(encoding="utf-8"), "ui.js must start the webcam on load"
-
-
-
-@pytest.mark.usefixtures("no_network")
-def test_page_handlers_keep_frame_and_refuse_missing_sketch(controller: AppController) -> None:
-    """
-    SketchPage handlers work without building the page, refusing a webcam round with no frame and keeping a BGR copy.
-    """
-    import gradio
-
-    from sketchloop import ui
-
-    page = ui.SketchPage(controller, default_candidates=2, default_seed=None)
-
-    # Without a frame, Generate shows the controller's no-sketch message.
-    with pytest.raises(gradio.Error, match=re.escape(NO_SKETCH_MESSAGE)):
-        page.run_generation("webcam", None, "chair", 2, None, 0, False, progress=lambda *args, **kwargs: None)
-
-    # A streamed RGB frame is kept in BGR order and enables Generate.
-    frame = np.zeros((4, 4, 3), dtype=np.uint8)
-    frame[..., 0] = 255
-    button = page.keep_frame(frame, "webcam", None, "chair")
-    kept = page.latest_frame
-    assert kept[0, 0].tolist() == [0, 0, 255], f"Expected the frame in BGR order, got {kept[0, 0].tolist()}"
-    assert button.interactive is True, "Generate must be enabled once a frame and prompt exist"
-
-    # A frame from before the stream stopped disables Generate and is refused with its own message.
-    page.latest_frame_time -= ui.STALE_FRAME_INTERVALS * page.capture_interval_seconds + 1
-    assert page.update_generate_button("webcam", None, "chair").interactive is False, "A stale frame must disable Generate"
-    with pytest.raises(gradio.Error, match=re.escape(ui.STALE_FRAME_MESSAGE)):
-        page.run_generation("webcam", None, "chair", 2, None, 0, False, progress=lambda *args, **kwargs: None)

@@ -1,16 +1,11 @@
 import errno
-import os
 import pytest
 import re
 import shutil
-import sys
-import types
 
 from collections.abc import Mapping
 from pathlib import Path
 
-import sketchloop
-from sketchloop.app import AppController
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import CaptureSource, load_sketch_file
 from sketchloop.cli import main
@@ -24,7 +19,8 @@ from sketchloop.settings import StorageSettings
 # Run every test from tmp_path, so a sketchloop.toml in the repository cannot change CLI settings.
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
-EXAMPLE_SKETCH = Path(__file__).resolve().parents[1] / "examples" / "sketch-photo.jpg"
+
+EXAMPLE_SKETCH = Path(__file__).resolve().parents[2] / "examples" / "sketch-photo.jpg"
 
 
 def test_cli_full_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -97,76 +93,6 @@ def test_cli_session_survives_errors(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert exit_code == 0, f"Quitting after errors must exit with code 0, got {exit_code}"
     assert "Cannot read sketch missing.png" in output and "Choose again." in output, "The missing file must be reported"
     assert "Rounds: 0" in output, "The summary must still be printed"
-
-
-@pytest.fixture
-def launches(monkeypatch: pytest.MonkeyPatch) -> list[tuple[AppController, dict[str, object]]]:
-    """
-    Replace sketchloop.ui with a stub whose launch_app records its arguments and the telemetry settings, without gradio.
-    """
-    monkeypatch.delenv("GRADIO_ANALYTICS_ENABLED", raising=False)
-    monkeypatch.delenv("HF_HUB_DISABLE_TELEMETRY", raising=False)
-    calls: list[tuple[AppController, dict[str, object]]] = []
-
-    def record_launch(controller: AppController, **options: object) -> None:
-        """
-        Record a launch instead of starting a server.
-        """
-        telemetry = {name: os.environ.get(name) for name in ("GRADIO_ANALYTICS_ENABLED", "HF_HUB_DISABLE_TELEMETRY")}
-        calls.append((controller, options | telemetry))
-
-    stub = types.ModuleType("sketchloop.ui")
-    stub.launch_app = record_launch
-    monkeypatch.setitem(sys.modules, "sketchloop.ui", stub)
-    monkeypatch.setattr(sketchloop, "ui", stub, raising=False)
-    return calls
-
-
-@pytest.mark.usefixtures("launches")
-@pytest.mark.parametrize(("command", "option", "settings_text", "error_pattern"), [
-    ("run", ["--candidates", "0"], None, r"must be at least 1, got 0"),
-    ("run", ["--seed", "-1"], None, r"must be at least 0, got -1"),
-    ("ui", ["--candidates", "0"], None, r"must be at least 1, got 0"),
-    ("ui", ["--mode", "fast"], None, r"--mode needs --backend diffusers"),
-    ("run", [], '[generator]\nbackend = "difusers"\n', r'sketchloop\.toml: generator\.backend must be one of .+"difusers"\.'),
-    ("ui", [], "[ui]\ncandidates = true\n", r"sketchloop\.toml: ui\.candidates must be an integer, got (?i:true)\."),
-    ("run", [], '[generator]\nmdoe = "fast"\n', r"sketchloop\.toml: unknown key generator\.mdoe\. Keys in \[generator\]: "),
-    ("run", [], '[generator\nbackend = "fake"\n', r"sketchloop\.toml is not valid TOML: .+\. Fix the file and retry\."),
-    ("run", [], "[preprocessing]\nrotation = 90\nraw = true\n",
-     re.escape("preprocessing.rotation 90 cannot be combined with preprocessing.raw, which skips preprocessing. Change one in sketchloop.toml or pass --rotate 0 or --no-raw.")),  # noqa: E501
-    ("run", [], '[storage]\nstore = "memory"\n', re.escape('storage.store must be one of folder, got "memory".')),
-    ("rerun", ["--config", "missing.toml"], None, re.escape("Settings file missing.toml not found. Check the --config path.")),
-    ("ui", ["--capture-interval", "inf"], None, r"must be greater than 0 seconds, got inf"),
-    ("ui", [], "[ui]\ncapture_interval_seconds = inf\n", r"capture_interval_seconds must be greater than 0, got inf\."),
-    ("run", [], "seed = 7\n", re.escape("sketchloop.toml: seed must be inside a section such as [run]."))
-], ids=["candidates-0", "negative-seed", "ui-candidates-0", "mode-without-diffusers", "misspelled-backend", "boolean-candidates",
-        "unknown-key", "broken-toml", "rotation-with-raw", "memory-store", "missing-config", "infinite-interval-flag",
-        "infinite-interval-file", "top-level-key"])
-def test_cli_rejects_invalid_options(tmp_path: Path, capsys: pytest.CaptureFixture[str], command: str, option: list[str],
-                                     settings_text: str | None, error_pattern: str) -> None:
-    """
-    Bad flags, a bad settings file, or a missing --config file are rejected with a one-line reason before anything is saved.
-    """
-    runs_option = ["--runs-dir", str(tmp_path / "runs")]
-    base = {
-        "run": ["run", str(EXAMPLE_SKETCH), "--prompt", "chair", *runs_option],
-        "ui": ["ui", *runs_option],
-        "rerun": ["rerun", str(tmp_path / "runs" / "earlier"), "--round", "1", *runs_option],
-    }[command]
-
-    # A settings file in the working folder is found without --config.
-    if settings_text is not None:
-        (tmp_path / "sketchloop.toml").write_text(settings_text, encoding="utf-8")
-
-    # Argparse exits with its usage error code.
-    with pytest.raises(SystemExit) as raised:
-        main([*base, *option])
-    errors = capsys.readouterr().err
-
-    # The error names the reason, and nothing is saved for the rejected command.
-    assert raised.value.code == 2, f"Expected the usage error code 2, got {raised.value.code}"
-    assert re.search(error_pattern, errors), f"Expected an error matching {error_pattern!r}, got {errors!r}"
-    assert not (tmp_path / "runs").exists(), "No session folder may be created for invalid options"
 
 
 class ExampleCamera(CaptureSource):
@@ -283,64 +209,6 @@ def test_cli_rounds_track_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     # The summary lists every round with its selection.
     selections_shown = all(line in output for line in ("Round 1 selected: 1", "Round 2 selected: none", "Round 3 selected: none"))
     assert "Rounds: 3" in output and selections_shown, "The summary must list all three rounds and their selections"
-
-
-def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
-                                    launches: list[tuple[AppController, dict[str, object]]]) -> None:
-    """
-    sketchloop ui launches with the defaults and telemetry off, refuses too many candidates, and takes its model from --config.
-    """
-    runs_dir = tmp_path / "runs"
-    exit_code = main(["ui", "--runs-dir", str(runs_dir), "--seed", "5"])
-    over_limit_exit = main(["ui", "--runs-dir", str(runs_dir), "--candidates", "9"])
-    errors = capsys.readouterr().err
-    diffusers_calls: list[tuple[object, Path]] = []
-
-    def record_diffusers(model_dir: Path = Path("models"), *, mode: object = None, **options: object) -> FakeGenerator:
-        """
-        Record the diffusers mode and models folder, and return a fake so no model loads.
-        """
-        diffusers_calls.append((mode, Path(model_dir)))
-        return FakeGenerator()
-
-    # A settings file in another folder chooses diffusers in quality mode, its models and runs folders, and 3 candidates.
-    monkeypatch.setattr("sketchloop.backends.DiffusersSketchGenerator", record_diffusers)
-    config_dir = tmp_path / "config"
-    config_dir.mkdir()
-    config = config_dir / "ui.toml"
-    config.write_text("\n".join(['[generator]', 'backend = "diffusers"', '[generator.diffusers]', 'mode = "quality"',
-                                 'models_dir = "weights"', '[storage]', 'runs_dir = "file-runs"', '[ui]', 'candidates = 3', '']),
-                      encoding="utf-8")
-    config_exit = main(["ui", "--config", str(config)])
-    fake_flag_exit = main(["ui", "--config", str(config), "--backend", "fake"])
-
-    # The three valid commands each launch once, and the first has a controller for the runs folder and 2 candidates.
-    exit_codes = (exit_code, config_exit, fake_flag_exit)
-    assert exit_codes == (0, 0, 0) and len(launches) == 3, f"Expected three launches, got {exit_codes} and {launches}"
-    controller, options = launches[0]
-    assert isinstance(controller, AppController) and controller.store.root == runs_dir, f"Bad controller {controller}"
-    assert options["default_candidates"] == 2 and options["default_seed"] == 5, f"Unexpected launch options {options}"
-
-    # Telemetry is off before the UI module runs.
-    telemetry = (options["GRADIO_ANALYTICS_ENABLED"], options["HF_HUB_DISABLE_TELEMETRY"])
-    assert telemetry == ("False", "1"), f"Telemetry must be disabled at launch, got {telemetry}"
-
-    # Asking for more candidates than the fake allows fails with the limit and does not launch.
-    limit_message = "9 candidates exceed the limit of 8. Lower --candidates or ui.candidates."
-    assert over_limit_exit == 1 and limit_message in errors, f"Expected the limit error, got {over_limit_exit} and {errors!r}"
-    assert not runs_dir.exists(), "Launching the UI must not create a session folder before the first round"
-
-    # The file's diffusers backend gets quality mode and the models folder next to the file, and its other defaults apply.
-    config_controller, config_options = launches[1]
-    expected_call = ("quality", (config_dir / "weights").resolve())
-    resolved_calls = [(mode, model_dir.resolve()) for mode, model_dir in diffusers_calls]
-    assert resolved_calls == [expected_call], f"Expected one diffusers backend {expected_call}, got {diffusers_calls}"
-    assert config_options["default_candidates"] == 3, f"The file's ui.candidates must apply, got {config_options}"
-    controller_runs = config_controller.store.root.resolve()
-    assert controller_runs == (config_dir / "file-runs").resolve(), f"Runs must sit next to the file, got {controller_runs}"
-
-    # --backend fake beats the file without a mode conflict, so no diffusers backend is created.
-    assert len(diffusers_calls) == 1, f"--backend fake must win over the file's diffusers, got {len(diffusers_calls)} calls"
 
 
 def test_cli_rejects_bad_image(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

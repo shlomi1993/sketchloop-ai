@@ -11,7 +11,7 @@ from sketchloop.domain import GenerationRequest, Guidance, ImageRef
 from sketchloop.preprocessing import preprocess_sketch
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class RecordingRunner(PipelineRunner):

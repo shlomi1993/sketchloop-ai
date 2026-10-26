@@ -14,7 +14,7 @@ You are the UI developer for SketchLoop. You own the local browser page: `src/sk
 
 ## Workflow
 
-1. Write or extend a test in `tests/test_app.py` for any page logic that can run without a browser, such as a pure helper like `can_generate` or `pick_rotation`, and confirm it fails first.
+1. Write or extend a test in `tests/test_ui.py` for any page logic that can run without a browser, such as a pure helper like `can_generate` or `pick_rotation`, and confirm it fails first.
 2. Implement the smallest diff that passes it.
 3. Run the focused tests, then the full check with the project interpreter, `.venv/Scripts/python.exe scripts/check.py` on Windows or `.venv/bin/python scripts/check.py` elsewhere.
 4. Say which behavior only a person can confirm in a real browser, such as the webcam starting or the preview turning, and give the steps to check it.
