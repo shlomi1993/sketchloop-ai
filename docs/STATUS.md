@@ -35,6 +35,8 @@ In place:
 - Claude Code environment ([ADR 0003](decisions/0003-claude-code-environment.md)): `CLAUDE.md`, shared permissions, seven role subagents including a `ui-developer` for the browser page, and the skills `/start-task`, `/handoff`, `/adr`, `/commit`, `/bisect`, `/readability`, and `/audit`. T06 used the researcher, architect, python-developer, qa-engineer, code-reviewer, and privacy-reviewer subagents.
 - Research workspace and Ruff lint ([ADR 0004](decisions/0004-research-workspace-and-tooling.md)).
 
+[ADR 0016](decisions/0016-keep-gradio-page-and-folder-store.md) keeps the Gradio page and the folder store over a separate JavaScript frontend or an SQL database, and names when to revisit them.
+
 Known hardware: Windows laptop without a GPU, laptop camera or USB webcam. A GPU or Colab may become available later.
 
 ## Next action

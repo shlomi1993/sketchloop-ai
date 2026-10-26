@@ -58,7 +58,7 @@ Define failure types for capture unavailable, invalid image, unsupported configu
 
 ## Practical defaults and pending decisions
 
-Start locally, with one user and manual triggering. A filesystem artifact store with versioned JSON metadata is a candidate baseline, not a committed schema. An external tracker can be added behind the store interface if justified. Do not require MLflow merely because it appears in the references.
+Start locally, with one user and manual triggering. The filesystem store with versioned JSON records stays the store, and the Gradio page stays the UI, until the revisit triggers in [ADR 0016](decisions/0016-keep-gradio-page-and-folder-store.md) apply, such as queries across many sessions. SQLite or an external tracker can then be added behind the store interface. Do not require MLflow merely because it appears in the references.
 
 OpenCV, Diffusers, and Gradio were adopted for capture and processing, generation, and the local UI ([ADR 0008](decisions/0008-opencv-for-image-input.md), [ADR 0009](decisions/0009-diffusers-backend.md), [ADR 0012](decisions/0012-gradio-ui-and-input-source.md)), and [ADR 0013](decisions/0013-default-dependencies.md) records how they are installed. Record further dependency decisions and compatible versions in ADRs.
 
