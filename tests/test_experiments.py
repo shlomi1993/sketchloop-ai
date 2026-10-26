@@ -348,8 +348,9 @@ def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
     ("Cannot open '" + "C:" + "\\Users\\some one\\unet.bin': denied", "Cannot open '<path>': denied"),
     ("Cannot open \"/" + "home/someone/unet.bin\": denied", "Cannot open \"<path>\": denied"),
     ("Cannot open /" + "Volumes/Data/unet.bin now", "Cannot open <path> now"),
+    ("Missing weights (/" + "opt/models/unet.bin), retry", "Missing weights (<path>), retry"),
     ("See https://huggingface.co/models or models/unet.bin", "See https://huggingface.co/models or models/unet.bin")
-], ids=["windows-with-space", "posix-quoted", "posix-unquoted", "url-and-relative"])
+], ids=["windows-with-space", "posix-quoted", "posix-unquoted", "posix-in-parentheses", "url-and-relative"])
 def test_failure_message_hides_paths(message: str, expected: str) -> None:
     """
     A saved failure message replaces absolute paths, which can name the user, and keeps URLs and relative paths.

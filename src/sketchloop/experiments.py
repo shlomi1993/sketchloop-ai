@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import StrEnum
 from importlib.metadata import PackageNotFoundError, version
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import MappingProxyType
 from typing import Final, TypeVar
 
@@ -28,11 +28,11 @@ ROUND_FILE: Final = "round.json"
 ROUND_FOLDER_PATTERN: Final = re.compile(r"round-([1-9][0-9]*)")
 MISSING_SOURCE_REASON: Final = "recorded before input sources were tracked"
 
-# Absolute paths to redact from failure messages, quoted ones up to the closing quote since names may contain spaces.
-DRIVE: Final = r"(?<!\w)[A-Za-z]:[\\/]"
-ABSOLUTE_PATH_PATTERN: Final = re.compile(
-    rf"(?<=')(?:{DRIVE}|\\\\|/)[^']*(?=')|(?<=\")(?:{DRIVE}|\\\\|/)[^\"]*(?=\")|(?:{DRIVE}|\\\\|(?<![\w.:/])/[^\s'\"/]+/)[^\s'\"]*"
-)
+# Failure messages are split into quoted strings, kept whole since paths may contain spaces, and runs of other text.
+MESSAGE_TOKEN_PATTERN: Final = re.compile(r"'[^']*'|\"[^\"]*\"|\S+")
+
+# Punctuation that can surround an unquoted path, such as a closing parenthesis or a trailing comma.
+PATH_PUNCTUATION: Final = "()[]{},;:."
 
 # Distributions whose versions can change generated output or how records are read.
 TRACKED_PACKAGES: Final = (
@@ -236,11 +236,38 @@ def collect_environment() -> Environment:
     return Environment(py_version=platform.python_version(), platform=system, packages=packages)
 
 
+def is_absolute_path(text: str) -> bool:
+    """
+    Tell whether text is an absolute POSIX or Windows path, including a network share.
+    """
+    return PurePosixPath(text).is_absolute() or PureWindowsPath(text).is_absolute()
+
+
+def redact_token(match: re.Match[str]) -> str:
+    """
+    Replace a message token that is an absolute path with a placeholder, keeping its quotes or punctuation.
+
+    Args:
+        match (re.Match[str]): A quoted string or a run of non-space text from the message.
+
+    Returns:
+        str: The token, with an absolute path replaced by <path>.
+    """
+    # A quoted token is a path when its whole content is one.
+    token = match.group()
+    if len(token) > 1 and token[0] in "'\"" and token[-1] == token[0]:
+        return f"{token[0]}<path>{token[0]}" if is_absolute_path(token[1:-1]) else token
+
+    # An unquoted token is a path once the punctuation around it is set aside.
+    core = token.strip(PATH_PUNCTUATION)
+    return token.replace(core, "<path>", 1) if core and is_absolute_path(core) else token
+
+
 def redact_paths(text: str) -> str:
     """
     Replace absolute paths, which can contain the user name, with a placeholder before the text is saved.
     """
-    return ABSOLUTE_PATH_PATTERN.sub("<path>", text)
+    return MESSAGE_TOKEN_PATTERN.sub(redact_token, text)
 
 
 def describe_failure(stage: RoundStage, error: BaseException) -> RoundFailure:
