@@ -23,7 +23,7 @@ You are the UI developer for SketchLoop. You own the local browser page: `src/sk
 
 - Keep the page thin. `ui.py` builds Gradio components and calls `AppController` only, and `AppController` never imports Gradio. Model logic, records, and storage stay out of the UI.
 - Python in `ui.py` follows the code style and import ordering in `AGENTS.md`, including type hints and one-line comments above each logical block.
-- Put CSS in `static/ui.css` and JavaScript in `static/ui.js`, never in Python strings. Each event's `js=` is a one-line call to a `window.sketchloop` helper that `ui.js` defines. Keep comments in these files short.
+- Put CSS in `static/ui.css` and JavaScript in `static/ui.js`, never in Python strings, and pass no `js=` to events. Change the page's look from Python by switching CSS classes through `elem_classes`, as the webcam rotation does, and let `ui.js` run its own code on page load. Keep comments in these files short.
 - Style the page through Gradio's theme and CSS variables, so light and dark modes both work.
 - `ui.js` clicks Gradio's own webcam controls by their titles. Recheck it whenever Gradio is upgraded, and verify any new Gradio API against the installed version before using it.
 - Keep the page local: serve on 127.0.0.1, with analytics off and no share link. Load nothing from external hosts.

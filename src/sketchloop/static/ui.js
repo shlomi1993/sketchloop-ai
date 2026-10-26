@@ -1,17 +1,19 @@
-// Helpers that the Gradio events in ui.py call.
+// Start the webcam when the page loads, since Gradio cannot do it itself.
 window.sketchloop = {
-    // Press Gradio's webcam controls, since Gradio cannot start the webcam itself. Recheck after Gradio upgrades.
-    openWebcam() {
-        const press = (selector) => {
-            const element = document.querySelector(selector);
-            (element?.closest("button") ?? element)?.click();
-        };
-        setTimeout(() => press('[title="grant webcam access"] button'), 500);
-        setTimeout(() => press('[title="start recording"]'), 2000);
-    },
+    // Press Gradio's webcam controls once they appear. Recheck the titles after Gradio upgrades.
+    openWebcam(attemptsLeft = 80) {
+        const grant = document.querySelector('[title="grant webcam access"] button');
+        if (!grant) {
+            if (attemptsLeft > 0) setTimeout(() => this.openWebcam(attemptsLeft - 1), 250);
+            return;
+        }
 
-    // Turn only the live preview, not the saved frame.
-    rotatePreview(degrees) {
-        document.querySelector("#webcam")?.style.setProperty("--sketch-rotation", `${degrees || 0}deg`);
+        grant.click();
+        setTimeout(() => {
+            const start = document.querySelector('[title="start recording"]');
+            (start?.closest("button") ?? start)?.click();
+        }, 1500);
     },
 };
+
+window.addEventListener("load", () => window.sketchloop.openWebcam());

@@ -16,7 +16,7 @@ import sketchloop
 from sketchloop.app import NO_SKETCH_MESSAGE, AppController
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import InvalidSketchError
-from sketchloop.domain import InvalidSelectionError, SketchLoopError, UnsupportedConfigurationError
+from sketchloop.domain import InvalidSelectionError, Rotation, SketchLoopError, SketchSource, UnsupportedConfigurationError
 from sketchloop.experiments import FolderStore, load_session
 
 
@@ -280,7 +280,7 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.usefixtures("no_network")
 def test_ui_builds_offline(controller: AppController, monkeypatch: pytest.MonkeyPatch) -> None:
     """
-    build_app builds offline without launching, analytics are off, and Generate waits for a sketch and prompt.
+    The page builds offline without launching, analytics are off, and Generate waits for a sketch and prompt.
     """
     import gradio
 
@@ -290,10 +290,10 @@ def test_ui_builds_offline(controller: AppController, monkeypatch: pytest.Monkey
         """
         Fail the test if the app is launched.
         """
-        raise AssertionError("build_app must not launch the app")
+        raise AssertionError("Building the page must not launch it")
 
     monkeypatch.setattr(gradio.Blocks, "launch", refuse_launch)
-    app = ui.build_app(controller, default_candidates=2, default_seed=None)
+    app = ui.SketchPage(controller, default_candidates=2, default_seed=None).build()
 
     # The app is a Gradio Blocks object with analytics disabled.
     assert isinstance(app, gradio.Blocks), f"Expected gr.Blocks, got {type(app)}"
@@ -308,8 +308,33 @@ def test_ui_builds_offline(controller: AppController, monkeypatch: pytest.Monkey
     rotations = [ui.pick_rotation("webcam", False), ui.pick_rotation("upload", False), ui.pick_rotation("webcam", True)]
     assert rotations == [180, 0, 0], f"Unexpected rotations {rotations}"
 
-    # The stylesheet exists, and the script defines every helper the events call.
-    script = ui.SCRIPT_PATH.read_text(encoding="utf-8")
-    called = re.findall(r"window\.sketchloop\.(\w+)", ui.OPEN_WEBCAM_JS + ui.ROTATE_PREVIEW_JS)
-    missing = [name for name in called if f"{name}(" not in script]
-    assert ui.STYLESHEET_PATH.is_file() and called and not missing, f"Script helpers missing: {missing}"
+    # The stylesheet turns the preview for every rotation but none, and the script starts the webcam on load by itself.
+    stylesheet = ui.STYLESHEET_PATH.read_text(encoding="utf-8")
+    missing = [rotation for rotation in Rotation if rotation and f"#webcam.rotate-{rotation} " not in stylesheet]
+    assert not missing, f"ui.css has no preview rule for rotations {missing}"
+    assert 'addEventListener("load"' in ui.SCRIPT_PATH.read_text(encoding="utf-8"), "ui.js must start the webcam on load"
+
+
+
+@pytest.mark.usefixtures("no_network")
+def test_page_handlers_keep_frame_and_refuse_missing_sketch(controller: AppController) -> None:
+    """
+    SketchPage handlers work without building the page, refusing a webcam round with no frame and keeping a BGR copy.
+    """
+    import gradio
+
+    from sketchloop import ui
+
+    page = ui.SketchPage(controller, default_candidates=2, default_seed=None)
+
+    # Without a frame, Generate shows the controller's no-sketch message.
+    with pytest.raises(gradio.Error, match=re.escape(NO_SKETCH_MESSAGE)):
+        page.run_generation("webcam", None, "chair", 2, None, 0, False, progress=lambda *args, **kwargs: None)
+
+    # A streamed RGB frame is kept in BGR order and enables Generate.
+    frame = np.zeros((4, 4, 3), dtype=np.uint8)
+    frame[..., 0] = 255
+    button = page.keep_frame(frame, "webcam", None, "chair")
+    kept = page.latest_frames[SketchSource.WEBCAM]
+    assert kept[0, 0].tolist() == [0, 0, 255], f"Expected the frame in BGR order, got {kept[0, 0].tolist()}"
+    assert button.interactive is True, "Generate must be enabled once a frame and prompt exist"
