@@ -326,7 +326,7 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert telemetry == ("False", "1"), f"Telemetry must be disabled at launch, got {telemetry}"
 
     # Asking for more candidates than the fake allows fails with the limit and does not launch.
-    limit_message = "Default candidates 9 (--candidates or ui.candidates) is above the backend limit of 8. Use 8 or fewer."
+    limit_message = "9 candidates exceed the limit of 8. Lower --candidates or ui.candidates."
     assert over_limit_exit == 1 and limit_message in errors, f"Expected the limit error, got {over_limit_exit} and {errors!r}"
     assert not runs_dir.exists(), "Launching the UI must not create a session folder before the first round"
 

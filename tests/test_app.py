@@ -213,12 +213,13 @@ def test_app_history_refresh_and_new_session(controller: AppController, sketch_f
     assert new_saved.rounds[0].iteration.parent_id is None, "The first round of a new session must not link to the old one"
 
 
-def list_imported_names(module_file: Path) -> set[str]:
+def list_imported_names(module_path: Path) -> set[str]:
     """
-    List every module and name a source file imports anywhere, including module.name pairs for from-imports.
+    List every module and name a module or package imports anywhere, including module.name pairs for from-imports.
     """
+    files = sorted(module_path.glob("*.py")) if module_path.is_dir() else [module_path.with_suffix(".py")]
     names: set[str] = set()
-    for node in ast.walk(ast.parse(module_file.read_text(encoding="utf-8"))):
+    for node in (node for file in files for node in ast.walk(ast.parse(file.read_text(encoding="utf-8")))):
         if isinstance(node, ast.Import):
             names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
@@ -242,7 +243,7 @@ def test_import_boundaries(module: str, forbidden: tuple[str, ...]) -> None:
     """
     Session and controller import no store, preprocessing, capture, factory, or UI code, and no module loads gradio on import.
     """
-    imported = list_imported_names(Path(sketchloop.__file__).parent / f"{module}.py")
+    imported = list_imported_names(Path(sketchloop.__file__).parent / module)
     found = sorted(name for name in imported if any(name == banned or name.startswith(f"{banned}.") for banned in forbidden))
     code = "; ".join(["import sys", "sys.modules['gradio'] = None", f"import sketchloop.{module}",
                       "assert 'sketchloop.ui' not in sys.modules"])

@@ -111,7 +111,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <text class="n" x="120" y="45" text-anchor="middle">sketchloop ui</text>
           <text class="s" x="120" y="63" text-anchor="middle">flags and optional --config</text>
           <rect class="box" x="320" y="20" width="200" height="60" rx="6"/>
-          <text class="n" x="420" y="45" text-anchor="middle">cli.parse_args</text>
+          <text class="n" x="420" y="45" text-anchor="middle">cli.arguments</text>
           <text class="s" x="420" y="63" text-anchor="middle">subcommand and its options</text>
           <rect class="box" x="620" y="20" width="200" height="60" rx="6"/>
           <text class="n" x="720" y="45" text-anchor="middle">settings.py</text>
@@ -130,7 +130,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <text class="t" x="560" y="111" text-anchor="middle">then runs the ui command with the effective Settings</text>
           <!-- Row 2: build and serve -->
           <rect class="box" x="20" y="160" width="180" height="62" rx="6"/>
-          <text class="n" x="110" y="186" text-anchor="middle">cli.launch_ui</text>
+          <text class="n" x="110" y="186" text-anchor="middle">cli.serve.launch_ui</text>
           <text class="s" x="110" y="204" text-anchor="middle">telemetry off, imports ui</text>
           <rect class="box" x="250" y="160" width="180" height="62" rx="6"/>
           <text class="n" x="340" y="181" text-anchor="middle">factories</text>
@@ -276,7 +276,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <text class="n" x="918" y="442" text-anchor="middle">rounds · selections · records</text>
           <text class="s" x="918" y="460" text-anchor="middle">this session's history, each round linked to the previous one</text>
           <rect class="side" x="240" y="414" width="140" height="64" rx="6"/>
-          <text class="n" x="310" y="435" text-anchor="middle">cli.py</text>
+          <text class="n" x="310" y="435" text-anchor="middle">cli package</text>
           <text class="sm" x="310" y="451" text-anchor="middle">run · rerun</text>
           <text class="s" x="310" y="467" text-anchor="middle">terminal front end</text>
           <path class="edge" d="M380,446 H410" marker-end="url(#m-ah)"/>
@@ -383,21 +383,21 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
       <table>
         <thead><tr><th>Module</th><th>Job</th><th>Called by</th></tr></thead>
         <tbody>
-          <tr><td>ui.py</td><td>Gradio page: webcam or upload, prompt, Generate, gallery, choice, history, with its CSS and script in <code>static/</code></td><td>cli.launch_ui</td></tr>
+          <tr><td>ui.py</td><td>Gradio page: webcam or upload, prompt, Generate, gallery, choice, history, with its CSS and script in <code>static/</code></td><td>cli/serve.py</td></tr>
           <tr><td>app.py</td><td><code>AppController</code>: input checks, view building, stale-page protection</td><td>ui.py</td></tr>
-          <tr><td>session.py</td><td><code>SketchSession</code>: runs and times stages, links rounds, records failures</td><td>app.py, cli.py run and rerun</td></tr>
-          <tr><td>capture.py</td><td>Load PNG or JPEG files, encode frames, OpenCV camera capture</td><td>app.py, cli.py, components.py</td></tr>
+          <tr><td>session.py</td><td><code>SketchSession</code>: runs and times stages, links rounds, records failures</td><td>app.py, cli/run.py, cli/rerun.py</td></tr>
+          <tr><td>capture.py</td><td>Load PNG or JPEG files, encode frames, OpenCV camera capture</td><td>app.py, cli/run.py, components.py</td></tr>
           <tr><td>preprocessing.py</td><td><code>Preprocessor</code> base class and the stroke pipeline with recorded steps</td><td>session.py</td></tr>
           <tr><td>generation.py</td><td><code>Generator</code> base class, capabilities, request validation</td><td>both backends, session.py</td></tr>
           <tr><td>backends/diffusers.py</td><td>Real model: SD 1.5 + ControlNet scribble, fast and quality modes</td><td>backends.make_generator</td></tr>
           <tr><td>backends/fake.py</td><td>Deterministic labeled fake backend</td><td>backends.make_generator, tests</td></tr>
           <tr><td>evaluation.py</td><td><code>Evaluator</code> base class and the no-op scorer</td><td>session.py</td></tr>
-          <tr><td>experiments.py</td><td>Records, <code>FolderStore</code>, <code>MemoryStore</code>, loading, checksums, rerun comparison</td><td>session.py, cli.py show and rerun</td></tr>
+          <tr><td>experiments.py</td><td>Records, <code>FolderStore</code>, <code>MemoryStore</code>, loading, checksums, rerun comparison</td><td>session.py, cli/show.py, cli/rerun.py</td></tr>
           <tr><td>domain.py</td><td>Typed records: <code>ImageRef</code>, <code>Guidance</code>, <code>Iteration</code>, <code>SelectionEvent</code>, errors, and shared enums such as <code>SketchSource</code>, <code>Rotation</code>, and <code>GenerationBackend</code></td><td>everything</td></tr>
-          <tr><td>settings.py</td><td>Read <code>sketchloop.toml</code>, apply flag overrides, check types</td><td>cli.py</td></tr>
-          <tr><td>components.py</td><td>Name registries that build capture, preprocessor, evaluator, store</td><td>cli.py</td></tr>
-          <tr><td>backends/__init__.py</td><td><code>make_generator</code> for the fake or diffusers backend</td><td>cli.py</td></tr>
-          <tr><td>cli.py</td><td>Subcommands <code>run</code>, <code>show</code>, <code>rerun</code>, <code>ui</code></td><td>the <code>sketchloop</code> command</td></tr>
+          <tr><td>settings.py</td><td>Read <code>sketchloop.toml</code>, apply flag overrides, check types</td><td>cli/arguments.py</td></tr>
+          <tr><td>components.py</td><td>Name registries that build capture, preprocessor, evaluator, store</td><td>cli package</td></tr>
+          <tr><td>backends/__init__.py</td><td><code>make_generator</code> for the fake or diffusers backend</td><td>cli/common.py</td></tr>
+          <tr><td>cli/</td><td>Subcommands, one module each: <code>arguments</code> parses flags and settings, <code>run</code>, <code>show</code>, <code>rerun</code>, and <code>serve</code> for <code>ui</code>, with shared helpers in <code>common</code></td><td>the <code>sketchloop</code> command</td></tr>
         </tbody>
       </table>
     </div>
