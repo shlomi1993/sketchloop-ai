@@ -1,5 +1,6 @@
 import gradio as gr
 import numpy as np
+import time
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -28,6 +29,10 @@ NEW_SESSION_STATUS: Final = "New session started. Its folder is created with the
 FAKE_BACKEND_PREFIX: Final = "**Fake backend:** these images are deterministic noise, not output from a real model."
 PROGRESS_MESSAGE: Final = "Generating. The first round also loads the model."
 SHARED_SESSION_NOTE: Final = "All browser tabs share one session, and reloading keeps it."
+STALE_FRAME_MESSAGE: Final = "The webcam stopped sending frames. Restart it, then generate."
+
+# A webcam frame older than this many capture intervals means the stream stopped.
+STALE_FRAME_INTERVALS: Final = 10
 
 # Serve only on this machine.
 SERVER_HOST: Final = "127.0.0.1"
@@ -152,8 +157,17 @@ class SketchPage:
         self.default_seed = default_seed
         self.capture_interval_seconds = capture_interval_seconds
 
-        # The newest webcam frame in BGR order, shared by all tabs.
-        self.latest_frames: dict[SketchSource, np.ndarray] = {}
+        # The newest webcam frame in BGR order and when it arrived, shared by all tabs.
+        self.latest_frame: np.ndarray | None = None
+        self.latest_frame_time = 0.0
+
+    def get_fresh_frame(self) -> np.ndarray | None:
+        """
+        Return the newest webcam frame, or None when none arrived within the last few capture intervals.
+        """
+        max_age_seconds = STALE_FRAME_INTERVALS * self.capture_interval_seconds
+        is_fresh = self.latest_frame is not None and time.monotonic() - self.latest_frame_time <= max_age_seconds
+        return self.latest_frame if is_fresh else None
 
     def toggle_source(self, choice: str, use_raw: bool) -> tuple[gr.Image, gr.Image, gr.Dropdown]:
         """
@@ -179,7 +193,7 @@ class SketchPage:
         """
         Enable Generate once the chosen source has a sketch and the prompt is not blank.
         """
-        has_webcam_frame = SketchSource.WEBCAM in self.latest_frames
+        has_webcam_frame = self.get_fresh_frame() is not None
         return gr.Button(interactive=can_generate(choice, has_webcam_frame, upload_path, prompt_text))
 
     def keep_frame(self, frame: np.ndarray | None, choice: str, upload_path: str | None, prompt_text: str | None) -> gr.Button:
@@ -195,9 +209,10 @@ class SketchPage:
         Returns:
             gr.Button: Generate, enabled when generation can start.
         """
-        # Keep the newest frame, converted from RGB to BGR.
+        # Keep the newest frame, converted from RGB to BGR, and when it arrived.
         if frame is not None:
-            self.latest_frames[SketchSource.WEBCAM] = np.ascontiguousarray(frame[:, :, ::-1])
+            self.latest_frame = np.ascontiguousarray(frame[:, :, ::-1])
+            self.latest_frame_time = time.monotonic()
 
         return self.update_generate_button(choice, upload_path, prompt_text)
 
@@ -220,11 +235,13 @@ class SketchPage:
         Returns:
             RoundOutputs: Values for the round display components.
         """
-        # Pick the sketch for the chosen source.
+        # Pick the sketch for the chosen source, refusing a webcam frame from before the stream stopped.
         progress(None, desc=PROGRESS_MESSAGE)
         source = SketchSource(choice)
         upload = None if upload_path is None else Path(upload_path)
-        sketch = self.latest_frames.get(source) if source == SketchSource.WEBCAM else upload
+        sketch = self.get_fresh_frame() if source == SketchSource.WEBCAM else upload
+        if source == SketchSource.WEBCAM and sketch is None and self.latest_frame is not None:
+            raise gr.Error(STALE_FRAME_MESSAGE)
 
         # Generate, showing any error.
         try:

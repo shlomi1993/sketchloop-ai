@@ -229,8 +229,8 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <text class="s" x="1004" y="158" text-anchor="middle">and show_history</text>
           <path class="edge" d="M316,168 V202" marker-end="url(#m-ah)"/>
           <rect class="box" x="240" y="204" width="152" height="42" rx="21"/>
-          <text class="n" x="316" y="222" text-anchor="middle">latest_frames</text>
-          <text class="s" x="316" y="238" text-anchor="middle">newest frame, BGR</text>
+          <text class="n" x="316" y="222" text-anchor="middle">latest_frame</text>
+          <text class="s" x="316" y="238" text-anchor="middle">newest frame and its time</text>
           <path class="hot" d="M392,214 L438,172" marker-end="url(#m-ahh)"/>
           <text class="t" x="404" y="194" text-anchor="end">read</text>
           <path class="hot" d="M488,168 V288" marker-end="url(#m-ahh)"/>
@@ -367,8 +367,8 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
   <section>
     <h2>3 · One round, step by step</h2>
     <ol class="steps">
-      <li>The browser streams webcam frames, and <code>keep_frame</code> keeps only the newest one, converted to OpenCV's BGR order. Generate becomes clickable once there is a sketch and a non-blank prompt.</li>
-      <li><code>run_generation</code> takes that frame, or the uploaded file path, and calls <code>AppController.run_round</code>. All session-changing handlers share one concurrency group, so a choice cannot interleave with a running round.</li>
+      <li>The browser streams webcam frames, and <code>keep_frame</code> keeps only the newest one, converted to OpenCV's BGR order, with the time it arrived. Generate becomes clickable once there is a sketch and a non-blank prompt.</li>
+      <li><code>run_generation</code> takes that frame, refusing it once the stream has stopped sending frames, or takes the uploaded file path, and calls <code>AppController.run_round</code>. All session-changing handlers share one concurrency group, so a choice cannot interleave with a running round.</li>
       <li><code>AppController</code> checks the sketch, prompt, and rotation before writing anything, then turns the input into an <code>ImageRef</code> and bytes with <code>encode_frame</code> or <code>load_sketch_file</code>.</li>
       <li><code>SketchSession.run_round</code> saves <code>session.json</code> once, preprocesses the sketch unless raw is ticked, builds a <code>GenerationRequest</code>, and calls the generator, which validates the request against its capabilities first. The new iteration is linked to the previous round's ID, then the evaluator scores the candidates.</li>
       <li>The store writes the raw sketch, the processed sketch, the candidates, and <code>round.json</code>. If any stage fails, saving included, a failed record naming the stage joins the history and is saved when the store allows, and the stage's own error reaches the page as a one-line message.</li>

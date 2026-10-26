@@ -16,7 +16,7 @@ import sketchloop
 from sketchloop.app import NO_SKETCH_MESSAGE, AppController
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import InvalidSketchError
-from sketchloop.domain import InvalidSelectionError, Rotation, SketchLoopError, SketchSource, UnsupportedConfigurationError
+from sketchloop.domain import InvalidSelectionError, Rotation, SketchLoopError, UnsupportedConfigurationError
 from sketchloop.experiments import FolderStore, load_session
 
 
@@ -335,6 +335,12 @@ def test_page_handlers_keep_frame_and_refuse_missing_sketch(controller: AppContr
     frame = np.zeros((4, 4, 3), dtype=np.uint8)
     frame[..., 0] = 255
     button = page.keep_frame(frame, "webcam", None, "chair")
-    kept = page.latest_frames[SketchSource.WEBCAM]
+    kept = page.latest_frame
     assert kept[0, 0].tolist() == [0, 0, 255], f"Expected the frame in BGR order, got {kept[0, 0].tolist()}"
     assert button.interactive is True, "Generate must be enabled once a frame and prompt exist"
+
+    # A frame from before the stream stopped disables Generate and is refused with its own message.
+    page.latest_frame_time -= ui.STALE_FRAME_INTERVALS * page.capture_interval_seconds + 1
+    assert page.update_generate_button("webcam", None, "chair").interactive is False, "A stale frame must disable Generate"
+    with pytest.raises(gradio.Error, match=re.escape(ui.STALE_FRAME_MESSAGE)):
+        page.run_generation("webcam", None, "chair", 2, None, 0, False, progress=lambda *args, **kwargs: None)
