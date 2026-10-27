@@ -2,6 +2,7 @@ import cv2
 import hashlib
 import numpy as np
 import random
+import time
 import uuid
 
 from abc import ABC, abstractmethod
@@ -161,6 +162,25 @@ def select_device() -> TorchDevice:
     return TorchDevice.CPU
 
 
+def describe_torch_runtime(torch_module: Any, device: TorchDevice) -> dict[str, ControlValue]:
+    """
+    Read the torch thread count, and the GPU name on CUDA, which shape latency and are recorded as effective settings.
+
+    Args:
+        torch_module (Any): The imported torch module.
+        device (TorchDevice): Device the pipeline runs on.
+
+    Returns:
+        dict[str, ControlValue]: torch_threads, plus accelerator on CUDA.
+    """
+    # On MPS the session's CPU name already names the chip, and on CPU there is no accelerator.
+    runtime: dict[str, ControlValue] = {"torch_threads": torch_module.get_num_threads()}
+    if device == TorchDevice.CUDA:
+        runtime["accelerator"] = torch_module.cuda.get_device_name(0)
+
+    return runtime
+
+
 def scribble_conditioning(sketch_payload: bytes) -> np.ndarray:
     """
     Turn a dark-on-light sketch into white strokes on black, 512 px on the long side, as the scribble ControlNet expects.
@@ -235,6 +255,7 @@ class DiffusersSketchGenerator(Generator):
         default_mode = GenerationMode.FAST if self.device == TorchDevice.CPU else GenerationMode.QUALITY
         self.mode = GenerationMode(mode) if mode else default_mode
         self._runner = runner
+        self._runtime: dict[str, ControlValue] = {}
 
         # Negative prompts need classifier-free guidance, which the low LCM guidance scale effectively disables.
         settings = MODE_SETTINGS[self.mode]
@@ -311,6 +332,7 @@ class DiffusersSketchGenerator(Generator):
             message = f"Cannot load the diffusers models: {first_line(error).rstrip('.')}. Rerun scripts/download_models.py."
             raise GenerationBackendError(message) from error
 
+        self._runtime = describe_torch_runtime(torch, self.device)
         return DiffusersRunner(pipeline, torch)
 
     def _build_pipeline_kwargs(self, request: GenerationRequest, controls: dict[str, ControlValue],
@@ -333,10 +355,6 @@ class DiffusersSketchGenerator(Generator):
 
     def _generate_candidates(self, n_candidates: int, base_seed: int,
                              pipeline_kwargs: dict[str, Any]) -> tuple[list[Candidate], dict[str, bytes]]:
-        # Load the models on first use, so creating the backend stays fast.
-        if self._runner is None:
-            self._runner = self._load_runner()
-
         # Generate candidates one at a time to keep peak memory low on CPU.
         candidates = []
         payloads = {}
@@ -378,7 +396,7 @@ class DiffusersSketchGenerator(Generator):
             "safety_checker": False,
         }
         return EffectiveSettings(prompt=request.guidance.prompt, negative_prompt=request.guidance.negative_prompt,
-                                 controls=controls | settings)
+                                 controls=controls | settings | self._runtime)
 
     def generate(self, request: GenerationRequest, sketch_payload: bytes) -> GenerationOutput:
         """
@@ -389,7 +407,7 @@ class DiffusersSketchGenerator(Generator):
             sketch_payload (bytes): Encoded bytes of the request's sketch image.
 
         Returns:
-            GenerationOutput: Candidates and their PNG bytes.
+            GenerationOutput: Candidates, their PNG bytes, and the model load time when this call loaded the models.
         """
         # Refuse bytes that are not the requested sketch, so the record names the image actually used.
         if hashlib.sha256(sketch_payload).hexdigest() != request.sketch.sha256:
@@ -400,12 +418,25 @@ class DiffusersSketchGenerator(Generator):
         controls = {spec.name: spec.default for spec in self._capabilities.controls} | dict(request.guidance.controls)
         pipeline_kwargs = self._build_pipeline_kwargs(request, controls, sketch_payload)
 
+        # Load the models on first use and time it, so creating the backend stays fast and the round records the load.
+        load_seconds = None
+        if self._runner is None:
+            started = time.perf_counter()
+            self._runner = self._load_runner()
+            load_seconds = time.perf_counter() - started
+
         # Draw a base seed when none is given and record it, so each candidate can be regenerated.
+        # Keep a load that succeeded before a failed generation on the error, since no output carries it.
         base_seed = request.seed if request.seed is not None else random.randrange(2**31)
-        candidates, payloads = self._generate_candidates(request.n_candidates, base_seed, pipeline_kwargs)
+        try:
+            candidates, payloads = self._generate_candidates(request.n_candidates, base_seed, pipeline_kwargs)
+        except Exception as error:
+            if load_seconds is not None:
+                error.add_note(f"Model load took {load_seconds:.2f} s before generation failed.")
+            raise
 
         # Record the backend and every setting the pipeline actually used.
         resolution = f"{pipeline_kwargs['width']}x{pipeline_kwargs['height']}"
         effective = self._collect_effective_settings(request, controls, candidates, resolution)
         result = GenerationResult(candidates=tuple(candidates), backend=self._identify_backend(), effective=effective)
-        return GenerationOutput(result=result, payloads=payloads)
+        return GenerationOutput(result=result, payloads=payloads, load_seconds=load_seconds)

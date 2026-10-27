@@ -7,7 +7,7 @@ from enum import StrEnum
 from types import MappingProxyType
 
 from sketchloop.domain import (ControlValue, GenerationRequest, GenerationResult, InvalidRecordError, IssueCode,
-                               UnsupportedConfigurationError, ValidationIssue, require)
+                               UnsupportedConfigurationError, ValidationIssue, require, require_duration)
 
 
 class ControlKind(StrEnum):
@@ -85,12 +85,17 @@ class GeneratorCapabilities:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class GenerationOutput:
     """
-    A generation result plus each candidate's image bytes, checked against its checksum.
+    A generation result plus each candidate's image bytes, checked against its checksum, and any model load time.
     """
     result: GenerationResult
     payloads: Mapping[str, bytes]
+    load_seconds: float | None = None  # Seconds this call spent loading models, None when it loaded none
 
     def __post_init__(self) -> None:
+        # A reported load time is finite seconds of at least 0.
+        if self.load_seconds is not None:
+            require_duration(self.load_seconds, "load_seconds")
+
         # Freeze the payloads, then require exactly one payload per candidate image.
         object.__setattr__(self, "payloads", MappingProxyType(dict(self.payloads)))
         images = {candidate.image.path: candidate.image for candidate in self.result.candidates}

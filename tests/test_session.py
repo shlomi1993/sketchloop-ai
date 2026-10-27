@@ -15,10 +15,11 @@ import sketchloop
 from sketchloop.app import AppController
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import CaptureSource, encode_frame, raw_image_ref
-from sketchloop.domain import (Guidance, ImageRef, SketchLoopError, SketchSource, UnsupportedConfigurationError,
-                               record_no_selection, select_candidates)
+from sketchloop.domain import (Guidance, ImageRef, InvalidRecordError, SketchLoopError, SketchSource,
+                               UnsupportedConfigurationError, record_no_selection, select_candidates)
 from sketchloop.evaluation import Evaluator
 from sketchloop.experiments import MemoryStore, RoundRecord, SessionRecord, StoreError
+from sketchloop.generation import Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor
 from sketchloop.session import SketchSession
 
@@ -213,3 +214,39 @@ def test_session_runs_with_substituted_components(tmp_path: Path, constant_evalu
     message = "The browser interface shows saved image files, so it needs a store that keeps files in a folder."
     with pytest.raises(SketchLoopError, match=re.escape(message)):
         AppController(FakeGenerator(), MemoryStore())
+
+
+@pytest.mark.usefixtures("counting_clock")
+def test_session_records_model_load(first_load_generator: Generator) -> None:
+    """
+    A reported model load is recorded as its own stage in the first round only, and generation leaves it out.
+    """
+    raw_sketch, raw_payload = StillCamera().capture()
+    session = SketchSession(first_load_generator, MemoryStore(), preprocessor=IdentityPreprocessor())
+    guidance = Guidance(prompt="chair")
+    first = session.run_round(raw_sketch, raw_payload, guidance, source=SketchSource.CAMERA)
+    second = session.run_round(raw_sketch, raw_payload, guidance, source=SketchSource.CAMERA)
+
+    # The generate call takes one 7 s clock step, of which the reported 5 s load is model_load and the rest generation.
+    timings = first.timings_seconds
+    stages = ["preprocessing", "model_load", "generation", "evaluation"]
+    assert list(timings) == stages, f"Expected every stage in order, got {list(timings)}"
+    assert timings["model_load"] == 5.0, f"Expected a 5 s load, got {timings['model_load']}"
+    assert timings["generation"] == pytest.approx(2.0), f"Generation must leave out the load, got {timings['generation']}"
+
+    # The second round loads nothing, so it records no model_load stage.
+    assert "model_load" not in second.timings_seconds, f"Only the first round loads, got {second.timings_seconds}"
+
+
+def test_session_refuses_load_longer_than_call(first_load_generator: Generator) -> None:
+    """
+    A backend that reports a model load longer than its whole call fails the round in generation instead of being clamped.
+    """
+    raw_sketch, raw_payload = StillCamera().capture()
+    session = SketchSession(first_load_generator, MemoryStore())
+
+    # The real clock makes the fake call far shorter than its reported 5 s load.
+    with pytest.raises(InvalidRecordError, match="model load in a .* call. Fix its load_seconds."):
+        session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source="file")
+    failure = session.records[0].failure
+    assert failure.stage == "generation", f"An impossible load must fail in generation, got {failure}"

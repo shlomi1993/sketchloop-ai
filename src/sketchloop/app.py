@@ -40,7 +40,7 @@ class RoundView:
     sketch_path: Path  # Sketch the generator received, processed or raw
     candidates: tuple[CandidateView, ...]  # Candidates in display order
     is_fake: bool  # Whether the fake backend produced the images
-    generation_seconds: float  # Generation time, including the model load in the first round
+    generation_seconds: float  # Generation time, without a first model load, which is recorded separately
     selection: str | None  # "1, 3" or "none" once recorded, None while not recorded
 
 

@@ -8,11 +8,11 @@ from functools import partial
 from pathlib import Path
 
 from sketchloop.domain import (SCHEMA_VERSION, GenerationRequest, Guidance, ImageRef, InvalidSelectionError, Iteration,
-                               Rotation, SelectionEvent, SketchSource, Unavailable)
+                               Rotation, SelectionEvent, SketchSource, Unavailable, require)
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
 from sketchloop.experiments import (ExperimentStore, RerunLink, RoundRecord, RoundStage, RoundStatus, SessionRecord,
                                     StoreError, collect_environment, describe_failure, require_known_source)
-from sketchloop.generation import Generator
+from sketchloop.generation import GenerationOutput, Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor, StrokePreprocessor
 
 
@@ -26,7 +26,7 @@ class RoundOutcome:
     raw_sketch: ImageRef  # Raw sketch as loaded or captured
     steps: tuple[PreprocessingStep, ...]  # Preprocessing steps applied, empty with --raw
     iteration: Iteration  # Request, result, and link to the previous round
-    timings_seconds: Mapping[str, float]  # Duration by stage, where generation includes a first model load
+    timings_seconds: Mapping[str, float]  # Duration by stage, with a first model load as model_load rather than generation
     scores: Mapping[str, float]  # Evaluator scores by candidate ID, empty with the no-op evaluator
 
 
@@ -84,6 +84,22 @@ class SketchSession:
         timings[RoundStage.PREPROCESSING] = time.perf_counter() - started
         return processed.image, processed.payload, processed.steps
 
+    def _generate(self, request: GenerationRequest, sketch_payload: bytes, timings: dict[str, float]) -> GenerationOutput:
+        # Time the call, and refuse a reported model load longer than the call that contains it.
+        started = time.perf_counter()
+        output = self.generator.generate(request, sketch_payload)
+        elapsed = time.perf_counter() - started
+        load_seconds = output.load_seconds or 0.0
+        message = f"The backend reported a {load_seconds:.2f} s model load in a {elapsed:.2f} s call. Fix its load_seconds."
+        require(load_seconds <= elapsed, message)
+
+        # Record a reported load as its own stage, so generation is only the time spent generating.
+        if output.load_seconds is not None:
+            timings[RoundStage.MODEL_LOAD] = output.load_seconds
+
+        timings[RoundStage.GENERATION] = elapsed - load_seconds
+        return output
+
     def run_round(self, raw_sketch: ImageRef, raw_payload: bytes, guidance: Guidance, *, source: SketchSource | Unavailable,
                   rotation: int = Rotation.DEG_000, use_raw: bool = False, n_candidates: int = 1, seed: int | None = None,
                   reuse: PreprocessedSketch | None = None) -> RoundOutcome:
@@ -123,12 +139,10 @@ class SketchSession:
         try:
             sketch, sketch_payload, steps = self._prepare_sketch(raw_sketch, raw_payload, rotation, use_raw, reuse, timings)
 
-            # Generate and time the call, which includes the model load in the first round, then link to the previous round.
+            # Generate, then link to the previous round.
             stage = RoundStage.GENERATION
             request = GenerationRequest(sketch=sketch, guidance=guidance, n_candidates=n_candidates, seed=seed)
-            started = time.perf_counter()
-            output = self.generator.generate(request, sketch_payload)
-            timings[RoundStage.GENERATION] = time.perf_counter() - started
+            output = self._generate(request, sketch_payload, timings)
             parent_id = self.rounds[-1].iteration.id if self.rounds else None
             iteration = Iteration(parent_id=parent_id, request=request, result=output.result)
 

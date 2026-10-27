@@ -24,6 +24,7 @@ class RoundStage(StrEnum):
     A timed stage of a round, recorded as a stage timing and as the stage a failure happened in.
     """
     PREPROCESSING = "preprocessing"
+    MODEL_LOAD = "model_load"
     GENERATION = "generation"
     EVALUATION = "evaluation"
     SAVING = "saving"

@@ -4,9 +4,11 @@ import numpy as np
 import pytest
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
-from sketchloop.backends.diffusers import DiffusersSketchGenerator, GenerationBackendError, PipelineRunner
+from sketchloop.backends.diffusers import (DiffusersSketchGenerator, GenerationBackendError, PipelineRunner, TorchDevice,
+                                           describe_torch_runtime)
 from sketchloop.domain import GenerationRequest, Guidance, ImageRef
 from sketchloop.preprocessing import preprocess_sketch
 
@@ -93,6 +95,66 @@ def test_diffusers_missing_model(tmp_path: Path) -> None:
     message = str(raised.value)
     assert "stable-diffusion-v1-5" in message and "download_models.py" in message, f"Unhelpful error {message!r}"
     assert "\n" not in message, "The error must be a single line"
+
+
+@pytest.mark.usefixtures("counting_clock")
+def test_diffusers_reports_model_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    An injected runner loads nothing, and a lazy load is timed in the first call only.
+    """
+    sketch, payload = make_sketch()
+    request = GenerationRequest(sketch=sketch, guidance=Guidance(prompt="chair"), seed=1)
+    injected = DiffusersSketchGenerator(mode="quality", device="cpu", runner=RecordingRunner()).generate(request, payload)
+
+    # Patch the load to return a stub, which the counting clock times as one 7 s step.
+    lazy = DiffusersSketchGenerator(mode="quality", device="cpu")
+    monkeypatch.setattr(lazy, "_load_runner", RecordingRunner)
+    first, second = lazy.generate(request, payload), lazy.generate(request, payload)
+
+    # Only the call that loaded reports the load, and an injected runner never does.
+    loads = (injected.load_seconds, first.load_seconds, second.load_seconds)
+    assert loads == (None, 7.0, None), f"Expected loads None, 7.0, None, got {loads}"
+
+
+class FailingRunner(PipelineRunner):
+    """
+    Test-only pipeline stand-in that fails every call, like sampling that runs out of memory.
+    """
+
+    def __call__(self, seed: int, **pipeline_kwargs: Any) -> np.ndarray:
+        """
+        Raise as a failed sampling step would.
+        """
+        raise RuntimeError("synthetic sampling failure")
+
+
+@pytest.mark.usefixtures("counting_clock")
+def test_diffusers_failure_keeps_load_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    When the lazy load succeeds but sampling fails, the error notes how long the load took.
+    """
+    sketch, payload = make_sketch()
+    generator = DiffusersSketchGenerator(mode="quality", device="cpu")
+    monkeypatch.setattr(generator, "_load_runner", FailingRunner)
+
+    # Generation fails with a backend error that carries the load time as a note.
+    with pytest.raises(GenerationBackendError) as raised:
+        generator.generate(GenerationRequest(sketch=sketch, guidance=Guidance(prompt="chair"), seed=1), payload)
+    notes = getattr(raised.value, "__notes__", [])
+    assert notes == ["Model load took 7.00 s before generation failed."], f"Expected the load time note, got {notes}"
+
+
+def test_describe_torch_runtime() -> None:
+    """
+    The runtime facts name the torch thread count on every device and the GPU on CUDA only.
+    """
+    torch_stub = SimpleNamespace(get_num_threads=lambda: 6, cuda=SimpleNamespace(get_device_name=lambda index: "Synthetic GPU"))
+
+    # CPU and MPS record only threads, and CUDA adds the accelerator name.
+    assert describe_torch_runtime(torch_stub, TorchDevice.CPU) == {"torch_threads": 6}, "CPU must record only threads"
+    assert describe_torch_runtime(torch_stub, TorchDevice.MPS) == {"torch_threads": 6}, "MPS must record only threads"
+    cuda = describe_torch_runtime(torch_stub, TorchDevice.CUDA)
+    assert cuda == {"torch_threads": 6, "accelerator": "Synthetic GPU"}, f"CUDA must add the accelerator, got {cuda}"
 
 
 @pytest.mark.model

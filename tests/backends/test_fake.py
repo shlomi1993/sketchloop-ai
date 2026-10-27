@@ -50,6 +50,7 @@ def test_fake_loop_generates_selects_and_builds_child_iteration() -> None:
     assert [first.seed, second.seed] == [7, 8], f"Expected seed + index, got {[first.seed, second.seed]}"
     assert parent.result.backend.is_fake, "Fake backend must label itself as fake"
     assert isinstance(parent.result.backend.model_id, Unavailable), "Fake model ID must be Unavailable"
+    assert output.load_seconds is None, f"The fake loads no model, got load_seconds {output.load_seconds}"
 
     # Defaults belong in the effective settings only, keeping requested and effective values apart.
     assert request.guidance.controls == {}, "Requested controls must not gain defaults"

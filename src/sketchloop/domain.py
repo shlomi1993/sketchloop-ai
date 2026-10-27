@@ -133,6 +133,14 @@ def require(condition: object, message: str) -> None:
         raise InvalidRecordError(message)
 
 
+def require_duration(value: object, label: str) -> None:
+    """
+    Refuse a duration that is not a finite number of seconds of at least 0.
+    """
+    is_number = isinstance(value, int | float) and not isinstance(value, bool)
+    require(is_number and math.isfinite(value) and value >= 0, f"{label} must be finite seconds >= 0, got {value!r}.")
+
+
 def first_line(error: BaseException) -> str:
     """
     Return the first line of an exception's message, or its class name when the message is empty.
@@ -154,7 +162,6 @@ class Unavailable:
     """
     Marks an unknown value, with the reason it could not be recorded.
     """
-
     reason: str
 
     def __post_init__(self) -> None:
