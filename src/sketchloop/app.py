@@ -1,11 +1,12 @@
 import numpy as np
+import time
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from sketchloop.capture import InvalidSketchError, encode_frame, load_sketch_file
+from sketchloop.capture import CapturedSketch, InvalidSketchError, encode_frame, load_sketch_file
 from sketchloop.domain import (
     Guidance, InvalidSelectionError, Iteration, Rotation, SelectionEvent, SketchLoopError, SketchSource,
     record_no_selection, select_candidates)
@@ -41,6 +42,7 @@ class RoundView:
     candidates: tuple[CandidateView, ...]  # Candidates in display order
     is_fake: bool  # Whether the fake backend produced the images
     generation_seconds: float  # Generation time, without a first model load, which is recorded separately
+    total_seconds: float  # Capture plus the round's wall time until its files were saved
     selection: str | None  # "1, 3" or "none" once recorded, None while not recorded
 
 
@@ -92,6 +94,7 @@ def build_round_view(outcome: RoundOutcome, selections: Mapping[str, SelectionEv
     selection = selections.get(iteration.id)
     return RoundView(number=outcome.number, iteration_id=iteration.id, sketch_path=outcome.folder / iteration.request.sketch.path,
                      candidates=candidates, is_fake=is_fake, generation_seconds=outcome.timings_seconds[RoundStage.GENERATION],
+                     total_seconds=outcome.total_seconds,
                      selection=None if selection is None else describe_selection(iteration, selection))
 
 
@@ -115,6 +118,21 @@ def build_history_row(record: RoundRecord) -> HistoryRow:
 
     prompt = record.request.guidance.prompt if record.request is not None else None
     return HistoryRow(number=record.number, status=record.status, prompt=prompt, outcome=outcome)
+
+
+def capture_browser_sketch(sketch: Path | np.ndarray) -> CapturedSketch:
+    """
+    Load an uploaded file, or encode a camera frame in OpenCV channel order, and time it as the capture stage.
+
+    Args:
+        sketch (Path | np.ndarray): Uploaded sketch file, or a webcam frame from the browser.
+
+    Returns:
+        CapturedSketch: The raw sketch, its bytes, and how long loading or encoding took.
+    """
+    started = time.perf_counter()
+    image, payload = encode_frame(sketch) if isinstance(sketch, np.ndarray) else load_sketch_file(sketch)
+    return CapturedSketch(image=image, payload=payload, capture_seconds=time.perf_counter() - started)
 
 
 class AppController:
@@ -180,10 +198,11 @@ class AppController:
         # Check the inputs before reading any file, so a bad request writes nothing.
         self._check_round_inputs(sketch, prompt, rotation, use_raw)
 
-        # Load a sketch file, or encode a camera frame in OpenCV channel order, keeping the prompt as typed.
-        raw_sketch, raw_payload = encode_frame(sketch) if isinstance(sketch, np.ndarray) else load_sketch_file(sketch)
-        outcome = self.session.run_round(raw_sketch, raw_payload, Guidance(prompt=prompt), source=source, rotation=rotation,
-                                         use_raw=use_raw, n_candidates=n_candidates, seed=seed)
+        # Load and time a sketch file or a camera frame, keeping the prompt as typed.
+        captured = capture_browser_sketch(sketch)
+        outcome = self.session.run_round(captured.image, captured.payload, Guidance(prompt=prompt), source=source,
+                                         rotation=rotation, use_raw=use_raw, n_candidates=n_candidates, seed=seed,
+                                         capture_seconds=captured.capture_seconds)
         return build_round_view(outcome, self.session.selections)
 
     def record_selection(self, iteration_id: str | None, candidate_ids: Sequence[str]) -> RoundView:

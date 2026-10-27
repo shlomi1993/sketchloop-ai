@@ -84,6 +84,18 @@ class ExperimentStore(ABC):
         ...
 
     @abstractmethod
+    def save_files(self, session_id: str, number: int, files: Mapping[str, bytes]) -> None:
+        """
+        Save a round's files without its record, so the session can time saving before it writes the record.
+
+        Args:
+            session_id (str): Session the round belongs to.
+            number (int): Round number.
+            files (Mapping[str, bytes]): Payload by relative POSIX path.
+        """
+        ...
+
+    @abstractmethod
     def save_round(self, session_id: str, record: RoundRecord, files: Mapping[str, bytes]) -> None:
         """
         Save the files, then the record, replacing an earlier record of the same round number.
@@ -149,6 +161,20 @@ class FolderStore(ExperimentStore):
             folder.mkdir(parents=True, exist_ok=True)
             write_json_atomic(folder / SESSION_FILE, session_to_dict(record))
 
+    def save_files(self, session_id: str, number: int, files: Mapping[str, bytes]) -> None:
+        """
+        Write a round's files one at a time, so a failure names the file that could not be saved.
+
+        Args:
+            session_id (str): Session the round belongs to.
+            number (int): Round number.
+            files (Mapping[str, bytes]): Payload by relative POSIX path.
+        """
+        round_folder = self.runs_dir / session_id / f"round-{number}"
+        for path, payload in files.items():
+            with self._report_failure(round_folder / path):
+                write_files(round_folder, {path: payload})
+
     def save_round(self, session_id: str, record: RoundRecord, files: Mapping[str, bytes]) -> None:
         """
         Write the round's files, then atomically write round.json, so the record never names an unsaved file.
@@ -158,13 +184,9 @@ class FolderStore(ExperimentStore):
             record (RoundRecord): Round record to save.
             files (Mapping[str, bytes]): Payload by relative POSIX path, empty to replace only the record.
         """
-        # Write the files one at a time, so a failure names the file that could not be saved.
+        # Write the files first, and the record last.
         round_folder = self.runs_dir / session_id / f"round-{record.number}"
-        for path, payload in files.items():
-            with self._report_failure(round_folder / path):
-                write_files(round_folder, {path: payload})
-
-        # Write the record last.
+        self.save_files(session_id, record.number, files)
         with self._report_failure(round_folder / ROUND_FILE):
             round_folder.mkdir(parents=True, exist_ok=True)
             write_json_atomic(round_folder / ROUND_FILE, round_to_dict(record))
@@ -216,6 +238,17 @@ class MemoryStore(ExperimentStore):
         self._check_encodable(f"{record.session_id}/{SESSION_FILE}", lambda: session_to_dict(record))
         self.sessions[record.session_id] = record
 
+    def save_files(self, session_id: str, number: int, files: Mapping[str, bytes]) -> None:
+        """
+        Keep a round's file bytes without its record.
+
+        Args:
+            session_id (str): Session the round belongs to.
+            number (int): Round number.
+            files (Mapping[str, bytes]): Payload by relative POSIX path.
+        """
+        self.files |= {(session_id, number, path): payload for path, payload in files.items()}
+
     def save_round(self, session_id: str, record: RoundRecord, files: Mapping[str, bytes]) -> None:
         """
         Keep the round's files, then its record, replacing an earlier record of the same round number.
@@ -225,6 +258,6 @@ class MemoryStore(ExperimentStore):
             record (RoundRecord): Round record to keep.
             files (Mapping[str, bytes]): Payload by relative POSIX path, empty to replace only the record.
         """
-        self.files |= {(session_id, record.number, path): payload for path, payload in files.items()}
+        self.save_files(session_id, record.number, files)
         self._check_encodable(f"{session_id}/round-{record.number}/{ROUND_FILE}", lambda: round_to_dict(record))
         self.rounds[(session_id, record.number)] = record

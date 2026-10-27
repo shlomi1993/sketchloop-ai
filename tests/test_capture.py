@@ -1,8 +1,15 @@
 import cv2
 import numpy as np
 import pytest
+import time
 
-from sketchloop.capture import SPACE_KEY, CameraCapture, InvalidSketchError, VideoSource, capture_from_camera
+from pathlib import Path
+
+from sketchloop.capture import (SPACE_KEY, CameraCapture, CapturedSketch, FileCapture, InvalidSketchError, VideoSource,
+                                capture_from_camera, load_sketch_file)
+
+
+EXAMPLE_SKETCH = Path(__file__).resolve().parents[1] / "examples" / "sketch-photo.jpg"
 
 
 class FakeCamera(VideoSource):
@@ -54,7 +61,8 @@ def test_camera_capture() -> None:
     camera = FakeCamera(available=True)
     source = CameraCapture(0, open_camera=lambda index: camera)
 
-    image, payload = source.capture()
+    captured = source.capture()
+    image, payload = captured.image, captured.payload
     direct = capture_from_camera(0, open_camera=lambda index: FakeCamera(available=True))
 
     # The capture is a PNG raw sketch with the frame's size, and the camera is released.
@@ -65,7 +73,7 @@ def test_camera_capture() -> None:
 
     # The capture source records camera input and gives the same sketch as capturing directly.
     assert source.kind == "camera", f"CameraCapture must record source camera, got {source.kind}"
-    assert (image, payload) == direct, "CameraCapture must return the same sketch as capture_from_camera"
+    assert (image, payload) == (direct.image, direct.payload), "CameraCapture must return the same sketch as capture_from_camera"
 
 
 @pytest.mark.usefixtures("no_windows")
@@ -82,3 +90,34 @@ def test_camera_unavailable() -> None:
     # The error fits on one line, and the camera is still released.
     assert "\n" not in str(error.value), f"Expected a one-line error, got {error.value!r}"
     assert camera.released, "The camera must be released after a failure"
+
+
+def test_file_capture_is_timed() -> None:
+    """
+    A file capture returns the file's sketch with a non-negative capture time.
+    """
+    captured = FileCapture(EXAMPLE_SKETCH).capture()
+
+    # The capture holds the same sketch as loading the file, with its own time.
+    assert isinstance(captured, CapturedSketch), f"Expected a CapturedSketch, got {type(captured)}"
+    assert (captured.image, captured.payload) == load_sketch_file(EXAMPLE_SKETCH), "The capture must hold the file's sketch"
+    assert captured.capture_seconds >= 0, f"Capture time must not be negative, got {captured.capture_seconds}"
+
+
+@pytest.mark.usefixtures("no_windows", "counting_clock")
+def test_camera_capture_excludes_preview(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    A camera capture starts its clock when Space is pressed, so 100 s spent looking at the preview are not counted.
+    """
+    def preview_for_100_seconds(camera: VideoSource, unavailable: str) -> np.ndarray:
+        """
+        Stand in for a person looking at the preview for 100 s before pressing Space.
+        """
+        time.perf_counter.advance(100.0)
+        return camera.read()[1]
+
+    monkeypatch.setattr("sketchloop.capture.preview_until_capture", preview_for_100_seconds)
+    captured = capture_from_camera(0, open_camera=lambda index: FakeCamera(available=True))
+
+    # Only the encode after Space is timed, which is one 7 s clock step, never the preview.
+    assert captured.capture_seconds == 7.0, f"The preview must not count as capture time, got {captured.capture_seconds}"

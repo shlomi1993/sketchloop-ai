@@ -5,11 +5,11 @@ from pathlib import Path
 from rich.console import Console
 
 from sketchloop.app import describe_selection
-from sketchloop.capture import CaptureSource, load_sketch_file
+from sketchloop.capture import CapturedSketch, CaptureSource, FileCapture
 from sketchloop.cli.arguments import Command
 from sketchloop.cli.common import make_configured_generator, require_folder_store, show_round
 from sketchloop.components import make_capture_source, make_evaluator, make_preprocessor
-from sketchloop.domain import (Guidance, ImageRef, Iteration, SelectionEvent, SketchLoopError, SketchSource, record_no_selection,
+from sketchloop.domain import (Guidance, Iteration, SelectionEvent, SketchLoopError, SketchSource, record_no_selection,
                                select_candidates)
 from sketchloop.experiments import StoreError
 from sketchloop.session import SketchSession
@@ -33,7 +33,7 @@ class TerminalSession:
     """
 
     def __init__(self, session: SketchSession, capture_source: CaptureSource, console: Console, *, settings: Settings,
-                 prompt: str, sketch: tuple[ImageRef, bytes]) -> None:
+                 prompt: str, sketch: CapturedSketch) -> None:
         """
         Hold the session, where sketches come from, the settings each round uses, and the first prompt and sketch.
 
@@ -43,7 +43,7 @@ class TerminalSession:
             console (Console): Console used for output and prompts.
             settings (Settings): Effective settings, applied to every round.
             prompt (str): First prompt.
-            sketch (tuple[ImageRef, bytes]): First raw sketch reference and bytes.
+            sketch (CapturedSketch): First raw sketch, its bytes, and its capture time.
         """
         self.session = session
         self.capture_source = capture_source
@@ -52,6 +52,9 @@ class TerminalSession:
         self.prompt = prompt
         self.sketch = sketch
         self.source: SketchSource = capture_source.kind
+
+        # Only the first round after a capture records its time, since repeating a round reuses the sketch.
+        self.capture_seconds: float | None = sketch.capture_seconds
 
     def read_answer(self, question: str) -> str | None:
         """
@@ -142,10 +145,14 @@ class TerminalSession:
                 if step == NextStep.RECAPTURE:
                     self.sketch, self.source = self.capture_source.capture(), self.capture_source.kind
                 elif step == NextStep.FILE:
-                    self.sketch, self.source = load_sketch_file(Path(value)), SketchSource.FILE
+                    self.sketch, self.source = FileCapture(Path(value)).capture(), SketchSource.FILE
             except (SketchLoopError, OSError) as error:
                 self.console.print(f"{error} Choose again.", style="red", markup=False, soft_wrap=True)
                 continue
+
+            # A new sketch's capture time belongs to the next round.
+            if step in (NextStep.RECAPTURE, NextStep.FILE):
+                self.capture_seconds = self.sketch.capture_seconds
 
             # A new prompt replaces the current one, and repeating changes nothing.
             if step == NextStep.PROMPT:
@@ -157,12 +164,14 @@ class TerminalSession:
         """
         Run one round with the current sketch and prompt, show it, and record the person's choice.
         """
-        # Run the round, reporting a failure instead of ending the session.
+        # Run the round, reporting a failure instead of ending the session, and count the capture time only once.
         preprocessing, run_settings = self.settings.preprocessing, self.settings.run
+        capture_seconds, self.capture_seconds = self.capture_seconds, None
         try:
-            outcome = self.session.run_round(*self.sketch, Guidance(prompt=self.prompt), source=self.source,
-                                             rotation=preprocessing.rotation, use_raw=preprocessing.raw,
-                                             n_candidates=run_settings.candidates, seed=run_settings.seed)
+            outcome = self.session.run_round(self.sketch.image, self.sketch.payload, Guidance(prompt=self.prompt),
+                                             source=self.source, rotation=preprocessing.rotation, use_raw=preprocessing.raw,
+                                             n_candidates=run_settings.candidates, seed=run_settings.seed,
+                                             capture_seconds=capture_seconds)
         except (SketchLoopError, OSError) as error:
             self.console.print(f"Round failed: {error}", style="red", markup=False, soft_wrap=True)
             return

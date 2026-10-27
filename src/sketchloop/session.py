@@ -8,7 +8,7 @@ from functools import partial
 from pathlib import Path
 
 from sketchloop.domain import (SCHEMA_VERSION, GenerationRequest, Guidance, ImageRef, InvalidSelectionError, Iteration,
-                               Rotation, SelectionEvent, SketchSource, Unavailable, require)
+                               Rotation, SelectionEvent, SketchSource, Unavailable, require, require_duration)
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
 from sketchloop.experiments import (ExperimentStore, RerunLink, RoundRecord, RoundStage, RoundStatus, SessionRecord,
                                     StoreError, collect_environment, describe_failure, require_known_source)
@@ -27,7 +27,15 @@ class RoundOutcome:
     steps: tuple[PreprocessingStep, ...]  # Preprocessing steps applied, empty with --raw
     iteration: Iteration  # Request, result, and link to the previous round
     timings_seconds: Mapping[str, float]  # Duration by stage, with a first model load as model_load rather than generation
+    total_seconds: float  # Capture plus the round's wall time until its files were saved
     scores: Mapping[str, float]  # Evaluator scores by candidate ID, empty with the no-op evaluator
+
+
+def measure_total_seconds(round_started: float, capture_seconds: float | None) -> float:
+    """
+    Add the capture time, when given, to the wall time since the round started.
+    """
+    return time.perf_counter() - round_started + (capture_seconds or 0.0)
 
 
 def make_session_folder_name() -> str:
@@ -102,7 +110,7 @@ class SketchSession:
 
     def run_round(self, raw_sketch: ImageRef, raw_payload: bytes, guidance: Guidance, *, source: SketchSource | Unavailable,
                   rotation: int = Rotation.DEG_000, use_raw: bool = False, n_candidates: int = 1, seed: int | None = None,
-                  reuse: PreprocessedSketch | None = None) -> RoundOutcome:
+                  reuse: PreprocessedSketch | None = None, capture_seconds: float | None = None) -> RoundOutcome:
         """
         Preprocess the sketch, generate and score candidates, save the files and record, and link to the previous round.
 
@@ -117,12 +125,19 @@ class SketchSession:
             seed (int | None, optional): Base seed, or None for the backend default. Defaults to None.
             reuse (PreprocessedSketch | None, optional): Stored processed sketch to generate from, skipping preprocessing.
                 Defaults to None.
+            capture_seconds (float | None, optional): How long capturing the raw sketch took, or None when it was not
+                captured for this round. Defaults to None.
 
         Returns:
-            RoundOutcome: The round's folder, iteration, timings, and scores.
+            RoundOutcome: The round's folder, iteration, timings, total time, and scores.
         """
-        # Refuse an unknown source before writing anything, since even the failure record could not hold it.
+        # Start the round clock first, then refuse values the record could not hold before writing anything.
+        round_started = time.perf_counter()
         require_known_source(source)
+        timings: dict[str, float] = {}
+        if capture_seconds is not None:
+            require_duration(capture_seconds, "Capture time")
+            timings[RoundStage.CAPTURE] = capture_seconds
 
         # Number the round and fix the fields its record has whether it completes or fails.
         self._write_session_record()
@@ -130,7 +145,7 @@ class SketchSession:
         number = self._started_rounds
         draft = partial(RoundRecord, schema_version=SCHEMA_VERSION, number=number, started_at=datetime.now(timezone.utc),
                         raw_sketch=raw_sketch, source=source, use_raw=use_raw, rotation=rotation)
-        timings: dict[str, float] = {}
+        measure_total = partial(measure_total_seconds, round_started, capture_seconds)
         stage = RoundStage.PREPROCESSING
         steps: tuple[PreprocessingStep, ...] = ()
         request = None
@@ -152,18 +167,23 @@ class SketchSession:
             scores = self.evaluator.evaluate(output.result.candidates, output.payloads, request)
             timings[RoundStage.EVALUATION] = time.perf_counter() - started
             record = draft(status=RoundStatus.COMPLETE, steps=steps, request=request, iteration=iteration,
-                           timings_seconds=timings, evaluator=type(self.evaluator).__name__, scores=scores, selection=None,
-                           failure=None)
+                           timings_seconds=timings, total_seconds=measure_total(), evaluator=type(self.evaluator).__name__,
+                           scores=scores, selection=None, failure=None)
 
-            # Store the raw and processed sketches and the candidates, then the record without a selection.
+            # Store and time the raw and processed sketches and the candidates, then write the record once with the total.
             stage = RoundStage.SAVING
+            started = time.perf_counter()
             files = {raw_sketch.path: raw_payload, sketch.path: sketch_payload} | dict(output.payloads)
-            self.store.save_round(self.session_id, record, files)
+            self.store.save_files(self.session_id, number, files)
+            timings[RoundStage.SAVING] = time.perf_counter() - started
+            record = replace(record, timings_seconds=timings, total_seconds=measure_total())
+            self.store.save_round(self.session_id, record, {})
         except Exception as error:
             # Keep a failed record in the history even when it cannot be saved, so the attempt stays visible.
             sketches = {raw_sketch.path: raw_payload} | ({request.sketch.path: sketch_payload} if request else {})
             failed = draft(status=RoundStatus.FAILED, steps=steps, request=request, iteration=None, timings_seconds=timings,
-                           evaluator=None, scores={}, selection=None, failure=describe_failure(stage, error))
+                           total_seconds=measure_total(), evaluator=None, scores={}, selection=None,
+                           failure=describe_failure(stage, error))
             self.records.append(failed)
 
             # Save the failed record and the sketches made so far, keeping the stage's own error if that save fails too.
@@ -176,7 +196,7 @@ class SketchSession:
         self.records.append(record)
         folder = self.store.locate_round(self.session_id, number)
         outcome = RoundOutcome(number=number, folder=folder, raw_sketch=raw_sketch, steps=steps, iteration=iteration,
-                               timings_seconds=timings, scores=scores)
+                               timings_seconds=record.timings_seconds, total_seconds=record.total_seconds, scores=scores)
         self.rounds.append(outcome)
         return outcome
 

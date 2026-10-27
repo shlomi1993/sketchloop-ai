@@ -4,10 +4,10 @@ from sketchloop.experiments.loading import (ROUND_FOLDER_PATTERN, convert_record
 from sketchloop.experiments.provenance import (MESSAGE_TOKEN_PATTERN, PATH_PUNCTUATION, TRACKED_PACKAGES,
                                                collect_environment, describe_failure, is_absolute_path,
                                                read_package_version, redact_paths, redact_token)
-from sketchloop.experiments.records import (MISSING_HARDWARE_REASON, MISSING_SOURCE_REASON, ROUND_FILE, SESSION_FILE,
-                                            Environment, ExperimentRecordError, Hardware, RerunComparison, RerunLink,
-                                            RoundFailure, RoundRecord, RoundStage, RoundStatus, SavedSession, SessionRecord,
-                                            StoreError, require_known_source)
+from sketchloop.experiments.records import (MISSING_HARDWARE_REASON, MISSING_SOURCE_REASON, MISSING_TOTAL_REASON,
+                                            ROUND_FILE, SESSION_FILE, Environment, ExperimentRecordError, Hardware,
+                                            RerunComparison, RerunLink, RoundFailure, RoundRecord, RoundStage, RoundStatus,
+                                            SavedSession, SessionRecord, StoreError, require_duration, require_known_source)
 from sketchloop.experiments.replay import (compare_rounds, describe_conditions, format_value, list_differences,
                                            rebuild_request)
 from sketchloop.experiments.serialization import (check_schema_version, decode_value, encode_value, hardware_from_dict,
@@ -26,6 +26,7 @@ __all__ = [
     "MESSAGE_TOKEN_PATTERN",
     "MISSING_HARDWARE_REASON",
     "MISSING_SOURCE_REASON",
+    "MISSING_TOTAL_REASON",
     "MemoryStore",
     "PATH_PUNCTUATION",
     "ROUND_FILE",
@@ -70,6 +71,7 @@ __all__ = [
     "redact_token",
     "request_from_dict",
     "request_to_dict",
+    "require_duration",
     "require_known_source",
     "result_from_dict",
     "result_to_dict",

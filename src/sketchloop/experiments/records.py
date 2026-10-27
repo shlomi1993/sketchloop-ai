@@ -9,20 +9,23 @@ from types import MappingProxyType
 from typing import Final
 
 from sketchloop.domain import (
-    GenerationRequest, ImageRef, Iteration, SelectionEvent, SketchLoopError, SketchSource, Unavailable, require)
+    GenerationRequest, ImageRef, Iteration, SelectionEvent, SketchLoopError, SketchSource, Unavailable, require,
+    require_duration)
 from sketchloop.preprocessing import PreprocessingStep
 
 
 SESSION_FILE: Final = "session.json"
 ROUND_FILE: Final = "round.json"
 MISSING_SOURCE_REASON: Final = "recorded before input sources were tracked"
+MISSING_TOTAL_REASON: Final = "recorded before total round time was measured"
 MISSING_HARDWARE_REASON: Final = "recorded before hardware was tracked"
 
 
 class RoundStage(StrEnum):
     """
-    A timed stage of a round, recorded as a stage timing and as the stage a failure happened in.
+    A timed stage of a round, recorded as a stage timing and as the stage a failure happened in, in print order.
     """
+    CAPTURE = "capture"
     PREPROCESSING = "preprocessing"
     MODEL_LOAD = "model_load"
     GENERATION = "generation"
@@ -148,7 +151,8 @@ class RoundRecord:
     steps: tuple[PreprocessingStep, ...]  # Preprocessing steps applied, empty with --raw
     request: GenerationRequest | None  # What was asked, None when preprocessing failed
     iteration: Iteration | None  # Request, result, and parent link, None when the round failed
-    timings_seconds: Mapping[str, float]  # Duration by stage
+    timings_seconds: Mapping[str, float]  # Duration by stage, holding only stages that ran and were timed
+    total_seconds: float | Unavailable  # Capture time plus wall time of run_round until the files were saved
     evaluator: str | None  # Evaluator class name, None when the round failed
     scores: Mapping[str, float]  # Score by candidate ID
     selection: SelectionEvent | None  # The person's choice, None when not recorded
@@ -164,6 +168,12 @@ class RoundRecord:
         require(self.started_at.utcoffset() is not None, "Round started_at must be timezone-aware.")
         require_known_source(self.source)
         require(all(math.isfinite(score) for score in self.scores.values()), "Scores must be finite numbers.")
+
+        # Durations are finite seconds of at least 0.
+        for stage, seconds in self.timings_seconds.items():
+            require_duration(seconds, f"Stage {stage} time")
+        if not isinstance(self.total_seconds, Unavailable):
+            require_duration(self.total_seconds, "Total round time")
 
         # A selection must name this round's iteration and candidates.
         if self.selection is not None:

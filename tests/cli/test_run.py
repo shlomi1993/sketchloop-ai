@@ -1,4 +1,5 @@
 import errno
+import json
 import pytest
 import re
 import shutil
@@ -7,10 +8,10 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from sketchloop.backends.fake import FakeGenerator
-from sketchloop.capture import CaptureSource, load_sketch_file
+from sketchloop.capture import CapturedSketch, CaptureSource, FileCapture
 from sketchloop.cli import main
 from sketchloop.components import CAPTURE_SOURCES, EVALUATORS, STORES
-from sketchloop.domain import ImageRef, SketchSource
+from sketchloop.domain import SketchSource
 from sketchloop.evaluation import Evaluator
 from sketchloop.experiments import FolderStore, RoundRecord, SessionRecord, load_session
 from sketchloop.settings import StorageSettings
@@ -25,11 +26,11 @@ EXAMPLE_SKETCH = Path(__file__).resolve().parents[2] / "examples" / "sketch-phot
 
 def test_cli_full_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """
-    A run on the example photo stores raw and processed sketches and candidates, labels the fake backend, and records the pick.
+    A run stores sketches and candidates, labels the fake backend, records the pick, and saves its timings.
     """
     sketch = tmp_path / "sketch-photo.jpg"
     shutil.copyfile(EXAMPLE_SKETCH, sketch)
-    answers = iter(["²", "1 01", "1", "q"])
+    answers = iter(["²", "1 01", "1", "", "", "q"])
     monkeypatch.setattr("builtins.input", lambda *prompt: next(answers))
 
     exit_code = main(["run", str(sketch), "--prompt", "modern chair", "--runs-dir", str(tmp_path / "runs")])
@@ -53,6 +54,12 @@ def test_cli_full_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: p
     # A superscript digit and a repeat written as "01" each ask again instead of ending the session.
     hints = output.count("Use distinct numbers from 1 to 4")
     assert hints == 2, f"Each invalid answer must ask again, got {hints} hints"
+
+    # Round 1 saves its total, and the repeated round 2 reuses the sketch without a capture.
+    round1 = json.loads((round_dir / "round.json").read_text(encoding="utf-8"))
+    round2 = json.loads((session_dirs[0] / "round-2" / "round.json").read_text(encoding="utf-8"))
+    assert isinstance(round1["total_seconds"], float), f"round.json must hold a total, got {round1.get('total_seconds')}"
+    assert "capture" in round1["timings_seconds"] and "capture" not in round2["timings_seconds"], "Only round 1 captured"
 
 
 def raise_disk_full(source: object, target: object) -> None:
@@ -110,12 +117,12 @@ class ExampleCamera(CaptureSource):
         """
         return SketchSource.CAMERA
 
-    def capture(self) -> tuple[ImageRef, bytes]:
+    def capture(self) -> CapturedSketch:
         """
         Count the capture and return the example photo.
         """
         self.captures += 1
-        return load_sketch_file(EXAMPLE_SKETCH)
+        return FileCapture(EXAMPLE_SKETCH).capture()
 
 
 class CountingStore(FolderStore):

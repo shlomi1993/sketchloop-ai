@@ -14,9 +14,9 @@ from typing import Final
 import sketchloop
 from sketchloop.app import AppController
 from sketchloop.backends.fake import FakeGenerator
-from sketchloop.capture import CaptureSource, encode_frame, raw_image_ref
-from sketchloop.domain import (Guidance, ImageRef, InvalidRecordError, SketchLoopError, SketchSource,
-                               UnsupportedConfigurationError, record_no_selection, select_candidates)
+from sketchloop.capture import CapturedSketch, CaptureSource, encode_frame, raw_image_ref
+from sketchloop.domain import (Guidance, InvalidRecordError, SketchLoopError, SketchSource, UnsupportedConfigurationError,
+                               record_no_selection, select_candidates)
 from sketchloop.evaluation import Evaluator
 from sketchloop.experiments import MemoryStore, RoundRecord, SessionRecord, StoreError
 from sketchloop.generation import Generator
@@ -79,13 +79,14 @@ class StillCamera(CaptureSource):
         """
         return SketchSource.CAMERA
 
-    def capture(self) -> tuple[ImageRef, bytes]:
+    def capture(self) -> CapturedSketch:
         """
-        Encode a synthetic light page with one dark stroke as the raw PNG sketch.
+        Encode a synthetic light page with one dark stroke as the raw PNG sketch, reporting a fixed capture time.
         """
         page = np.full((96, 128, 3), 220, dtype=np.uint8)
         cv2.line(page, (10, 10), (110, 80), (20, 20, 20), 3)
-        return encode_frame(page)
+        image, payload = encode_frame(page)
+        return CapturedSketch(image=image, payload=payload, capture_seconds=0.25)
 
 
 class IdentityPreprocessor(Preprocessor):
@@ -126,6 +127,13 @@ class FlakyMemoryStore(MemoryStore):
         self.fail_if_armed("save_session")
         super().save_session(record)
 
+    def save_files(self, session_id: str, number: int, files: Mapping[str, bytes]) -> None:
+        """
+        Fail once when armed, otherwise keep the round's files.
+        """
+        self.fail_if_armed("save_files")
+        super().save_files(session_id, number, files)
+
     def save_round(self, session_id: str, record: RoundRecord, files: Mapping[str, bytes]) -> None:
         """
         Fail once when armed, otherwise keep the round's files and record.
@@ -140,7 +148,8 @@ def test_session_runs_with_substituted_components(tmp_path: Path, constant_evalu
     """
     camera, store = StillCamera(), FlakyMemoryStore()
     session = SketchSession(FakeGenerator(), store, constant_evaluator, preprocessor=IdentityPreprocessor())
-    raw_sketch, raw_payload = camera.capture()
+    captured = camera.capture()
+    raw_sketch, raw_payload = captured.image, captured.payload
 
     # A failed session save consumes no round number, and the next round saves session.json again.
     store.armed = {"save_session"}
@@ -161,8 +170,9 @@ def test_session_runs_with_substituted_components(tmp_path: Path, constant_evalu
     # A failed round save appends no outcome, then a raw round picking none, then a round failing in generation.
     store.armed = {"save_round"}
     with pytest.raises(StoreError):
-        session.run_round(*camera.capture(), Guidance(prompt="lamp"), source=camera.kind)
-    round3 = session.run_round(*camera.capture(), Guidance(prompt="lamp"), source=camera.kind, use_raw=True)
+        session.run_round(raw_sketch, raw_payload, Guidance(prompt="lamp"), source=camera.kind)
+    round3 = session.run_round(raw_sketch, raw_payload, Guidance(prompt="lamp"), source=camera.kind, use_raw=True,
+                               capture_seconds=captured.capture_seconds)
     session.record_selection(record_no_selection(round3.iteration))
     with pytest.raises(UnsupportedConfigurationError):
         session.run_round(raw_sketch, raw_payload, Guidance(prompt="vase"), source=camera.kind, n_candidates=99)
@@ -217,36 +227,59 @@ def test_session_runs_with_substituted_components(tmp_path: Path, constant_evalu
 
 
 @pytest.mark.usefixtures("counting_clock")
-def test_session_records_model_load(first_load_generator: Generator) -> None:
+def test_session_records_stage_timings(first_load_generator: Generator) -> None:
     """
-    A reported model load is recorded as its own stage in the first round only, and generation leaves it out.
+    Capture, a reported model load, saving, and the total are recorded, saved as shown, and kept up to a failure.
     """
-    raw_sketch, raw_payload = StillCamera().capture()
-    session = SketchSession(first_load_generator, MemoryStore(), preprocessor=IdentityPreprocessor())
+    camera, store = StillCamera(), FlakyMemoryStore()
+    session = SketchSession(first_load_generator, store, preprocessor=IdentityPreprocessor())
+    captured = camera.capture()
     guidance = Guidance(prompt="chair")
-    first = session.run_round(raw_sketch, raw_payload, guidance, source=SketchSource.CAMERA)
-    second = session.run_round(raw_sketch, raw_payload, guidance, source=SketchSource.CAMERA)
+    first = session.run_round(captured.image, captured.payload, guidance, source=camera.kind,
+                              capture_seconds=captured.capture_seconds)
+    second = session.run_round(captured.image, captured.payload, guidance, source=camera.kind)
 
     # The generate call takes one 7 s clock step, of which the reported 5 s load is model_load and the rest generation.
     timings = first.timings_seconds
-    stages = ["preprocessing", "model_load", "generation", "evaluation"]
+    stages = ["capture", "preprocessing", "model_load", "generation", "evaluation", "saving"]
     assert list(timings) == stages, f"Expected every stage in order, got {list(timings)}"
-    assert timings["model_load"] == 5.0, f"Expected a 5 s load, got {timings['model_load']}"
+    assert timings["capture"] == 0.25 and timings["model_load"] == 5.0, f"Unexpected capture or load {timings}"
     assert timings["generation"] == pytest.approx(2.0), f"Generation must leave out the load, got {timings['generation']}"
 
-    # The second round loads nothing, so it records no model_load stage.
-    assert "model_load" not in second.timings_seconds, f"Only the first round loads, got {second.timings_seconds}"
+    # The total adds the capture to the round's wall time, which covers every later stage, including the load.
+    later_stages = sum(seconds for stage, seconds in timings.items() if stage != "capture")
+    assert first.total_seconds >= later_stages + 0.25, f"Total {first.total_seconds} must cover the stages {timings}"
+
+    # A round without a capture time and without a load records neither stage.
+    second_stages = set(second.timings_seconds)
+    assert second_stages == {"preprocessing", "generation", "evaluation", "saving"}, f"Unexpected stages {second_stages}"
+
+    # The saved records hold exactly the shown timings and totals.
+    saved = [store.rounds[(session.session_id, number)] for number in (1, 2)]
+    shown = [(outcome.timings_seconds, outcome.total_seconds) for outcome in (first, second)]
+    assert [(record.timings_seconds, record.total_seconds) for record in saved] == shown, "Saved timings differ from shown"
+
+    # A failed round keeps the stages it finished and a total, and a failed file save is a saving failure.
+    with pytest.raises(UnsupportedConfigurationError):
+        session.run_round(captured.image, captured.payload, guidance, source=camera.kind, n_candidates=99, capture_seconds=0.5)
+    store.armed = {"save_files"}
+    with pytest.raises(StoreError):
+        session.run_round(captured.image, captured.payload, guidance, source=camera.kind)
+    failed_generation, failed_saving = session.records[2], session.records[3]
+    assert set(failed_generation.timings_seconds) == {"capture", "preprocessing"}, f"Bad partial {failed_generation}"
+    assert failed_generation.total_seconds >= 0.5, f"A failed round must keep a total, got {failed_generation.total_seconds}"
+    assert failed_saving.failure.stage == "saving", f"A failed file save must be a saving failure, got {failed_saving.failure}"
 
 
 def test_session_refuses_load_longer_than_call(first_load_generator: Generator) -> None:
     """
     A backend that reports a model load longer than its whole call fails the round in generation instead of being clamped.
     """
-    raw_sketch, raw_payload = StillCamera().capture()
+    captured = StillCamera().capture()
     session = SketchSession(first_load_generator, MemoryStore())
 
     # The real clock makes the fake call far shorter than its reported 5 s load.
     with pytest.raises(InvalidRecordError, match="model load in a .* call. Fix its load_seconds."):
-        session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source="file")
+        session.run_round(captured.image, captured.payload, Guidance(prompt="chair"), source="file")
     failure = session.records[0].failure
     assert failure.stage == "generation", f"An impossible load must fail in generation, got {failure}"

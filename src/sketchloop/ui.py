@@ -50,7 +50,7 @@ def describe_round_status(view: RoundView) -> str:
     """
     # Say what to do next, warning first about fake images.
     if view.selection is None:
-        status = f"Round {view.number} is ready after {view.generation_seconds:.1f} s. Tick the candidates you like, or none, and record your choice."  # noqa: E501
+        status = f"Round {view.number} is ready after {view.total_seconds:.1f} s. Tick the candidates you like, or none, and record your choice."  # noqa: E501
     else:
         status = f"Round {view.number} selected: {view.selection}. Change the sketch, prompt, or settings and generate the next round."  # noqa: E501
 

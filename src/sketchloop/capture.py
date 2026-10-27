@@ -2,9 +2,11 @@ import cv2
 import hashlib
 import numpy as np
 import sys
+import time
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -35,6 +37,16 @@ class InvalidSketchError(SketchLoopError, ValueError):
     """
     A sketch file or camera capture is missing, unreadable, cancelled, or not a supported image.
     """
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CapturedSketch:
+    """
+    A captured raw sketch with its encoded bytes and how long the capture took.
+    """
+    image: ImageRef  # Raw sketch reference with size and checksum
+    payload: bytes  # Encoded raw sketch bytes
+    capture_seconds: float  # Time from the trigger to encoded bytes, excluding any wait for the person
 
 
 class VideoSource(ABC):
@@ -176,7 +188,7 @@ def encode_frame(frame: np.ndarray) -> tuple[ImageRef, bytes]:
     return raw_image_ref(frame, payload, ".png", "image/png"), payload
 
 
-def capture_from_camera(camera_index: int, open_camera: Callable[[int], VideoSource] = OpenCVCamera) -> tuple[ImageRef, bytes]:
+def capture_from_camera(camera_index: int, open_camera: Callable[[int], VideoSource] = OpenCVCamera) -> CapturedSketch:
     """
     Show a live camera preview, capture a frame on Space, and describe it as a PNG raw sketch.
 
@@ -185,13 +197,15 @@ def capture_from_camera(camera_index: int, open_camera: Callable[[int], VideoSou
         open_camera (Callable[[int], VideoSource], optional): Opens a camera by index. Defaults to OpenCV.
 
     Returns:
-        tuple[ImageRef, bytes]: The image reference and the captured frame's PNG bytes.
+        CapturedSketch: The frame's PNG raw sketch, timed from Space to encoded bytes, without the preview.
     """
     camera = open_camera(camera_index)
 
     # Always release the camera and close the preview, even when capture fails or is cancelled.
+    # The clock starts when Space is pressed, so the time the person spends looking at the preview is not latency.
     try:
         frame = preview_until_capture(camera, camera_unavailable_message(camera_index))
+        started = time.perf_counter()
     finally:
         camera.release()
         cv2.destroyAllWindows()
@@ -199,7 +213,8 @@ def capture_from_camera(camera_index: int, open_camera: Callable[[int], VideoSou
         # macOS only closes windows after the event loop runs once more.
         cv2.waitKey(1)
 
-    return encode_frame(frame)
+    image, payload = encode_frame(frame)
+    return CapturedSketch(image=image, payload=payload, capture_seconds=time.perf_counter() - started)
 
 
 def camera_unavailable_message(camera_index: int) -> str:
@@ -270,12 +285,12 @@ class CaptureSource(ABC):
         ...
 
     @abstractmethod
-    def capture(self) -> tuple[ImageRef, bytes]:
+    def capture(self) -> CapturedSketch:
         """
         Capture a raw sketch, which may be called again to recapture, raising InvalidSketchError when none is available.
 
         Returns:
-            tuple[ImageRef, bytes]: The raw sketch reference and its encoded bytes.
+            CapturedSketch: The raw sketch reference, its encoded bytes, and the capture time without any wait for the person.
         """
         ...
 
@@ -295,11 +310,13 @@ class FileCapture(CaptureSource):
         """
         return SketchSource.FILE
 
-    def capture(self) -> tuple[ImageRef, bytes]:
+    def capture(self) -> CapturedSketch:
         """
-        Load the sketch file.
+        Load the sketch file and time the read and decode.
         """
-        return load_sketch_file(self.path)
+        started = time.perf_counter()
+        image, payload = load_sketch_file(self.path)
+        return CapturedSketch(image=image, payload=payload, capture_seconds=time.perf_counter() - started)
 
 
 class CameraCapture(CaptureSource):
@@ -318,8 +335,8 @@ class CameraCapture(CaptureSource):
         """
         return SketchSource.CAMERA
 
-    def capture(self) -> tuple[ImageRef, bytes]:
+    def capture(self) -> CapturedSketch:
         """
-        Capture a frame from the webcam as a PNG raw sketch.
+        Capture a frame from the webcam as a PNG raw sketch, timed from Space.
         """
         return capture_from_camera(self.camera_index, self.open_camera)

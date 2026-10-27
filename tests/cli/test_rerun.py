@@ -83,7 +83,9 @@ def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
     assert original_source == expected_source, f"Expected original source {expected_source}, got {original_source}"
     assert rerun_source == expected_source, f"The rerun must copy the original source {expected_source}, got {rerun_source}"
 
-    # The comparison lists the changed CPU.
+    # The rerun reuses the stored sketch without a capture and lists the changed CPU.
+    rerun_saved = load_session(rerun_folder)
+    assert "capture" not in rerun_saved.rounds[0].timings_seconds, "A rerun reuses the stored sketch, so it has no capture"
     assert "cpu: Synthetic CPU -> " in " ".join(rerun_output.split()), "The comparison must list the changed CPU"
 
     # show prints the rerun round's source, naming the reason when it is unavailable.

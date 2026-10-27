@@ -87,7 +87,7 @@ def rerun_round(args: argparse.Namespace, console: Console) -> None:
     if not record.use_raw:
         reuse = PreprocessedSketch(image=sketch, payload=(round_folder / sketch.path).read_bytes(), steps=record.steps)
 
-    # Run one round in a new linked session with the recorded settings, without asking for a selection.
+    # Run one round in a new linked session with the recorded settings, without asking for a selection or timing a capture.
     request = rebuild_request(record, generator.capabilities)
     link = RerunLink(session_id=original.session.session_id, round_number=record.number, iteration_id=record.iteration.id)
     session = SketchSession(generator, store, make_evaluator(settings.evaluator), rerun_of=link)

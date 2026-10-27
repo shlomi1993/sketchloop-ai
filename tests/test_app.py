@@ -86,6 +86,10 @@ def test_app_round_records_browser_source(tmp_path: Path, controller: AppControl
     # The source loads back unchanged and every file matches its checksum.
     assert saved.rounds[0].source == source and saved.problems == (), f"Bad reload: {saved.rounds[0].source}, {saved.problems}"
 
+    # The browser frame encode or upload load is the capture stage, and the view carries the saved total.
+    assert "capture" in data["timings_seconds"], f"The round must time its capture, got {data['timings_seconds']}"
+    assert view.total_seconds == data["total_seconds"], f"The view total {view.total_seconds} must equal the saved total"
+
 
 @pytest.mark.parametrize(("sketch_kind", "source", "prompt", "options", "error", "message"), [
     (None, "upload", "chair", {}, InvalidSketchError, NO_SKETCH_MESSAGE),
