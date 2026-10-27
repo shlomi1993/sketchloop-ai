@@ -1,3 +1,7 @@
+"""
+Tests of file and camera capture with a fake camera.
+"""
+
 import cv2
 import numpy as np
 import pytest

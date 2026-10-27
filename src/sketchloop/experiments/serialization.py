@@ -1,3 +1,7 @@
+"""
+Conversion of session and round records to and from their JSON form.
+"""
+
 import re
 
 from collections.abc import Mapping

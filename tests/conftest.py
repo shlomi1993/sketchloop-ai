@@ -1,3 +1,7 @@
+"""
+Shared pytest fixtures and test doubles for evaluators, generators, and clocks.
+"""
+
 import pytest
 import time
 

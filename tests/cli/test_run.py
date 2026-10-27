@@ -1,3 +1,7 @@
+"""
+Tests of the run subcommand's terminal rounds, saved records, and failure handling.
+"""
+
 import errno
 import json
 import pytest

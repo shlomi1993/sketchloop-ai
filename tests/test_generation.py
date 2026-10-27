@@ -1,3 +1,7 @@
+"""
+Test that every unsupported requested setting is reported together.
+"""
+
 import pytest
 
 

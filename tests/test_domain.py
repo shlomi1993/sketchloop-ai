@@ -1,3 +1,7 @@
+"""
+Tests of the domain records' checks on selections, image paths, and candidate counts.
+"""
+
 import dataclasses
 import pytest
 

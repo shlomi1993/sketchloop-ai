@@ -1,3 +1,7 @@
+"""
+Framework-free controller and view records that the browser page calls to run and select rounds.
+"""
+
 import numpy as np
 import time
 

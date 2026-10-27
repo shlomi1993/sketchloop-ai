@@ -1,3 +1,7 @@
+"""
+Tests of command-line parsing and how flags override the settings file.
+"""
+
 import os
 import pytest
 import re

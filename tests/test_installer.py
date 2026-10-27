@@ -1,3 +1,7 @@
+"""
+Tests of the installer's failure handling and virtual environment prompt refresh.
+"""
+
 import os
 import pytest
 import runpy

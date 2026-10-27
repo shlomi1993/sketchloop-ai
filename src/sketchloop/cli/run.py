@@ -1,3 +1,7 @@
+"""
+The run subcommand, which drives terminal rounds of capture, generation, and explicit selection.
+"""
+
 import argparse
 
 from enum import StrEnum

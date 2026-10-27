@@ -1,3 +1,7 @@
+"""
+A sketch session that runs timed rounds, saves their records, and links each round to the previous one.
+"""
+
 import time
 import uuid
 

@@ -1,3 +1,7 @@
+"""
+Experiment store interface with a folder store for real runs and a memory store for tests.
+"""
+
 import json
 import os
 

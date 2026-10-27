@@ -1,3 +1,7 @@
+"""
+Run every offline repository check: the publication guard, syntax, TOML, Markdown links, Ruff, and pytest.
+"""
+
 from __future__ import annotations
 
 import ast

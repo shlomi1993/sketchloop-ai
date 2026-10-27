@@ -1,3 +1,7 @@
+"""
+The ui subcommand, which creates the backend once and serves the browser page on localhost.
+"""
+
 import argparse
 import os
 

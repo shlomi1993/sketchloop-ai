@@ -1,3 +1,7 @@
+"""
+Tests that failure descriptions redact absolute paths.
+"""
+
 import pytest
 
 

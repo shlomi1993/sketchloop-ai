@@ -1,3 +1,7 @@
+"""
+Readers for the CPU name, logical cores, and memory size, never the machine's name.
+"""
+
 import ctypes
 import os
 import re

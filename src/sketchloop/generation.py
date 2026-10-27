@@ -1,3 +1,7 @@
+"""
+Generator interface, its capabilities, and the validation of requested controls.
+"""
+
 import hashlib
 
 from abc import ABC, abstractmethod

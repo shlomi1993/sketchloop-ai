@@ -1,3 +1,7 @@
+"""
+Command-line parser for every subcommand and the merge of flags with the settings file.
+"""
+
 import argparse
 import math
 

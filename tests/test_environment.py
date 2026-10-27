@@ -1,3 +1,7 @@
+"""
+Test that an editable install imports the package from this checkout's src folder.
+"""
+
 from importlib.metadata import version
 from pathlib import Path
 

@@ -1,3 +1,7 @@
+"""
+The Gradio browser page, a thin layer over AppController for webcam or upload rounds.
+"""
+
 import gradio as gr
 import numpy as np
 import threading

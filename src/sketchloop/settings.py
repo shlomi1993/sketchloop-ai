@@ -1,3 +1,7 @@
+"""
+Loading and validation of the optional sketchloop.toml settings file.
+"""
+
 import math
 import tomllib
 

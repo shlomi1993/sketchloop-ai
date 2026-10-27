@@ -1,3 +1,7 @@
+"""
+Registry that creates a generation backend by name for the command line and the browser page.
+"""
+
 from pathlib import Path
 from typing import Final
 

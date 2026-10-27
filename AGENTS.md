@@ -64,7 +64,7 @@ raise RuntimeError("Existing .venv is incomplete. Move it aside and rerun the in
 
 ## Docstrings
 
-Do not write docstrings during development. Add them before committing for functions, methods, and classes in the change. The `/commit` skill does this. Tests, fixtures, and test helpers get a one-line docstring saying what they verify or provide, with no `Args:` or `Returns:` sections. Never add a file-level (module) docstring. Keep them short: one to three lines of explanation (one is best), an `Args:` section with one line per argument, and a `Returns:` section. Do not document raised exceptions. Short helpers (one or two statements) get only the one-line explanation, with no `Args:` or `Returns:` sections. Put the opening and closing `"""` on their own lines, even for one-line docstrings.
+Do not write docstrings during development. Add them before committing for functions, methods, and classes in the change. The `/commit` skill does this. Tests, fixtures, and test helpers get a one-line docstring saying what they verify or provide, with no `Args:` or `Returns:` sections. Keep them short: one to three lines of explanation (one is best), an `Args:` section with one line per argument, and a `Returns:` section. Do not document raised exceptions. Short helpers (one or two statements) get only the one-line explanation, with no `Args:` or `Returns:` sections. Put the opening and closing `"""` on their own lines, even for one-line docstrings. Every Python file starts with a module docstring of one sentence saying what the file is for.
 
 ```python
 def filter_candidates(candidates: list[Candidate], threshold: float = 0.5) -> list[Candidate]:

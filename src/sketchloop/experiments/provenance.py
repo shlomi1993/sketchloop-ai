@@ -1,3 +1,7 @@
+"""
+Environment and failure provenance for records, with absolute paths redacted from messages.
+"""
+
 import platform
 import re
 

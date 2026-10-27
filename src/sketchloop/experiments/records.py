@@ -1,3 +1,7 @@
+"""
+Session and round record types, with the checks that keep each record valid.
+"""
+
 import math
 
 from collections.abc import Mapping

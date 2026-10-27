@@ -1,3 +1,7 @@
+"""
+Tests of the hardware readers on each operating system and on this machine.
+"""
+
 import json
 import os
 import pytest

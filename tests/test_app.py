@@ -1,3 +1,7 @@
+"""
+Tests of the browser controller's rounds, selections, history, and new sessions.
+"""
+
 import cv2
 import hashlib
 import json

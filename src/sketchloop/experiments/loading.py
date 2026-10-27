@@ -1,3 +1,7 @@
+"""
+Loading of saved sessions from their folders, with checksum checks of every recorded file.
+"""
+
 import hashlib
 import json
 import re

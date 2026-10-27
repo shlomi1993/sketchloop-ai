@@ -1,3 +1,7 @@
+"""
+Tests of sketch sessions with substituted components, stage timings, and frame ages.
+"""
+
 import ast
 import cv2
 import numpy as np

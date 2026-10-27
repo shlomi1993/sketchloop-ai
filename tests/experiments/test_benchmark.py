@@ -1,3 +1,7 @@
+"""
+Tests of the benchmark statistics and the settings that vary between rounds.
+"""
+
 import pytest
 
 from pathlib import Path

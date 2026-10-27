@@ -1,3 +1,7 @@
+"""
+Real generation backend running Stable Diffusion 1.5 with the scribble ControlNet through diffusers.
+"""
+
 import cv2
 import hashlib
 import numpy as np

@@ -1,3 +1,7 @@
+"""
+Create or refresh the project virtual environment and install SketchLoop with its development tools.
+"""
+
 import os
 import subprocess
 import sys

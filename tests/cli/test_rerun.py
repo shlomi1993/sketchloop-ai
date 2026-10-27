@@ -1,3 +1,7 @@
+"""
+Tests of the rerun subcommand's linked session and comparison report.
+"""
+
 import json
 import pytest
 

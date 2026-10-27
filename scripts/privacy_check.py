@@ -1,3 +1,7 @@
+"""
+Refuse private, ignored, or secret-bearing files in the publishable worktree and index.
+"""
+
 from __future__ import annotations
 
 import codecs

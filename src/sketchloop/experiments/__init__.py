@@ -1,3 +1,7 @@
+"""
+Experiment records, their storage, loading, replay, hardware facts, and benchmark statistics.
+"""
+
 from sketchloop.experiments.benchmark import (
     BenchmarkSummary,
     StageStatistics,

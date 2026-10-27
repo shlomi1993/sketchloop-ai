@@ -1,3 +1,7 @@
+"""
+Per-stage benchmark statistics computed from the measured rounds of a saved session.
+"""
+
 import statistics
 
 from collections.abc import Mapping, Sequence

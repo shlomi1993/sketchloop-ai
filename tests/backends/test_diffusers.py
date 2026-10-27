@@ -1,3 +1,7 @@
+"""
+Tests of the diffusers backend with an injected pipeline, plus one opt-in real-model test.
+"""
+
 import cv2
 import hashlib
 import numpy as np

@@ -1,3 +1,7 @@
+"""
+Download the pinned diffusers model weights into the models folder the settings name.
+"""
+
 import argparse
 
 from pathlib import Path

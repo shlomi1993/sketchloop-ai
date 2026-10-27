@@ -1,3 +1,7 @@
+"""
+Tests of the preprocessing steps on synthetic sketch photos.
+"""
+
 import cv2
 import numpy as np
 import pytest

@@ -1,3 +1,7 @@
+"""
+Sketch preprocessing that straightens, crops, normalizes, and resizes a photographed drawing.
+"""
+
 import cv2
 import hashlib
 import numpy as np

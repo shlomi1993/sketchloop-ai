@@ -1,3 +1,7 @@
+"""
+Tests of the browser page's handlers without starting a server.
+"""
+
 import cv2
 import numpy as np
 import pytest

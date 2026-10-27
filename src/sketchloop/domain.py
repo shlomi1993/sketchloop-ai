@@ -1,3 +1,7 @@
+"""
+Typed domain records shared by every component, such as requests, candidates, iterations, and selections.
+"""
+
 import math
 import re
 import uuid

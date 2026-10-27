@@ -1,3 +1,7 @@
+"""
+Capture sources that load a raw sketch from a file or a camera and time the capture.
+"""
+
 import cv2
 import hashlib
 import numpy as np

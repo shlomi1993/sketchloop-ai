@@ -1,3 +1,7 @@
+"""
+Tests that the ui subcommand launches the page with telemetry off and the settings applied.
+"""
+
 import os
 import pytest
 import sys

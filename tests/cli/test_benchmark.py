@@ -1,3 +1,7 @@
+"""
+Tests of the benchmark subcommand with the fake backend.
+"""
+
 import pytest
 import re
 

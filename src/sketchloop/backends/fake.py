@@ -1,3 +1,7 @@
+"""
+Deterministic fake generation backend, labeled as fake, for tests and offline runs.
+"""
+
 import hashlib
 import json
 import struct

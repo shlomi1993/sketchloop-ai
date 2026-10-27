@@ -1,3 +1,7 @@
+"""
+Test of one full fake round from generation through selection to a child iteration.
+"""
+
 import dataclasses
 import hashlib
 

@@ -1,3 +1,7 @@
+"""
+The rerun subcommand, which repeats a saved round in a new linked session and compares the results.
+"""
+
 import argparse
 
 from pathlib import Path

@@ -1,3 +1,7 @@
+"""
+Factories that build the capture, preprocessing, evaluation, and storage components the settings name.
+"""
+
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Final, TypeAlias

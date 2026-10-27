@@ -1,3 +1,7 @@
+"""
+Helpers shared by subcommands for creating the backend, the store, and printing a round.
+"""
+
 import time
 
 from collections.abc import Mapping

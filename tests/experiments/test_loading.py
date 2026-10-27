@@ -1,3 +1,7 @@
+"""
+Tests that saved sessions load back unchanged and that damaged records are refused.
+"""
+
 import json
 import pytest
 

@@ -1,3 +1,7 @@
+"""
+Tests of the publication guard against private, ignored, and secret-bearing files.
+"""
+
 import codecs
 import pytest
 

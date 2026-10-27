@@ -1,3 +1,7 @@
+"""
+Rebuilding a saved round's request and comparing a rerun with the original round.
+"""
+
 from collections.abc import Mapping
 
 from sketchloop.domain import ControlValue, GenerationRequest, Guidance, Unavailable

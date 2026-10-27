@@ -1,3 +1,7 @@
+"""
+Evaluator interface for optional candidate scoring, kept separate from generation and selection.
+"""
+
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 

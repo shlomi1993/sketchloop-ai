@@ -1,3 +1,7 @@
+"""
+The show subcommand, which prints a saved session's records and lists missing or changed files.
+"""
+
 import argparse
 
 from collections.abc import Mapping, Sequence

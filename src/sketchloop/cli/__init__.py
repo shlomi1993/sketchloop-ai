@@ -1,3 +1,7 @@
+"""
+Entry point of the sketchloop command, which dispatches to one module per subcommand.
+"""
+
 from rich.console import Console
 
 from sketchloop.cli.arguments import Command, parse_args

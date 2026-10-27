@@ -1,3 +1,7 @@
+"""
+Download the public reading-list articles into the ignored local articles folder.
+"""
+
 import sys
 
 from pathlib import Path

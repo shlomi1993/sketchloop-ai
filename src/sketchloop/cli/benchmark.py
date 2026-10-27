@@ -1,3 +1,7 @@
+"""
+The benchmark subcommand, which times warm-up and measured rounds and prints per-stage statistics.
+"""
+
 import argparse
 
 from rich.console import Console

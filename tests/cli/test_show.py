@@ -1,3 +1,7 @@
+"""
+Tests of what the show subcommand prints for current, older, and benchmark sessions.
+"""
+
 import json
 import pytest
 
