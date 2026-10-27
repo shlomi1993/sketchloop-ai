@@ -31,6 +31,27 @@ Details are in the [roadmap](docs/ROADMAP.md) and [current status](docs/STATUS.m
 - Publication rules: [privacy](docs/PRIVACY.md).
 - Research context: [references](docs/REFERENCES.md).
 
+## How it fits together
+
+Each layer calls only the one below it. The page never touches the model or the files, and the session knows only the replaceable base classes, whose implementations the settings file picks. The [full call graph](docs/call-graph.html) shows every handler and method, and you can open it in a browser after cloning.
+
+```mermaid
+flowchart TD
+    page["Browser page<br/>webcam, prompt, Generate, choice"] --> ui["ui.py<br/>SketchPage, the only Gradio importer"]
+    ui --> app["app.py<br/>AppController"]
+    app --> session["session.py<br/>SketchSession, times each stage"]
+    app -. preview and suggestions .-> pre
+    app -. Suggest a prompt .-> suggester["PromptSuggester<br/>Florence-2 or fixed templates"]
+    session --> pre["Preprocessor<br/>StrokePreprocessor"]
+    session --> gen["Generator<br/>DiffusersSketchGenerator or FakeGenerator"]
+    session --> eval["Evaluator<br/>NoOpEvaluator"]
+    session --> store["ExperimentStore<br/>FolderStore or MemoryStore"]
+    gen --> models[("models/")]
+    suggester --> models
+    store --> runs[("runs/session folders")]
+    cli["cli package<br/>run, rerun, show, benchmark"] --> session
+```
+
 ## Quick start
 
 After cloning, use Python 3.11 or newer to run the installer from the repository root:
@@ -55,7 +76,7 @@ Every round prints how long each stage took (capture, preprocessing, model load,
 
 To measure latency, run `sketchloop benchmark examples/sketch-photo.jpg --prompt "modern chair" --rounds 5 --warmup 1`. It runs the warm-up rounds and then the measured rounds from the same file with one loaded backend, records no selection, and prints the conditions, each warm-up round, and the median, p95, minimum, and maximum of every stage and the total. It uses seed 0 unless `--seed` or `run.seed` sets one, and it takes the same `--candidates`, `--raw`, `--rotate`, `--backend`, `--mode`, `--precision`, and `--runs-dir` options as `run`. With fewer than 20 measured rounds the p95 is only indicative. `sketchloop show` prints the same summary for a saved benchmark session.
 
-To work in a browser instead of the terminal, run `sketchloop ui`. It opens a page served only on this machine, usually at `http://127.0.0.1:7860`, with no share link and Gradio analytics off. Take a webcam picture or upload a PNG or JPEG, enter a prompt, and click Generate. Tick the candidates you like, or none, and click Record selection, then change the sketch or prompt and generate the next round. The page shows the current session's history, and New session starts a fresh session with the loaded model. `sketchloop ui` takes the same `--backend`, `--mode`, `--precision`, `--runs-dir`, and `--seed` options as `run`, and `--candidates` sets the default count, 2 by default. The page keeps the newest webcam frame every `--capture-interval` seconds, 0.5 by default, so Generate uses the sketch as it is now without a separate snapshot. All browser tabs share one session, and reloading the page keeps it. Each round records whether its sketch came from a file, the camera, the browser webcam, or an upload.
+To work in a browser instead of the terminal, run `sketchloop ui`, or just `sketchloop`, which is short for `sketchloop ui` and takes its backend from `sketchloop.toml`. It opens a page served only on this machine, usually at `http://127.0.0.1:7860`, with no share link and Gradio analytics off. The webcam starts streaming by itself, or you can upload a PNG or JPEG, and the page shows the sketch the model will receive, preprocessed unless raw is ticked. Enter a prompt, or press Suggest a prompt to have a local Florence-2 model name the sketched object and fill in a style, then set the steps and other sliders and click Generate. Tick the candidates you like, or none, and click Record selection, then change the sketch or prompt and generate the next round. The page shows the current session's history, and New session starts a fresh session with the loaded model. `sketchloop ui` takes the same `--backend`, `--mode`, `--precision`, `--runs-dir`, and `--seed` options as `run`, and `--candidates` sets the default count, 1 by default. The page keeps the newest webcam frame every `--capture-interval` seconds, 0.5 by default, so Generate uses the sketch as it is now without a separate snapshot. All browser tabs share one session, and reloading the page keeps it. Each round records whether its sketch came from a file, the camera, the browser webcam, or an upload. To work on the page itself, run `python scripts/dev_ui.py` instead. It loads the model once and rebuilds the page each time you save a `.py` or `.css` file under `src/sketchloop`, while changes to the controller or model code still need a restart.
 
 ## Real model
 
@@ -66,7 +87,7 @@ python scripts/download_models.py
 sketchloop run examples/sketch-photo.jpg --prompt "modern chair" --backend diffusers
 ```
 
-The download script fetches about 6 GB into the ignored `models/` folder and skips files already present. The backend uses CUDA, then Apple MPS, then the CPU. `--mode fast` uses 4 steps with LCM-LoRA and no negative prompt and is the default on CPU, and `--mode quality` (20 steps) is the default on a GPU. `--precision float16` is the default on a GPU and `float32` on the CPU, which cannot run float16, and `generator.diffusers.precision` sets it in the settings file. Run the real-model test with `python -m pytest -m model`, since default checks skip it.
+The download script fetches about 6 GB into the ignored `models/` folder, including the 0.5 GB Florence-2-base model behind the page's prompt suggestions, and skips files already present. The backend uses CUDA, then Apple MPS, then the CPU. `--mode fast` uses 4 steps with LCM-LoRA and no negative prompt and is the default on CPU, and `--mode quality` (20 steps) is the default on a GPU. `--precision float16` is the default on a GPU and `float32` on the CPU, which cannot run float16, and `generator.diffusers.precision` sets it in the settings file. Run the real-model test with `python -m pytest -m model`, since default checks skip it.
 
 ## Settings file
 

@@ -102,14 +102,14 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
     <h2>1 · Startup: <code>sketchloop ui</code> wires the parts together</h2>
     <figure>
       <div class="scroll">
-        <svg class="d" viewBox="0 0 1140 240" role="img" aria-label="Startup: the ui command parses flags, merges them over sketchloop.toml, validates component names, then launch_ui creates the generator, store, evaluator and preprocessor, injects them into AppController, and serves the Gradio page on 127.0.0.1.">
+        <svg class="d" viewBox="0 0 1140 240" role="img" aria-label="Startup: the ui command, or sketchloop with no command, parses flags, merges them over sketchloop.toml, validates component names, then make_controller creates the generator, store, evaluator, preprocessor and prompt suggester, injects them into AppController, and serves the Gradio page on 127.0.0.1.">
           <defs>
             <marker id="s-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
           </defs>
           <!-- Row 1: parse and resolve settings -->
           <rect class="box" x="20" y="20" width="200" height="60" rx="6"/>
           <text class="n" x="120" y="45" text-anchor="middle">sketchloop ui</text>
-          <text class="s" x="120" y="63" text-anchor="middle">flags and optional --config</text>
+          <text class="s" x="120" y="63" text-anchor="middle">or bare sketchloop, --config</text>
           <rect class="box" x="320" y="20" width="200" height="60" rx="6"/>
           <text class="n" x="420" y="45" text-anchor="middle">cli.arguments</text>
           <text class="s" x="420" y="63" text-anchor="middle">subcommand and its options</text>
@@ -131,17 +131,17 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <!-- Row 2: build and serve -->
           <rect class="box" x="20" y="160" width="180" height="62" rx="6"/>
           <text class="n" x="110" y="186" text-anchor="middle">cli.serve.launch_ui</text>
-          <text class="s" x="110" y="204" text-anchor="middle">telemetry off, imports ui</text>
+          <text class="s" x="110" y="204" text-anchor="middle">make_controller, imports ui</text>
           <rect class="box" x="250" y="160" width="180" height="62" rx="6"/>
           <text class="n" x="340" y="181" text-anchor="middle">factories</text>
           <text class="sm" x="340" y="198" text-anchor="middle">backends.make_generator</text>
-          <text class="sm" x="340" y="213" text-anchor="middle">components.make_*</text>
+          <text class="sm" x="340" y="213" text-anchor="middle">components.make_* · suggester</text>
           <rect class="hotbox" x="480" y="160" width="180" height="62" rx="6"/>
           <text class="n" x="570" y="186" text-anchor="middle">AppController</text>
           <text class="s" x="570" y="204" text-anchor="middle">holds generator and session</text>
           <rect class="box" x="710" y="160" width="180" height="62" rx="6"/>
           <text class="n" x="800" y="186" text-anchor="middle">ui.launch_app</text>
-          <text class="s" x="800" y="204" text-anchor="middle">SketchPage.build, then launch</text>
+          <text class="s" x="800" y="204" text-anchor="middle">SketchPage.build, then serve_app</text>
           <rect class="box" x="940" y="160" width="180" height="62" rx="6"/>
           <text class="n" x="1030" y="186" text-anchor="middle">Gradio server</text>
           <text class="s" x="1030" y="204" text-anchor="middle">127.0.0.1 only, no share link</text>
@@ -155,7 +155,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <text class="t" x="915" y="152" text-anchor="middle">serves</text>
         </svg>
       </div>
-      <figcaption>The backend is created once, before the page opens, so a real model stays loaded across rounds. The model weights themselves load lazily on the first Generate. <code>run</code> and <code>rerun</code> use the same settings and factories but drive <code>SketchSession</code> from the terminal instead.</figcaption>
+      <figcaption>The backend is created once, before the page opens, so a real model stays loaded across rounds. The model weights themselves load lazily on the first Generate. Next to the diffusers backend, a background thread loads the Florence-2 prompt suggester and captions a blank image once, so the first suggestion is fast, and the fake backend gets the fixed style templates instead. <code>scripts/dev_ui.py</code> builds the same controller once with <code>make_controller</code> and serves the page with Gradio's reload, so saved edits to the page appear without reloading the model. <code>run</code> and <code>rerun</code> use the same settings and factories but drive <code>SketchSession</code> from the terminal instead.</figcaption>
     </figure>
   </section>
 
@@ -360,7 +360,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
         <span><i class="sw dash"></i>Subclasses the base class above it</span>
         <span><i class="sw box"></i>Abstract base class, swappable through settings</span>
       </div>
-      <figcaption>Each layer calls only the layer below it. The page never touches the model or the files, <code>AppController</code> never imports Gradio, and <code>SketchSession</code> knows only the four base classes. After Generate and Record, Gradio also runs <code>show_history</code>, which calls <code>list_history</code>.</figcaption>
+      <figcaption>Each layer calls only the layer below it. The page never touches the model or the files, <code>AppController</code> never imports Gradio, and <code>SketchSession</code> knows only the four base classes. After Generate and Record, Gradio also runs <code>show_history</code>, which calls <code>list_history</code>. Two lighter paths are not drawn: a timer at the capture interval calls <code>refresh_webcam_preview</code>, and the Suggest a prompt button calls <code>suggest_another</code>. Both go through <code>AppController.preview_sketch</code>, and the button then calls <code>suggest_prompt</code> and the <code>PromptSuggester</code>, without touching the session.</figcaption>
     </figure>
   </section>
 
@@ -368,7 +368,9 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
     <h2>3 · One round, step by step</h2>
     <ol class="steps">
       <li>The browser streams webcam frames, and <code>keep_frame</code> keeps only the newest one, converted to OpenCV's BGR order, with the time it arrived. Generate becomes clickable once there is a sketch and a non-blank prompt.</li>
-      <li><code>run_generation</code> takes that frame and its age, refusing it once the stream has stopped sending frames, or takes the uploaded file path, and calls <code>AppController.run_round</code>. All session-changing handlers share one concurrency group, so a choice cannot interleave with a running round.</li>
+      <li>Every capture interval, a timer calls <code>refresh_webcam_preview</code>, which preprocesses the newest frame with the session's preprocessor through <code>AppController.preview_sketch</code> and shows it as the sketch the model will receive. Changing the source, upload, rotation, or raw option refreshes the preview the same way. Nothing is saved.</li>
+      <li>Suggest a prompt calls <code>suggest_prompt</code>, which captions the sketch with the <code>PromptSuggester</code> when the raw frame changed since the last suggestion, or moves to the next style for the same drawing, and writes one prompt into the box for the person to edit.</li>
+      <li><code>run_generation</code> takes that frame and its age, refusing it once the stream has stopped sending frames, or takes the uploaded file path, reads the seed and the control sliders, and calls <code>AppController.run_round</code>. All session-changing handlers share one concurrency group, so a choice cannot interleave with a running round.</li>
       <li><code>AppController</code> checks the sketch, prompt, and rotation before writing anything, then turns the input into an <code>ImageRef</code> and bytes with <code>encode_frame</code> or <code>load_sketch_file</code>.</li>
       <li><code>SketchSession.run_round</code> saves <code>session.json</code> once, with the hardware and the generator setup time, preprocesses the sketch unless raw is ticked, builds a <code>GenerationRequest</code>, and calls the generator, which validates the request against its capabilities first. The new iteration is linked to the previous round's ID, then the evaluator scores the candidates. Each stage is timed: capture, preprocessing, model load on the first round, generation, evaluation, and saving, plus the round's total and, for a webcam round, the frame's age.</li>
       <li>The store writes the raw sketch, the processed sketch, the candidates, and <code>round.json</code>. If any stage fails, saving included, a failed record naming the stage joins the history and is saved when the store allows, and the stage's own error reaches the page as a one-line message.</li>
@@ -383,8 +385,9 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
       <table>
         <thead><tr><th>Module</th><th>Job</th><th>Called by</th></tr></thead>
         <tbody>
-          <tr><td>ui.py</td><td>Gradio page: webcam or upload, prompt, Generate, gallery, choice, history, with its CSS and script in <code>static/</code></td><td>cli/serve.py</td></tr>
-          <tr><td>app.py</td><td><code>AppController</code>: input checks, view building, stale-page protection</td><td>ui.py</td></tr>
+          <tr><td>ui.py</td><td>Gradio page: webcam or upload, live preview, prompt and suggestion button, Generate with control sliders, gallery, choice, history, with its CSS and script in <code>static/</code></td><td>cli/serve.py, scripts/dev_ui.py</td></tr>
+          <tr><td>app.py</td><td><code>AppController</code>: input checks, sketch preview, prompt suggestions, view building, stale-page protection</td><td>ui.py</td></tr>
+          <tr><td>suggestion.py</td><td><code>PromptSuggester</code> base class, the fixed style templates, and the Florence-2 captioner that names the sketched object</td><td>app.py, cli/serve.py</td></tr>
           <tr><td>session.py</td><td><code>SketchSession</code>: runs and times each stage and the round's total, links rounds, records failures</td><td>app.py, cli/run.py, cli/rerun.py</td></tr>
           <tr><td>capture.py</td><td>Load PNG or JPEG files, encode frames, OpenCV camera capture, each returning a <code>CapturedSketch</code> with its capture time</td><td>app.py, cli/run.py, components.py</td></tr>
           <tr><td>preprocessing.py</td><td><code>Preprocessor</code> base class and the stroke pipeline with recorded steps</td><td>session.py</td></tr>

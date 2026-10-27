@@ -28,6 +28,12 @@ T08 is done (R09), tested offline and measured on the owner's Apple M2 Pro ([des
 - **Baseline:** [the T08 baseline](results/t08-latency-baseline.md) measured about 26 s per 2-candidate round in quality mode and about 7 s in fast mode on the Apple GPU, with generation over 99% of each round. With ordinary apps open, the float32 model was paged to swap and fast rounds took up to 217 s.
 - **float16:** `--precision` or `generator.diffusers.precision` chooses float16 or float32, and float16 is now the default on any GPU, while the CPU keeps float32 and refuses float16. With heavy apps closed, float16 rounds took 23.3 s in quality mode and 5.2 s in fast mode, 10% and 16% faster than float32, with images that differ by about 0.1 of 255 per pixel. Continuous suggestions while drawing are not feasible at these speeds.
 
+The owner's first UI session after T08 is implemented and tested offline (U1, U3, U4 in [ROADMAP.md](ROADMAP.md)):
+- **Prompt suggestions (U1):** "Suggest a prompt" names the sketched object with a local Florence-2-base model and fills one of five style templates, the next style on each press for the same drawing, with no network ([ADR 0019](decisions/0019-offline-prompt-suggestions.md), amended). The fake backend uses the templates alone. `scripts/download_models.py` also fetches the model. A suggestion written automatically on each drawing change was tried and reverted. Rounds do not record suggestions yet.
+- **Controls (U3):** the page shows one slider per numeric backend control, with steps starting at 10, and records them as requested controls.
+- **Page (U4):** the settings are always visible, the webcam starts by itself, the sketch the model will receive refreshes every capture interval, the seed is blank for random, and the page starts at 1 candidate.
+- **Commands:** a bare `sketchloop` runs `sketchloop ui` with the settings file's choices, and `python scripts/dev_ui.py` serves the page with live reload while the model stays loaded.
+
 Standalone tools resolve paths from their own files without requiring an application install.
 
 The [article abstract guide](articles/abstracts.md) covers all 15 papers with a recommended reading sequence, concise
@@ -50,7 +56,7 @@ Known hardware: Windows laptop without a GPU, laptop camera or USB webcam. A GPU
 
 ## Next action
 
-The owner uses the browser page with the real model and gives feedback, which becomes new UI requirements before T09. While doing so, check that the webcam starts on load, the preview turns with the rotation setting, a stopped stream is refused, and the status shows the round's total. Later, try a `sketchloop.toml` with `run` and `ui`, the tilt correction with a real diagonal sheet, a real `--camera` capture through the new `OpenCVCamera`, and the hardware test on the Windows laptop.
+The owner keeps using the page with the real model and gives feedback. U2 in [ROADMAP.md](ROADMAP.md), continuing from a selected candidate ([ADR 0020](decisions/0020-continue-from-a-candidate.md)), is the next proposed UI requirement, and saving the suggester and suggestion with each round finishes U1. Later, try a `sketchloop.toml` with `run` and `ui`, the tilt correction with a real diagonal sheet, a real `--camera` capture through the new `OpenCVCamera`, and the hardware test on the Windows laptop.
 
 ## Open questions
 
@@ -58,7 +64,7 @@ Software license for the repository. Saving the requested prompt and settings wh
 
 ## Validation
 
-On macOS with Python 3.14, `.venv/bin/python scripts/check.py` passed with 141 tests and the real-model test deselected, and `pytest -m model` passed in 21 s with the new float16 default on the Apple GPU. The hardware test that reads this machine's real values now runs on every system. Earlier in T08, `pytest -m model` passed in 73 s in float32, the first run of the diffusers backend on the Apple GPU, and `sketchloop benchmark` ran in quality and fast mode, in float32 and float16, as recorded in [the baseline](results/t08-latency-baseline.md). The Windows and Linux hardware readers are tested only with stubs, the page changes were not checked in a browser, and the camera path was not run.
+On macOS with Python 3.14, `.venv/bin/python scripts/check.py` passed with 152 tests and the real-model test deselected after the UI session. In headless Chrome with a fake camera, the webcam started streaming by itself and the preview refreshed every 0.5 s. Florence-2-base named the example sketch "a chair" and took about 0.3 s per suggestion on the M2 Pro after a 6 s load, and the owner tried the page with the real model. In T08, `pytest -m model` passed in 21 s with the new float16 default on the Apple GPU. The hardware test that reads this machine's real values now runs on every system. Earlier in T08, `pytest -m model` passed in 73 s in float32, the first run of the diffusers backend on the Apple GPU, and `sketchloop benchmark` ran in quality and fast mode, in float32 and float16, as recorded in [the baseline](results/t08-latency-baseline.md). The Windows and Linux hardware readers are tested only with stubs, the page changes were not checked in a browser, and the camera path was not run.
 
 Earlier: on Windows 11 with Python 3.12 the checks passed and the real-model test passed in about 75 s before T06. The owner checked the browser UI by hand on 2026-10-12, captured a real sketch with the laptop webcam on 2026-10-08, and ran the diffusers backend on the laptop CPU on 2026-10-09.
 

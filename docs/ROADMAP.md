@@ -24,6 +24,17 @@ Model/library research can proceed alongside offline contracts. Introduce enough
 
 The owner uses the browser page with the real model and gives feedback, which becomes new UI requirements before T09.
 
+## UI session requirements
+
+Requirements the owner set while using the page. They are repository decisions, not proposal requirements, and each gets its own bounded task.
+
+| ID | Requirement | Decision | Status |
+| --- | --- | --- | --- |
+| U1 | The page suggests style prompts based on the sketch, fully offline, with no cloud model, API key, or network. A fixed list of style suggestions is always available, and one small local vision model looks at the sketch to propose full prompts. Suggestions only fill the prompt box, and the person still edits and triggers generation. | [ADR 0019](decisions/0019-offline-prompt-suggestions.md), [research note](research/prompt-suggestion-models.md) | Implemented and tested offline. Florence-2-base names the sketched object and fills five style templates, and the fake backend uses the templates alone. A suggestion is written only when the person presses "Suggest a prompt", and pressing again for the same drawing gives the next style. Suggestion records are not saved yet. |
+| U2 | The person can continue the next round from a selected candidate. A "Continue from this candidate" action runs ControlNet image-to-image, with the candidate as the starting image, the current sketch still steering the shape, and a strength slider from light touch-up to free reimagining. A "same seed" option reuses the candidate's seed instead, with the sketch as the only input. The physical sketch is never replaced silently. | [ADR 0020](decisions/0020-continue-from-a-candidate.md) | Proposed |
+| U3 | The page offers the backend's generation controls, starting with the number of steps, and also guidance and conditioning scale, built from the backend's capabilities with each mode's defaults and limits. The chosen values are recorded as requested controls, as `run` already does. | Uses the existing controls in the generator contract ([ADR 0009](decisions/0009-diffusers-backend.md)) | Implemented and tested offline. One slider per numeric control, in rows of two, with steps starting at 10 on the page in either mode. |
+| U4 | The page is simpler to use with the real model. The settings sit under Generate, always visible. The webcam starts streaming by itself on load and whenever it is shown again. "Sketch the model will receive" shows the newest webcam frame, preprocessed unless raw, every capture interval. The seed field is blank for random, a whole number from 0 to 2147483647 otherwise. The page starts at 1 candidate per round. Labels are short and have no parentheses, and rotation and the raw option sit under the sketch. | Page changes over the existing controller ([ADR 0012](decisions/0012-gradio-ui-and-input-source.md)) | Implemented. Webcam start and the 0.5 s preview were checked in headless Chrome with a fake camera, and the rest with offline tests only. |
+
 ## Open decisions
 
 | Question | Needed by | Safe progress meanwhile |
