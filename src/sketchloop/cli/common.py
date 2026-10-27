@@ -1,19 +1,24 @@
 import time
 
+from collections.abc import Mapping
 from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from typing import Final
 
 from sketchloop.backends import GenerationBackend, make_generator
 from sketchloop.backends.diffusers import GenerationMode
 from sketchloop.cli.arguments import Command
 from sketchloop.components import make_store
-from sketchloop.domain import SketchLoopError
-from sketchloop.experiments import ExperimentStore, RoundStage
+from sketchloop.domain import SketchLoopError, Unavailable
+from sketchloop.experiments import ExperimentStore, Hardware, RoundStage, format_value
 from sketchloop.generation import Generator
 from sketchloop.session import RoundOutcome
 from sketchloop.settings import GeneratorSettings, StorageSettings
+
+
+GIBIBYTE: Final = 1024**3
 
 
 def make_announced_generator(backend: GenerationBackend, mode: GenerationMode | None, console: Console, *,
@@ -66,21 +71,75 @@ def require_folder_store(settings: StorageSettings, command: Command) -> Experim
     return store
 
 
-def show_round(outcome: RoundOutcome, console: Console) -> None:
+def format_timings(timings_seconds: Mapping[str, float], total_seconds: float | Unavailable) -> str:
     """
-    Show a round's sketches, preprocessing steps, timing, and candidates, with scores when the evaluator gave any.
+    Format the recorded stages in RoundStage order, then the total when it was measured, such as "capture 0.02 s, total 1.20 s".
+
+    Args:
+        timings_seconds (Mapping[str, float]): Duration by stage name.
+        total_seconds (float | Unavailable): Round total, left out when unavailable.
+
+    Returns:
+        str: The timings on one line, or "none" when nothing was timed.
+    """
+    parts = [f"{stage.replace('_', ' ')} {timings_seconds[stage]:.2f} s" for stage in RoundStage if stage in timings_seconds]
+
+    # Leave out an unavailable total, since show explains older rounds in a note of its own.
+    if not isinstance(total_seconds, Unavailable):
+        parts.append(f"total {total_seconds:.2f} s")
+
+    return ", ".join(parts) or "none"
+
+
+def format_machine(hardware: Hardware | Unavailable) -> str:
+    """
+    Format the CPU, logical cores, and memory, such as "Apple M2 Pro, 12 logical cores, 32.0 GiB memory".
+    """
+    # A whole unavailable record is shown with its reason, and otherwise each fact on its own.
+    if isinstance(hardware, Unavailable):
+        return format_value(hardware)
+
+    cpu, cores, memory = hardware.cpu, hardware.logical_cores, hardware.memory_bytes
+    cpu_text = f"CPU {format_value(cpu)}" if isinstance(cpu, Unavailable) else cpu
+    cores_text = f"logical cores {format_value(cores)}" if isinstance(cores, Unavailable) else f"{cores} logical cores"
+    memory_text = f"memory {format_value(memory)}" if isinstance(memory, Unavailable) else f"{memory / GIBIBYTE:.1f} GiB memory"
+    return f"{cpu_text}, {cores_text}, {memory_text}"
+
+
+def format_hardware(hardware: Hardware | Unavailable, device: object) -> str:
+    """
+    Format the machine and the device the backend generated on, such as "Apple M2 Pro, ..., generation on mps".
+
+    Args:
+        hardware (Hardware | Unavailable): Hardware the session recorded.
+        device (object): Device the round's backend reported, or None when it reported none.
+
+    Returns:
+        str: The hardware on one line.
+    """
+    reported = device is not None and not isinstance(device, Unavailable)
+    generation = f"generation on {device}" if reported else "generation device not reported"
+    return f"{format_machine(hardware)}, {generation}"
+
+
+def show_round(outcome: RoundOutcome, console: Console, hardware: Hardware | Unavailable) -> None:
+    """
+    Show a round's sketches, preprocessing steps, timings, hardware, and candidates, with scores when the evaluator gave any.
 
     Args:
         outcome (RoundOutcome): The round to show.
         console (Console): Console used for output.
+        hardware (Hardware | Unavailable): Hardware the session recorded.
     """
-    # Show where the raw and generation-input sketches are, which preprocessing steps ran, and how long generation took.
+    # Show where the raw and generation-input sketches are, which preprocessing steps ran, each stage's time, and the machine.
     sketch = outcome.iteration.request.sketch
+    device = outcome.iteration.result.effective.controls.get("device")
     console.rule(f"Round {outcome.number}")
     console.print(f"Raw sketch: {(outcome.folder / outcome.raw_sketch.path).as_posix()}", markup=False, soft_wrap=True)
     console.print(f"Generation sketch: {(outcome.folder / sketch.path).as_posix()}", markup=False, soft_wrap=True)
     console.print(f"Preprocessing: {', '.join(step.name for step in outcome.steps) or 'skipped'}", soft_wrap=True)
-    console.print(f"Generation time: {outcome.timings_seconds[RoundStage.GENERATION]:.1f} s")
+    console.print(f"Timings: {format_timings(outcome.timings_seconds, outcome.total_seconds)}", soft_wrap=True)
+    console.print(f"Hardware: {format_hardware(hardware, device)}", markup=False, soft_wrap=True)
 
     # Warn clearly when the images are not from a real model.
     if outcome.iteration.result.backend.is_fake:

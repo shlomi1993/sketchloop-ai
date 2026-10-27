@@ -95,6 +95,6 @@ def rerun_round(args: argparse.Namespace, console: Console) -> None:
     outcome = session.run_round(record.raw_sketch, raw_payload, request.guidance, source=record.source,
                                 rotation=record.rotation, use_raw=record.use_raw, n_candidates=request.n_candidates,
                                 seed=request.seed, reuse=reuse)
-    show_round(outcome, console)
+    show_round(outcome, console, session.session_record.environment.hardware)
     console.print(f"Rerun session folder: {session.folder.as_posix()}", markup=False, soft_wrap=True)
     print_comparison(compare_rounds(original, record.number, load_session(session.folder)), console)

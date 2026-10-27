@@ -55,9 +55,12 @@ def test_cli_full_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: p
     hints = output.count("Use distinct numbers from 1 to 4")
     assert hints == 2, f"Each invalid answer must ask again, got {hints} hints"
 
-    # The output names the generator setup time.
+    # The output names the generator setup, every round's timings with a total, and the hardware.
     lines = output.splitlines()
+    timing_lines = [line for line in lines if line.startswith("Timings: ")]
     assert any(line.startswith("Generator setup: ") for line in lines), "The output must show the generator setup time"
+    assert timing_lines[0].startswith("Timings: capture ") and "total" in timing_lines[0], f"Bad timings {timing_lines}"
+    assert any(line.startswith("Hardware: ") for line in lines), "The output must show the hardware"
 
     # Round 1 saves its total and the not-streamed frame age, and the repeated round 2 reuses the sketch without a capture.
     round1 = json.loads((round_dir / "round.json").read_text(encoding="utf-8"))

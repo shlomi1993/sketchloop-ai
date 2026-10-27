@@ -6,11 +6,14 @@ from rich.table import Table
 from typing import Final
 
 from sketchloop.app import describe_selection
+from sketchloop.cli.common import format_machine, format_timings
+from sketchloop.domain import Unavailable
 from sketchloop.experiments import (SESSION_FILE, ExperimentRecordError, RerunComparison, RoundRecord, SavedSession,
                                     compare_rounds, format_value, load_session)
 
 
 REPLAY_LIMITS: Final = "A rerun restores the recorded conditions. Equal seeds do not guarantee identical images across devices, library versions, or model revisions."  # noqa: E501
+OLDER_TIMINGS_NOTE: Final = "Recorded by an older sketchloop: generation may include the model load, and capture, saving, and total were not measured."  # noqa: E501
 
 
 def format_controls(controls: Mapping[str, object]) -> str:
@@ -20,9 +23,16 @@ def format_controls(controls: Mapping[str, object]) -> str:
     return ", ".join(f"{name}={format_value(value)}" for name, value in controls.items()) or "none"
 
 
+def format_seconds(seconds: float | Unavailable) -> str:
+    """
+    Format a duration such as "3.21 s", or why it is unavailable.
+    """
+    return format_value(seconds) if isinstance(seconds, Unavailable) else f"{seconds:.2f} s"
+
+
 def print_session_header(saved: SavedSession, console: Console) -> None:
     """
-    Print a saved session's ID, creation time, Python, platform, installed packages, and rerun link.
+    Print a saved session's ID, creation time, Python, platform, hardware, generator setup, packages, and rerun link.
 
     Args:
         saved (SavedSession): Loaded session.
@@ -32,6 +42,8 @@ def print_session_header(saved: SavedSession, console: Console) -> None:
     console.rule(f"Session {session.session_id}")
     console.print(f"Created: {session.created_at.isoformat()}")
     console.print(f"Python {environment.py_version} on {environment.platform}", markup=False)
+    console.print(f"Hardware: {format_machine(environment.hardware)}", markup=False, soft_wrap=True)
+    console.print(f"Generator setup: {format_seconds(session.generator_setup_seconds)}", markup=False)
     installed = ", ".join(f"{name} {version}" for name, version in environment.packages.items() if isinstance(version, str))
     console.print(f"Packages: {installed or 'none'}", markup=False, soft_wrap=True)
     if session.rerun_of is not None:
@@ -76,10 +88,14 @@ def print_round_record(record: RoundRecord, console: Console) -> None:
         console.print(f"Requested: {format_controls(guidance.controls)}, seed {format_value(record.request.seed)}", markup=False)
 
     sketch_kind = "raw sketch" if record.use_raw else f"processed sketch, rotation {record.rotation}"
-    console.print(f"Input: {sketch_kind}, from {record.raw_sketch.path} (source: {format_value(record.source)})", markup=False)
+    age, source = record.frame_age_seconds, format_value(record.source)
+    frame_age = "" if isinstance(age, Unavailable) else f", frame age {age:.2f} s"
+    console.print(f"Input: {sketch_kind}, from {record.raw_sketch.path} (source: {source}){frame_age}", markup=False)
     console.print(f"Preprocessing: {', '.join(step.name for step in record.steps) or 'skipped'}", soft_wrap=True)
-    timings = ", ".join(f"{stage} {seconds:.2f} s" for stage, seconds in record.timings_seconds.items())
-    console.print(f"Timings: {timings or 'none'}")
+    console.print(f"Timings: {format_timings(record.timings_seconds, record.total_seconds)}", soft_wrap=True)
+    if isinstance(record.total_seconds, Unavailable):
+        console.print(OLDER_TIMINGS_NOTE, style="yellow")
+
     if record.failure is not None:
         failure = record.failure
         console.print(f"Failed during {failure.stage}: {failure.error}: {failure.message}", style="red", markup=False)

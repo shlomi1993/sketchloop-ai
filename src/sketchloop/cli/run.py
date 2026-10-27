@@ -176,8 +176,8 @@ class TerminalSession:
             self.console.print(f"Round failed: {error}", style="red", markup=False, soft_wrap=True)
             return
 
-        # Show the candidates and record the person's explicit choice.
-        show_round(outcome, self.console)
+        # Show the candidates with the session's hardware, and record the person's explicit choice.
+        show_round(outcome, self.console, self.session.session_record.environment.hardware)
         selection = self.ask_selection(outcome.iteration)
 
         # Report a selection the store could not save like a failed round, so the session continues.
