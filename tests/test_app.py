@@ -16,6 +16,7 @@ from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import InvalidSketchError
 from sketchloop.domain import InvalidSelectionError, SketchLoopError, Unavailable, UnsupportedConfigurationError
 from sketchloop.experiments import SETUP_REUSED_REASON, FolderStore, load_session
+from sketchloop.suggestion import STYLE_TEMPLATES, FlorenceSuggester
 
 
 def write_sketch_png(path: Path, channels: int) -> Path:
@@ -238,3 +239,17 @@ def test_app_records_frame_age_and_setup(tmp_path: Path, sketch_file: Path) -> N
     controller.run_round(sketch_file, "upload", "lamp", n_candidates=1)
     reused = load_session(controller.session.folder).session.generator_setup_seconds
     assert reused == Unavailable(SETUP_REUSED_REASON), f"A new session must record the reused reason, got {reused}"
+
+
+def test_app_suggests_the_next_style_for_the_same_drawing(tmp_path: Path, sketch_file: Path) -> None:
+    """
+    The first press names the drawing in the first style, and each later press for the same drawing gives the next style.
+    """
+    controller = AppController(FakeGenerator(), FolderStore(tmp_path / "runs"),
+                               suggester=FlorenceSuggester(captioner=lambda payload: "a drawing of a chair"))
+    first = controller.suggest_prompt(sketch_file, 0, False)
+    second = controller.suggest_prompt(sketch_file, 0, False)
+
+    # The styles follow the template order for the named object.
+    assert first == f"a chair, {STYLE_TEMPLATES[0].split(', ', 1)[1]}", f"Unexpected first suggestion {first!r}"
+    assert second == f"a chair, {STYLE_TEMPLATES[1].split(', ', 1)[1]}", f"Expected the second style, got {second!r}"

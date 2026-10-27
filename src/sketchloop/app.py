@@ -12,14 +12,15 @@ from typing import Final
 
 from sketchloop.capture import CapturedSketch, InvalidSketchError, encode_frame, load_sketch_file
 from sketchloop.domain import (
-    Guidance, InvalidSelectionError, Iteration, Rotation, SelectionEvent, SketchLoopError, SketchSource, Unavailable,
-    record_no_selection, select_candidates)
+    ControlValue, Guidance, InvalidSelectionError, Iteration, Rotation, SelectionEvent, SketchLoopError, SketchSource,
+    Unavailable, record_no_selection, select_candidates)
 from sketchloop.evaluation import Evaluator
 from sketchloop.experiments import (SETUP_NOT_MEASURED_REASON, SETUP_REUSED_REASON, ExperimentStore, RoundRecord, RoundStage,
                                     RoundStatus)
-from sketchloop.generation import Generator
+from sketchloop.generation import ControlKind, ControlSpec, Generator
 from sketchloop.preprocessing import Preprocessor
 from sketchloop.session import RoundOutcome, SketchSession
+from sketchloop.suggestion import PromptSuggester, TemplateSuggester, compute_sketch_signature, has_sketch_changed
 
 
 NO_SKETCH_MESSAGE: Final = "No sketch yet. Take a webcam picture or upload a PNG or JPEG, then generate."
@@ -145,7 +146,7 @@ class AppController:
     Framework-free service the browser UI calls: one loaded generator and the current session, shared by all tabs.
     """
     def __init__(self, generator: Generator, store: ExperimentStore, evaluator: Evaluator | None = None, *,
-                 preprocessor: Preprocessor | None = None,
+                 preprocessor: Preprocessor | None = None, suggester: PromptSuggester | None = None,
                  generator_setup_seconds: float | Unavailable = Unavailable(SETUP_NOT_MEASURED_REASON)) -> None:
         # The page shows candidates from their saved files, so refuse a store that keeps none.
         if store.root is None:
@@ -155,6 +156,10 @@ class AppController:
         self.store = store
         self.evaluator = evaluator
         self.preprocessor = preprocessor
+        self.suggester = suggester or TemplateSuggester()
+        self._suggestions: tuple[str, ...] = ()
+        self._suggestion_index = 0
+        self._suggested_signature: np.ndarray | None = None
         self.session = SketchSession(generator, store, evaluator, preprocessor=preprocessor,
                                      generator_setup_seconds=generator_setup_seconds)
 
@@ -164,6 +169,15 @@ class AppController:
         Return the most candidates the backend can make in one round.
         """
         return self.generator.capabilities.max_candidates
+
+    @property
+    def slider_controls(self) -> tuple[ControlSpec, ...]:
+        """
+        Return the backend's numeric controls that have both bounds, which the page offers as sliders.
+        """
+        numeric = (ControlKind.INT, ControlKind.FLOAT)
+        controls = self.generator.capabilities.controls
+        return tuple(spec for spec in controls if spec.kind in numeric and None not in (spec.minimum, spec.maximum))
 
     def describe_backend(self) -> str:
         """
@@ -189,9 +203,59 @@ class AppController:
         if frame_age_seconds is not None and source != SketchSource.WEBCAM:
             raise SketchLoopError(f"Only a streamed webcam frame has a frame age, got source {source}. Pass no frame age.")
 
+    def preview_sketch(self, sketch: Path | np.ndarray | None, rotation: int, use_raw: bool) -> bytes | None:
+        """
+        Return the encoded sketch a round would give the generator now, preprocessed unless raw, without saving anything.
+
+        Args:
+            sketch (Path | np.ndarray | None): Sketch file, camera frame in OpenCV channel order, or None when missing.
+            rotation (int): Degrees to turn the sketch clockwise before processing.
+            use_raw (bool): Show the raw sketch, which skips preprocessing.
+
+        Returns:
+            bytes | None: The sketch's encoded bytes, or None when there is no sketch or preprocessing finds no drawing.
+        """
+        if sketch is None:
+            return None
+
+        # Encode or load the sketch as a round would, and preprocess it with the session's preprocessor.
+        try:
+            _, payload = encode_frame(sketch) if isinstance(sketch, np.ndarray) else load_sketch_file(sketch)
+            return payload if use_raw else self.session.preprocessor.preprocess(payload, rotation).payload
+        except (SketchLoopError, OSError):
+            return None
+
+    def suggest_prompt(self, sketch: Path | np.ndarray | None, rotation: int, use_raw: bool) -> str:
+        """
+        Suggest one style prompt for the sketch the next round would use, the next style each time for the same drawing.
+
+        Args:
+            sketch (Path | np.ndarray | None): Sketch file, camera frame in OpenCV channel order, or None when missing.
+            rotation (int): Degrees to turn the sketch clockwise before processing.
+            use_raw (bool): Suggest from the raw sketch, which skips preprocessing.
+
+        Returns:
+            str: The suggested prompt.
+        """
+        # Compare raw frames, since the crop and contrast steps make camera noise look like a changed drawing.
+        raw_payload = self.preview_sketch(sketch, rotation, True)
+        if raw_payload is None:
+            raise InvalidSketchError(NO_SKETCH_MESSAGE)
+
+        # Caption a changed drawing as the generator would see it, falling back to the raw sketch when preprocessing finds none.
+        signature = compute_sketch_signature(raw_payload)
+        if has_sketch_changed(self._suggested_signature, signature):
+            payload = raw_payload if use_raw else self.preview_sketch(sketch, rotation, False) or raw_payload
+            self._suggestions = self.suggester.suggest(payload)
+            self._suggested_signature, self._suggestion_index = signature, 0
+        else:
+            self._suggestion_index = (self._suggestion_index + 1) % len(self._suggestions)
+
+        return self._suggestions[self._suggestion_index]
+
     def run_round(self, sketch: Path | np.ndarray | None, source: SketchSource, prompt: str, *, n_candidates: int,
                   seed: int | None = None, rotation: int = Rotation.DEG_000, use_raw: bool = False,
-                  frame_age_seconds: float | None = None) -> RoundView:
+                  frame_age_seconds: float | None = None, controls: Mapping[str, ControlValue] | None = None) -> RoundView:
         """
         Check the inputs, then run a round from a sketch file or a camera frame and return its view.
 
@@ -205,6 +269,8 @@ class AppController:
             use_raw (bool, optional): Generate from the raw sketch and skip preprocessing. Defaults to False.
             frame_age_seconds (float | None, optional): Age of a streamed webcam frame when the round was taken, only for
                 the webcam source. Defaults to None.
+            controls (Mapping[str, ControlValue] | None, optional): Requested backend controls, such as steps, or None
+                for the backend defaults. Defaults to None.
 
         Returns:
             RoundView: The completed round.
@@ -212,9 +278,10 @@ class AppController:
         # Check the inputs before reading any file, so a bad request writes nothing.
         self._check_round_inputs(sketch, source, prompt, rotation, use_raw, frame_age_seconds)
 
-        # Load and time a sketch file or a camera frame, keeping the prompt as typed.
+        # Load and time a sketch file or a camera frame, keeping the prompt as typed and recording the requested controls.
         captured = capture_browser_sketch(sketch)
-        outcome = self.session.run_round(captured.image, captured.payload, Guidance(prompt=prompt), source=source,
+        guidance = Guidance(prompt=prompt, controls=controls or {})
+        outcome = self.session.run_round(captured.image, captured.payload, guidance, source=source,
                                          rotation=rotation, use_raw=use_raw, n_candidates=n_candidates, seed=seed,
                                          capture_seconds=captured.capture_seconds, frame_age_seconds=frame_age_seconds)
         return build_round_view(outcome, self.session.selections)
