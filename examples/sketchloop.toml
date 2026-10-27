@@ -30,5 +30,5 @@ candidates = 4
 # seed = 7  # omit for a random seed
 
 [ui]
-candidates = 2
+candidates = 1
 capture_interval_seconds = 0.5

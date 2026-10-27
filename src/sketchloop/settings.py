@@ -150,7 +150,7 @@ class UiSettings:
     """
     Defaults for sketchloop ui.
     """
-    candidates: int = 2  # Default candidates per round on the page
+    candidates: int = 1  # Default candidates per round on the page
     seed: int | None = None  # Default base seed, None for random
     capture_interval_seconds: float = 0.5  # Seconds between kept webcam frames
 

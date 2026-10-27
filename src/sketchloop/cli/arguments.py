@@ -247,7 +247,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
     # Serve the local browser interface.
     ui_parser = commands.add_parser(Command.UI, help="open the local browser interface", description="Run sessions from a local browser page.", formatter_class=formatter)  # noqa: E501
-    ui_parser.add_argument("--candidates", type=make_int_parser(1), default=unset, help="default number of candidates per round (settings ui.candidates, default 2)")  # noqa: E501
+    ui_parser.add_argument("--candidates", type=make_int_parser(1), default=unset, help="default number of candidates per round (settings ui.candidates, default 1)")  # noqa: E501
     ui_parser.add_argument("--seed", type=make_int_parser(0), default=unset, help="default base seed for reproducible candidates (settings ui.seed, default random)")  # noqa: E501
     ui_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for run outputs (settings storage.runs_dir, default runs)")  # noqa: E501
     ui_parser.add_argument("--capture-interval", type=parse_positive_seconds, default=unset, help="seconds between webcam frames the page keeps, so Generate uses a fresh one (settings ui.capture_interval_seconds, default 0.5)")  # noqa: E501

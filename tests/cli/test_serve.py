@@ -76,7 +76,7 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert exit_codes == (0, 0, 0) and len(launches) == 3, f"Expected three launches, got {exit_codes} and {launches}"
     controller, options = launches[0]
     assert isinstance(controller, AppController) and controller.store.root == runs_dir, f"Bad controller {controller}"
-    assert options["default_candidates"] == 2 and options["default_seed"] == 5, f"Unexpected launch options {options}"
+    assert options["default_candidates"] == 1 and options["default_seed"] == 5, f"Unexpected launch options {options}"
 
     # Telemetry is off before the UI module runs.
     telemetry = (options["GRADIO_ANALYTICS_ENABLED"], options["HF_HUB_DISABLE_TELEMETRY"])
