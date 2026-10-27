@@ -1,19 +1,27 @@
-// Start the webcam when the page loads, since Gradio cannot do it itself.
+// Start the webcam stream on load and whenever it is shown again, since Gradio cannot do it itself.
 window.sketchloop = {
-    // Press Gradio's webcam controls once they appear. Recheck the titles after Gradio upgrades.
-    openWebcam(attemptsLeft = 80) {
-        const grant = document.querySelector('[title="grant webcam access"] button');
-        if (!grant) {
-            if (attemptsLeft > 0) setTimeout(() => this.openWebcam(attemptsLeft - 1), 250);
-            return;
-        }
+    // Press Gradio's grant and record controls until the stream runs. Recheck the selectors after Gradio upgrades.
+    startWebcam(attemptsLeft = 80) {
+        const webcam = document.getElementById("webcam");
+        if (!webcam || webcam.querySelector('[title="stop recording"]')) return;
 
-        grant.click();
-        setTimeout(() => {
-            const start = document.querySelector('[title="start recording"]');
-            (start?.closest("button") ?? start)?.click();
-        }, 1500);
+        // Wait longer after a grant, so the permission prompt is not asked for twice.
+        const grant = webcam.querySelector('[title="grant webcam access"] button');
+        const record = webcam.querySelector('[title="start recording"]')?.closest("button");
+        (grant ?? record)?.click();
+        if (attemptsLeft > 0) setTimeout(() => this.startWebcam(attemptsLeft - 1), grant ? 1000 : 250);
+    },
+
+    // Start the stream each time the webcam input becomes visible, including the first time.
+    watchWebcam() {
+        let wasVisible = false;
+        setInterval(() => {
+            const isVisible = Boolean(document.getElementById("webcam")?.offsetParent);
+            if (isVisible && !wasVisible) this.startWebcam();
+            wasVisible = isVisible;
+        }, 500);
     },
 };
 
-window.addEventListener("load", () => window.sketchloop.openWebcam());
+// Gradio adds this script after the page's load event, so start watching now.
+window.sketchloop.watchWebcam();

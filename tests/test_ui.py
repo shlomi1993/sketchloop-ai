@@ -81,7 +81,7 @@ def test_ui_builds_offline(controller: AppController, monkeypatch: pytest.Monkey
     stylesheet = ui.STYLESHEET_PATH.read_text(encoding="utf-8")
     missing = [rotation for rotation in Rotation if rotation and f"#webcam.rotate-{rotation} " not in stylesheet]
     assert not missing, f"ui.css has no preview rule for rotations {missing}"
-    assert 'addEventListener("load"' in ui.SCRIPT_PATH.read_text(encoding="utf-8"), "ui.js must start the webcam on load"
+    assert "\nwindow.sketchloop.watchWebcam();" in ui.SCRIPT_PATH.read_text(encoding="utf-8"), "ui.js must watch the webcam"
 
 
 @pytest.mark.usefixtures("no_network")
