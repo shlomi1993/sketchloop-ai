@@ -29,12 +29,25 @@ Capture, preprocessing, evaluation with the no-op evaluator, and saving took abo
 
 In fast mode, rounds 5 and 6, the fourth and fifth measured rounds, took 141 s and 217 s instead of about 7 s. A rerun on an otherwise idle machine took 320 s for its warm-up round and was stopped. During that run the system used 9.7 GB of its 11 GB swap, and the benchmark process kept about 9 MB of its model in memory, so the slow rounds measured paging, not generation. The float32 model on the Apple GPU needs several GB of the 16 GB shared between CPU and GPU, so with ordinary apps open it can be paged out partway through a session. The two fast rounds affected are left out of the fast row above.
 
+## float16 on the Apple GPU
+
+The same benchmark ran again on the same machine with heavy apps closed, in float32 and then in float16 with `--precision`, as recorded in [ADR 0018](../decisions/0018-float16-on-the-apple-gpu.md). Each run had 1 warm-up and 5 measured rounds, and all 5 measured rounds of every run are used. Swap use stayed between 3.5 and 5.3 GB of a growing swap file without slow rounds.
+
+| Mode | Precision | Round total, median | Round total, min to max | Model load (first round) | Generator setup |
+| --- | --- | --- | --- | --- | --- |
+| quality | float32 | 25.85 | 25.64 to 26.74 | 18.28 | 4.03 |
+| quality | float16 | 23.27 | 23.23 to 23.43 | 9.75 | 1.07 |
+| fast | float32 | 6.17 | 5.72 to 6.32 | 15.59 | 1.05 |
+| fast | float16 | 5.16 | 5.15 to 5.18 | 13.78 | 1.07 |
+
+float16 made rounds 10% faster in quality mode and 16% faster in fast mode, with a narrower spread. The first run's longer model load and setup are likely the weights and libraries being read from disk before the operating system cached them, so the load times compare poorly across runs. With seed 0, float16 candidates differed from float32 candidates by a mean of 0.09 to 0.16 of 255 per pixel, a PSNR of 55 to 59 dB, which is not visible, and none was black. Within each precision, the same seed gave identical images in every round. The process's memory was not measured.
+
 ## Findings
 
 - **Bottleneck:** generation is over 99% of every round, so the other stages need no optimization now.
-- **Memory:** on this machine the next limit is memory, not compute. Running the model in float16 on the Apple GPU halves its memory and is the next T08 slice, measured with heavy apps closed and compared for image similarity.
-- **Continuous operation:** continuous suggestions while drawing are not feasible at these speeds, since a round takes about 7 s even in fast mode. Generating when the person pauses, or on a manual trigger as now, fits the measured times.
+- **Memory:** with ordinary apps open, the float32 model was paged to swap. float16 halves the weights, runs faster with the same images, and is now the default on any GPU, while float32 stays available with `--precision float32`.
+- **Continuous operation:** continuous suggestions while drawing are not feasible at these speeds, since a round takes about 5 s even in fast mode with float16. Generating when the person pauses, or on a manual trigger as now, fits the measured times.
 
 ## Not measured yet
 
-The laptop CPU from STATUS, a GPU with CUDA, more than 5 measured rounds for a meaningful p95, and fast mode on an unloaded machine. The saved sessions are under the ignored `runs/` folder, so `sketchloop show` and the benchmark summary can be recomputed from them.
+The laptop CPU from STATUS, a GPU with CUDA, more than 5 measured rounds for a meaningful p95, the process's peak memory in each precision, and float16 with ordinary apps open. The saved sessions are under the ignored `runs/` folder, so `sketchloop show` and the benchmark summary can be recomputed from them.
