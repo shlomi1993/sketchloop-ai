@@ -6,8 +6,8 @@ from datetime import datetime
 
 from sketchloop.domain import (SCHEMA_VERSION, BackendIdentity, Candidate, EffectiveSettings, GenerationRequest,
                                GenerationResult, Guidance, ImageRef, Iteration, SelectionEvent, Unavailable, require)
-from sketchloop.experiments.records import (MISSING_SOURCE_REASON, Environment, ExperimentRecordError, RerunLink,
-                                            RoundFailure, RoundRecord, SessionRecord)
+from sketchloop.experiments.records import (MISSING_HARDWARE_REASON, MISSING_SOURCE_REASON, Environment, ExperimentRecordError,
+                                            Hardware, RerunLink, RoundFailure, RoundRecord, SessionRecord)
 from sketchloop.preprocessing import PreprocessingStep
 
 
@@ -228,6 +228,31 @@ def round_from_dict(data: Mapping[str, object]) -> RoundRecord:
                        failure=failure)
 
 
+def hardware_to_dict(hardware: Hardware | Unavailable) -> dict[str, object]:
+    """
+    Serialize hardware facts, each through encode_value, or the whole record as unavailable.
+    """
+    if isinstance(hardware, Unavailable):
+        return {"unavailable": hardware.reason}
+
+    return {
+        "cpu": encode_value(hardware.cpu),
+        "logical_cores": encode_value(hardware.logical_cores),
+        "memory_bytes": encode_value(hardware.memory_bytes),
+    }
+
+
+def hardware_from_dict(data: Mapping[str, object]) -> Hardware | Unavailable:
+    """
+    Rebuild hardware facts, checking for a whole unavailable record first, since decode_value treats any dict as one.
+    """
+    if "unavailable" in data:
+        return decode_value(data)
+
+    return Hardware(cpu=decode_value(data["cpu"]), logical_cores=decode_value(data["logical_cores"]),
+                    memory_bytes=decode_value(data["memory_bytes"]))
+
+
 def session_to_dict(record: SessionRecord) -> dict[str, object]:
     """
     Serialize a session record in the fixed key order of session.json.
@@ -253,6 +278,7 @@ def session_to_dict(record: SessionRecord) -> dict[str, object]:
             "python": environment.py_version,
             "platform": environment.platform,
             "packages": packages,
+            "hardware": hardware_to_dict(environment.hardware),
         },
         "rerun_of": link_data,
     }
@@ -270,8 +296,14 @@ def session_from_dict(data: Mapping[str, object]) -> SessionRecord:
     """
     check_schema_version(data)
     environment_data, link_data = data["environment"], data["rerun_of"]
+
+    # Sessions written before hardware was tracked lack it, which is unknown rather than a default.
     packages = {name: decode_value(version) for name, version in environment_data["packages"].items()}
-    environment = Environment(py_version=environment_data["python"], platform=environment_data["platform"], packages=packages)
+    hardware = hardware_from_dict(environment_data.get("hardware", {"unavailable": MISSING_HARDWARE_REASON}))
+    environment = Environment(py_version=environment_data["python"], platform=environment_data["platform"], packages=packages,
+                              hardware=hardware)
+
+    # Rebuild the rerun link.
     link = None
     if link_data is not None:
         link = RerunLink(session_id=link_data["session_id"], round_number=link_data["round"],

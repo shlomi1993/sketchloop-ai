@@ -8,7 +8,7 @@ from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import load_sketch_file
 from sketchloop.domain import (Guidance, SketchSource, Unavailable, UnsupportedConfigurationError, record_no_selection,
                                select_candidates)
-from sketchloop.experiments import ExperimentRecordError, FolderStore, load_session
+from sketchloop.experiments import MISSING_HARDWARE_REASON, ExperimentRecordError, FolderStore, Hardware, load_session
 from sketchloop.session import SketchSession
 
 
@@ -102,11 +102,13 @@ def test_damaged_candidate_listed(tmp_path: Path, damage: str, problem: str) -> 
     ("round-2/round.json", lambda data: data.update(parent_id="0" * 32), "does not link to round-1"),
     ("round-1/round.json", lambda data: data.update(started_at="2026-10-09T11:25:02"), "timezone-aware"),
     ("round-1/round.json", lambda data: data["evaluation"].update(scores={"x": float("nan")}), "finite"),
-    ("round-1/round.json", lambda data: data["input"].update(source="scanner"), "source must be file, camera, webcam, or upload")
+    ("round-1/round.json", lambda data: data["input"].update(source="scanner"), "source must be file, camera, webcam, or upload"),
+    ("session.json", lambda data: data["environment"].update(hardware={"cpu": "", "logical_cores": 0, "memory_bytes": 1}),
+     "Hardware cpu must be non-empty text")
 ])
 def test_invalid_records_rejected(tmp_path: Path, file_name: str, edit: Callable[[dict], None], message: str) -> None:
     """
-    Path traversal, an unknown schema version, broken lineage, a naive time, a NaN score, and an unknown source refuse to load.
+    Traversal, a bad schema, lineage, time, score, source, or hardware refuse to load.
     """
     session = run_two_rounds(tmp_path)
     record_file = session.folder / file_name
@@ -114,6 +116,52 @@ def test_invalid_records_rejected(tmp_path: Path, file_name: str, edit: Callable
     edit(data)
     record_file.write_text(json.dumps(data), encoding="utf-8")
 
-    # Loading refuses the damaged record with an error that names the reason.
-    with pytest.raises(ExperimentRecordError, match=message):
+    # Loading refuses the damaged record with a one-line error that names the reason, which show prints instead of a traceback.
+    with pytest.raises(ExperimentRecordError, match=message) as raised:
         load_session(session.folder)
+    assert "\n" not in str(raised.value), f"The error must be one line, got {raised.value!r}"
+
+
+def test_hardware_round_trip(tmp_path: Path) -> None:
+    """
+    Hardware loads back unchanged, and an older session.json without it loads as unavailable.
+    """
+    raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
+    session = SketchSession(FakeGenerator(), FolderStore(tmp_path))
+    session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.FILE)
+    saved = load_session(session.folder)
+
+    # The hardware loads back as recorded.
+    loaded_hardware = saved.session.environment.hardware
+    assert loaded_hardware == session.session_record.environment.hardware, f"Hardware changed: {loaded_hardware}"
+
+    # Delete the hardware key to stand in for a session.json written before it was tracked.
+    session_file = session.folder / "session.json"
+    session_data = json.loads(session_file.read_text(encoding="utf-8"))
+    del session_data["environment"]["hardware"]
+    session_file.write_text(json.dumps(session_data), encoding="utf-8")
+
+    # The missing hardware loads as unavailable with its reason.
+    older_hardware = load_session(session.folder).session.environment.hardware
+    assert older_hardware == Unavailable(MISSING_HARDWARE_REASON), "Missing hardware must be unavailable"
+
+
+def test_hardware_with_unavailable_fact_round_trips(tmp_path: Path) -> None:
+    """
+    Hardware with one unavailable fact keeps that fact's reason and the other values through session.json.
+    """
+    raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
+    session = SketchSession(FakeGenerator(), FolderStore(tmp_path))
+    session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.FILE)
+    session_file = session.folder / "session.json"
+    data = json.loads(session_file.read_text(encoding="utf-8"))
+
+    # Write synthetic hardware whose memory could not be read.
+    unread_memory = {"unavailable": "synthetic reason"}
+    data["environment"]["hardware"] = {"cpu": "Synthetic CPU", "logical_cores": 4, "memory_bytes": unread_memory}
+    session_file.write_text(json.dumps(data), encoding="utf-8")
+    hardware = load_session(session.folder).session.environment.hardware
+
+    # The readable facts load as values and the unreadable one as unavailable with its reason.
+    expected = Hardware(cpu="Synthetic CPU", logical_cores=4, memory_bytes=Unavailable("synthetic reason"))
+    assert hardware == expected, f"Expected {expected}, got {hardware}"

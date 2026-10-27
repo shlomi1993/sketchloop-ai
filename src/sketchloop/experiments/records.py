@@ -16,6 +16,7 @@ from sketchloop.preprocessing import PreprocessingStep
 SESSION_FILE: Final = "session.json"
 ROUND_FILE: Final = "round.json"
 MISSING_SOURCE_REASON: Final = "recorded before input sources were tracked"
+MISSING_HARDWARE_REASON: Final = "recorded before hardware was tracked"
 
 
 class RoundStage(StrEnum):
@@ -59,13 +60,33 @@ class RerunLink:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class Hardware:
+    """
+    The processor, logical core count, and memory of the machine a session ran on, never its name or serial number.
+    """
+    cpu: str | Unavailable  # Processor model name, such as "Apple M2 Pro"
+    logical_cores: int | Unavailable  # Logical CPU count the operating system reports
+    memory_bytes: int | Unavailable  # Total physical memory
+
+    def __post_init__(self) -> None:
+        # Each fact is a real value or unavailable with a reason, never an empty name or an impossible count.
+        valid_cpu = isinstance(self.cpu, Unavailable) or (isinstance(self.cpu, str) and bool(self.cpu.strip()))
+        require(valid_cpu, f"Hardware cpu must be non-empty text or unavailable, got {self.cpu!r}.")
+        for name in ("logical_cores", "memory_bytes"):
+            value = getattr(self, name)
+            is_count = isinstance(value, int) and not isinstance(value, bool) and value >= 1
+            require(is_count or isinstance(value, Unavailable), f"Hardware {name} must be an int >= 1, got {value!r}.")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Environment:
     """
-    Python, platform, and package versions a session ran with, including sketchloop-ai itself.
+    Python, platform, package versions, and hardware a session ran with, including sketchloop-ai itself.
     """
     py_version: str  # Python version, such as 3.12.7
     platform: str  # Operating system, release, and machine, never host or user names
     packages: Mapping[str, str | Unavailable]  # Version by distribution name
+    hardware: Hardware | Unavailable  # CPU, cores, and memory of the machine
 
     def __post_init__(self) -> None:
         # Copy into a read-only view so the recorded versions cannot change after the fact.

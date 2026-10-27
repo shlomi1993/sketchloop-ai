@@ -1,18 +1,19 @@
+from sketchloop.experiments.hardware import collect_hardware, read_cpu_name, read_memory_bytes
 from sketchloop.experiments.loading import (ROUND_FOLDER_PATTERN, convert_record, list_round_folders, list_round_images,
                                             load_rounds, load_session, read_json, verify_round_files)
 from sketchloop.experiments.provenance import (MESSAGE_TOKEN_PATTERN, PATH_PUNCTUATION, TRACKED_PACKAGES,
                                                collect_environment, describe_failure, is_absolute_path,
                                                read_package_version, redact_paths, redact_token)
-from sketchloop.experiments.records import (MISSING_SOURCE_REASON, ROUND_FILE, SESSION_FILE, Environment,
-                                            ExperimentRecordError, require_known_source, RerunComparison, RerunLink,
-                                            RoundFailure, RoundRecord, RoundStage, RoundStatus, SavedSession,
-                                            SessionRecord, StoreError)
+from sketchloop.experiments.records import (MISSING_HARDWARE_REASON, MISSING_SOURCE_REASON, ROUND_FILE, SESSION_FILE,
+                                            Environment, ExperimentRecordError, Hardware, RerunComparison, RerunLink,
+                                            RoundFailure, RoundRecord, RoundStage, RoundStatus, SavedSession, SessionRecord,
+                                            StoreError, require_known_source)
 from sketchloop.experiments.replay import (compare_rounds, describe_conditions, format_value, list_differences,
                                            rebuild_request)
-from sketchloop.experiments.serialization import (check_schema_version, decode_value, encode_value, image_from_dict,
-                                                  parse_time, request_from_dict, request_to_dict, result_from_dict,
-                                                  result_to_dict, round_from_dict, round_to_dict, session_from_dict,
-                                                  session_to_dict)
+from sketchloop.experiments.serialization import (check_schema_version, decode_value, encode_value, hardware_from_dict,
+                                                  hardware_to_dict, image_from_dict, parse_time, request_from_dict,
+                                                  request_to_dict, result_from_dict, result_to_dict, round_from_dict,
+                                                  round_to_dict, session_from_dict, session_to_dict)
 from sketchloop.experiments.stores import ExperimentStore, FolderStore, MemoryStore, write_files, write_json_atomic
 
 
@@ -21,7 +22,9 @@ __all__ = [
     "ExperimentRecordError",
     "ExperimentStore",
     "FolderStore",
+    "Hardware",
     "MESSAGE_TOKEN_PATTERN",
+    "MISSING_HARDWARE_REASON",
     "MISSING_SOURCE_REASON",
     "MemoryStore",
     "PATH_PUNCTUATION",
@@ -40,6 +43,7 @@ __all__ = [
     "TRACKED_PACKAGES",
     "check_schema_version",
     "collect_environment",
+    "collect_hardware",
     "compare_rounds",
     "convert_record",
     "decode_value",
@@ -47,6 +51,8 @@ __all__ = [
     "describe_failure",
     "encode_value",
     "format_value",
+    "hardware_from_dict",
+    "hardware_to_dict",
     "image_from_dict",
     "is_absolute_path",
     "list_differences",
@@ -55,7 +61,9 @@ __all__ = [
     "load_rounds",
     "load_session",
     "parse_time",
+    "read_cpu_name",
     "read_json",
+    "read_memory_bytes",
     "read_package_version",
     "rebuild_request",
     "redact_paths",

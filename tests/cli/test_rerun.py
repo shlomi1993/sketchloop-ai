@@ -39,6 +39,12 @@ def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
     original = next(runs_dir.iterdir())
     recorded_source = load_session(original).rounds[0].source
 
+    # Name another CPU in the original session, standing in for a rerun on a different machine.
+    session_file = original / "session.json"
+    session_data = json.loads(session_file.read_text(encoding="utf-8"))
+    session_data["environment"]["hardware"] = {"cpu": "Synthetic CPU", "logical_cores": 2, "memory_bytes": 1024}
+    session_file.write_text(json.dumps(session_data), encoding="utf-8")
+
     # Strip input.source to stand in for a round saved before sources were tracked.
     if drop_source:
         record_file = original / "round-1" / "round.json"
@@ -76,6 +82,9 @@ def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
     assert recorded_source == "file", f"run from a file must record source file, got {recorded_source}"
     assert original_source == expected_source, f"Expected original source {expected_source}, got {original_source}"
     assert rerun_source == expected_source, f"The rerun must copy the original source {expected_source}, got {rerun_source}"
+
+    # The comparison lists the changed CPU.
+    assert "cpu: Synthetic CPU -> " in " ".join(rerun_output.split()), "The comparison must list the changed CPU"
 
     # show prints the rerun round's source, naming the reason when it is unavailable.
     shown_source = "(source: unavailable (recorded before input sources were tracked))" if drop_source else "(source: file)"

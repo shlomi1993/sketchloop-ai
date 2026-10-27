@@ -6,6 +6,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import Final
 
 from sketchloop.domain import Unavailable, first_line
+from sketchloop.experiments.hardware import collect_hardware
 from sketchloop.experiments.records import Environment, RoundFailure, RoundStage
 
 
@@ -43,14 +44,14 @@ def read_package_version(name: str) -> str | Unavailable:
 
 def collect_environment() -> Environment:
     """
-    Record the Python, platform, and tracked package versions of this process.
+    Record the Python, platform, tracked package versions, and hardware of this process.
 
     Returns:
-        Environment: The current environment, with Unavailable where a version cannot be read.
+        Environment: The current environment, with Unavailable where a version or hardware fact cannot be read.
     """
     system = f"{platform.system()} {platform.release()} {platform.machine()}"
     packages = {name: read_package_version(name) for name in TRACKED_PACKAGES}
-    return Environment(py_version=platform.python_version(), platform=system, packages=packages)
+    return Environment(py_version=platform.python_version(), platform=system, packages=packages, hardware=collect_hardware())
 
 
 def is_absolute_path(text: str) -> bool:

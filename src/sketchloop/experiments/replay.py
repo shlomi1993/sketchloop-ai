@@ -70,6 +70,11 @@ def describe_conditions(record: RoundRecord, environment: Environment) -> dict[s
         "platform": environment.platform,
     }
 
+    # Add the hardware facts, each unavailable for the same reason when the whole record is.
+    hardware = environment.hardware
+    for fact in ("cpu", "logical_cores", "memory_bytes"):
+        conditions[fact.replace("_", " ")] = hardware if isinstance(hardware, Unavailable) else getattr(hardware, fact)
+
     # Add the settings and packages, skipping a backend's seeds setting, which candidate seeds already cover.
     conditions |= {name: value for name, value in effective.controls.items() if name != "seeds"}
     conditions |= {f"package {name}": version for name, version in environment.packages.items()}
