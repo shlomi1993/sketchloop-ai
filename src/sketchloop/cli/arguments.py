@@ -4,6 +4,7 @@ Command-line parser for every subcommand and the merge of flags with the setting
 
 import argparse
 import math
+import sys
 
 from collections.abc import Callable
 from enum import StrEnum
@@ -201,7 +202,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     # Options that a settings file can also set are absent unless given, so the file and the defaults can apply.
     formatter = argparse.ArgumentDefaultsHelpFormatter
     unset = argparse.SUPPRESS
-    parser = argparse.ArgumentParser(prog="sketchloop", description="Run, inspect, and rerun sketch sessions.")
+    parser = argparse.ArgumentParser(prog="sketchloop", description="Run, inspect, and rerun sketch sessions. No command means ui.")  # noqa: E501
     commands = parser.add_subparsers(dest="command", required=True)
 
     # Run a new session.
@@ -255,6 +256,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ui_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="diffusers mode (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
     ui_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="diffusers precision (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
     ui_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
+    # A bare sketchloop opens the browser page with the settings file's choices.
+    if not (sys.argv[1:] if argv is None else argv):
+        argv = [Command.UI]
+
     args = parser.parse_args(argv)
 
     # Reject contradicting flags, then combine the settings file with the flags, before anything is loaded or saved.

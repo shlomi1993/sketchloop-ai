@@ -13,6 +13,7 @@ from pathlib import Path
 import sketchloop
 from sketchloop.app import AppController
 from sketchloop.cli import main
+from sketchloop.cli.arguments import parse_args
 
 
 # Run every test from tmp_path, so a sketchloop.toml in the repository cannot change CLI settings.
@@ -93,3 +94,15 @@ def test_cli_rejects_invalid_options(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert raised.value.code == 2, f"Expected the usage error code 2, got {raised.value.code}"
     assert re.search(error_pattern, errors), f"Expected an error matching {error_pattern!r}, got {errors!r}"
     assert not (tmp_path / "runs").exists(), "No session folder may be created for invalid options"
+
+
+def test_cli_without_command_opens_ui_with_settings(tmp_path: Path) -> None:
+    """
+    A bare sketchloop parses as ui and takes the backend from sketchloop.toml.
+    """
+    (tmp_path / "sketchloop.toml").write_text('[generator]\nbackend = "diffusers"\n')
+    args = parse_args([])
+
+    # The page command is chosen with the file's backend.
+    assert args.command == "ui", f"Expected the ui command, got {args.command!r}"
+    assert args.settings.generator.backend == "diffusers", f"Expected diffusers, got {args.settings.generator.backend!r}"
