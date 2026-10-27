@@ -7,8 +7,8 @@ A ranked reading list of about 15 articles for the project. Date is the first pu
 | 1 | Rethinking Sketching | Base method for sketch-generate-select rounds | T01 | 2025 | 18 | 0 | [DOI](https://doi.org/10.3390/designs9050119) | ✅ Read |
 | 2 | ControlNet | How sketches steer generation | T02a | Feb 2023 | 8 | 0 | [arXiv](https://arxiv.org/abs/2302.05543) | ✅ Read |
 | 3 | It's All About Your Sketch | Faithfulness to rough sketches | T03 | Mar 2024 | 8 | 8 | [arXiv](https://arxiv.org/abs/2403.07234) | ✅ Read |
-| 4 | Latent Diffusion Models | How the backend works and what it costs | T03 | Dec 2021 | 9 | 32 | [arXiv](https://arxiv.org/abs/2112.10752) | ⏳ In progress |
-| 5 | LCM-LoRA | The fast mode's speed and quality | T03 | Nov 2023 | 6 | 0 | [arXiv](https://arxiv.org/abs/2311.05556) | ⬜ Pending |
+| 4 | Latent Diffusion Models | How the backend works and what it costs | T03 | Dec 2021 | 9 | 32 | [arXiv](https://arxiv.org/abs/2112.10752) | ✅ Read |
+| 5 | LCM-LoRA | The fast mode's speed and quality | T03 | Nov 2023 | 6 | 0 | [arXiv](https://arxiv.org/abs/2311.05556) | ⏳ In progress |
 | 6 | Sketch-to-Architecture | Architectural sketch demos | T03 | Oct 2023 | 6 | 0 | [arXiv](https://arxiv.org/abs/2403.20186) | ⬜ Pending |
 | 7 | CLIP | Optional prompt-alignment scores | T04 | Feb 2021 | 27 | 11 | [arXiv](https://arxiv.org/abs/2103.00020) | ⬜ Pending |
 | 8 | GenAI and Design Fixation | Fixation and idea diversity risks | T04 | Mar 2024 | 16 | 0 | [arXiv](https://arxiv.org/abs/2403.11164) | ⬜ Pending |
