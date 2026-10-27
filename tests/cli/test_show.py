@@ -72,3 +72,19 @@ def test_show_older_session(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     assert "Generator setup: unavailable (recorded before generator setup was timed)" in output, "Missing setup must be named"
     assert "Recorded by an older sketchloop: generation may include the model load" in output, "An older round must get the note"
 
+
+def test_show_benchmark_session(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """
+    show recomputes and prints the statistics of a benchmark session.
+    """
+    runs_dir = tmp_path / "runs"
+    exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "chair", "--rounds", "2", "--candidates", "1", "--runs-dir",
+                      str(runs_dir)])
+    capsys.readouterr()
+    output = show_text(next(runs_dir.iterdir()), capsys)
+
+    # The benchmark ran, and show prints the summary with its round roles and total row.
+    assert exit_code == 0, f"The benchmark must succeed, got exit code {exit_code}"
+    has_summary = "Benchmark summary" in output and "Warm-up rounds: 1 Measured rounds: 2, 3" in output
+    assert has_summary, "show must summarize the benchmark"
+    assert "│ total " in output, "The summary table must have a total row"

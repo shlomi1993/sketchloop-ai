@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sketchloop.domain import SCHEMA_VERSION, Unavailable
-from sketchloop.experiments import (SessionRecord, collect_environment, collect_hardware, read_cpu_name, read_memory_bytes,
-                                    session_to_dict)
+from sketchloop.experiments import (
+    SessionRecord, collect_environment, collect_hardware, read_cpu_name, read_memory_bytes, session_to_dict)
 from sketchloop.experiments.hardware import MEMORY_READERS, read_linux_cpu_name
 
 
@@ -115,7 +115,7 @@ def test_session_record_has_no_machine_name(monkeypatch: pytest.MonkeyPatch) -> 
         renamed = os.uname_result((real.sysname, sentinel, real.release, real.version, real.machine))
         monkeypatch.setattr(os, "uname", lambda: renamed)
     record = SessionRecord(schema_version=SCHEMA_VERSION, session_id="synthetic", created_at=datetime.now(timezone.utc),
-                           environment=collect_environment(), generator_setup_seconds=0.1, rerun_of=None)
+                           environment=collect_environment(), generator_setup_seconds=0.1, rerun_of=None, benchmark=None)
 
     # The machine name appears nowhere in session.json, and hardware has exactly the CPU, cores, and memory.
     encoded = session_to_dict(record)

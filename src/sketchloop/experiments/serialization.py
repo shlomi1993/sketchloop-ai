@@ -6,9 +6,9 @@ from datetime import datetime
 
 from sketchloop.domain import (SCHEMA_VERSION, BackendIdentity, Candidate, EffectiveSettings, GenerationRequest,
                                GenerationResult, Guidance, ImageRef, Iteration, SelectionEvent, Unavailable, require)
-from sketchloop.experiments.records import (MISSING_FRAME_AGE_REASON, MISSING_HARDWARE_REASON, MISSING_SETUP_REASON,
-                                            MISSING_SOURCE_REASON, MISSING_TOTAL_REASON, Environment, ExperimentRecordError,
-                                            Hardware, RerunLink, RoundFailure, RoundRecord, SessionRecord)
+from sketchloop.experiments.records import (
+    MISSING_FRAME_AGE_REASON, MISSING_HARDWARE_REASON, MISSING_SETUP_REASON, MISSING_SOURCE_REASON, MISSING_TOTAL_REASON,
+    BenchmarkPlan, Environment, ExperimentRecordError, Hardware, RerunLink, RoundFailure, RoundRecord, SessionRecord)
 from sketchloop.preprocessing import PreprocessingStep
 
 
@@ -268,7 +268,7 @@ def session_to_dict(record: SessionRecord) -> dict[str, object]:
     Returns:
         dict[str, object]: JSON-ready session record.
     """
-    environment, link = record.environment, record.rerun_of
+    environment, link, benchmark = record.environment, record.rerun_of, record.benchmark
     packages = {name: encode_value(version) for name, version in environment.packages.items()}
     link_data = {
         "session_id": link.session_id,
@@ -287,6 +287,7 @@ def session_to_dict(record: SessionRecord) -> dict[str, object]:
         },
         "generator_setup_seconds": encode_value(record.generator_setup_seconds),
         "rerun_of": link_data,
+        "benchmark": asdict(benchmark) if benchmark else None,
     }
 
 
@@ -301,7 +302,7 @@ def session_from_dict(data: Mapping[str, object]) -> SessionRecord:
         SessionRecord: The validated session record.
     """
     check_schema_version(data)
-    environment_data, link_data = data["environment"], data["rerun_of"]
+    environment_data, link_data, benchmark_data = data["environment"], data["rerun_of"], data.get("benchmark")
 
     # Sessions written before hardware or generator setup were tracked lack them, which is unknown rather than a default.
     packages = {name: decode_value(version) for name, version in environment_data["packages"].items()}
@@ -310,11 +311,12 @@ def session_from_dict(data: Mapping[str, object]) -> SessionRecord:
                               hardware=hardware)
     setup_seconds = decode_value(data.get("generator_setup_seconds", {"unavailable": MISSING_SETUP_REASON}))
 
-    # Rebuild the rerun link.
+    # Rebuild the rerun link, and the benchmark plan, which older sessions lack.
     link = None
     if link_data is not None:
         link = RerunLink(session_id=link_data["session_id"], round_number=link_data["round"],
                          iteration_id=link_data["iteration_id"])
+    benchmark = BenchmarkPlan(**benchmark_data) if benchmark_data is not None else None
     return SessionRecord(schema_version=data["schema_version"], session_id=data["session_id"],
                          created_at=parse_time(data["created_at"]), environment=environment,
-                         generator_setup_seconds=setup_seconds, rerun_of=link)
+                         generator_setup_seconds=setup_seconds, rerun_of=link, benchmark=benchmark)

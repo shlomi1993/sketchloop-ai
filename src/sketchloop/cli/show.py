@@ -1,6 +1,6 @@
 import argparse
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from rich.console import Console
 from rich.table import Table
 from typing import Final
@@ -8,12 +8,13 @@ from typing import Final
 from sketchloop.app import describe_selection
 from sketchloop.cli.common import format_machine, format_timings
 from sketchloop.domain import Unavailable
-from sketchloop.experiments import (SESSION_FILE, ExperimentRecordError, RerunComparison, RoundRecord, SavedSession,
-                                    compare_rounds, format_value, load_session)
+from sketchloop.experiments import (SESSION_FILE, BenchmarkSummary, ExperimentRecordError, RerunComparison, RoundRecord,
+                                    SavedSession, compare_rounds, format_value, load_session, summarize_benchmark)
 
 
 REPLAY_LIMITS: Final = "A rerun restores the recorded conditions. Equal seeds do not guarantee identical images across devices, library versions, or model revisions."  # noqa: E501
 OLDER_TIMINGS_NOTE: Final = "Recorded by an older sketchloop: generation may include the model load, and capture, saving, and total were not measured."  # noqa: E501
+P95_RELIABLE_ROUNDS: Final = 20
 
 
 def format_controls(controls: Mapping[str, object]) -> str:
@@ -114,6 +115,49 @@ def print_round_record(record: RoundRecord, console: Console) -> None:
     console.print(f"Selection: {selection}")
 
 
+def print_benchmark_summary(summary: BenchmarkSummary, records: Sequence[RoundRecord], console: Console) -> None:
+    """
+    Print a benchmark session's round counts, per-stage statistics table, warm-up timings, and caveats.
+
+    Args:
+        summary (BenchmarkSummary): Statistics recomputed from the saved rounds.
+        records (Sequence[RoundRecord]): The session's saved rounds, for the warm-up timings.
+        console (Console): Console used for output.
+    """
+    # Name the rounds by role, and warn when settings changed between the measured rounds.
+    console.rule("Benchmark summary")
+    plan = summary.plan
+    console.print(f"Plan: {plan.warmup_rounds} warm-up and {plan.measured_rounds} measured rounds")
+    for label, numbers in (("Warm-up", summary.warmup_rounds), ("Measured", summary.measured_rounds),
+                           ("Failed", summary.failed_rounds)):
+        console.print(f"{label} rounds: {', '.join(str(number) for number in numbers) or 'none'}")
+    if summary.varying_settings:
+        console.print(f"Settings varied across measured rounds: {', '.join(summary.varying_settings)}", style="yellow")
+
+    # Tabulate each stage and the total in seconds, when any measured round completed.
+    if not summary.stages:
+        console.print("No measured round completed, so there are no statistics.", style="yellow")
+    else:
+        table = Table()
+        for column in ("Stage", "Median", "p95", "Min", "Max", "N"):
+            table.add_column(column, justify="left" if column == "Stage" else "right")
+        for stage, stage_statistics in summary.stages.items():
+            values = (stage_statistics.median_seconds, stage_statistics.p95_seconds, stage_statistics.min_seconds,
+                      stage_statistics.max_seconds)
+            table.add_row(stage.replace("_", " "), *(f"{value:.2f}" for value in values), str(stage_statistics.count))
+        console.print(table)
+
+    # Show each warm-up round separately, since it may include the model load.
+    for record in (record for record in records if record.number in summary.warmup_rounds):
+        console.print(f"Warm-up round {record.number}: {format_timings(record.timings_seconds, record.total_seconds)}",
+                      soft_wrap=True)
+
+    # A 95th percentile from few rounds is an interpolation rather than an observed tail.
+    measured = len(summary.measured_rounds)
+    if measured < P95_RELIABLE_ROUNDS:
+        console.print(f"p95 is interpolated from {measured} rounds, so treat it as indicative.", style="yellow")
+
+
 def print_comparison(comparison: RerunComparison, console: Console) -> None:
     """
     Print which candidates have identical bytes, each difference from the original round, and the replay limits.
@@ -146,6 +190,10 @@ def show_session(args: argparse.Namespace, console: Console) -> None:
     print_session_header(saved, console)
     for record in saved.rounds:
         print_round_record(record, console)
+
+    # Recompute and print a benchmark session's statistics from its saved rounds.
+    if saved.session.benchmark is not None:
+        print_benchmark_summary(summarize_benchmark(saved.rounds, saved.session.benchmark), saved.rounds, console)
 
     # Report missing or changed files, or confirm that all match.
     console.rule("Integrity")

@@ -11,8 +11,8 @@ from sketchloop.domain import (SCHEMA_VERSION, GenerationRequest, Guidance, Imag
                                Rotation, SelectionEvent, SketchSource, Unavailable, require, require_duration)
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
 from sketchloop.experiments import (FRAME_AGE_NOT_MEASURED_REASON, NOT_STREAMED_REASON, SETUP_NOT_MEASURED_REASON,
-                                    UNKNOWN_SOURCE_REASON, ExperimentStore, RerunLink, RoundRecord, RoundStage, RoundStatus,
-                                    SessionRecord, StoreError, collect_environment, describe_failure,
+                                    UNKNOWN_SOURCE_REASON, BenchmarkPlan, ExperimentStore, RerunLink, RoundRecord, RoundStage,
+                                    RoundStatus, SessionRecord, StoreError, collect_environment, describe_failure,
                                     require_known_source)
 from sketchloop.generation import GenerationOutput, Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor, StrokePreprocessor
@@ -76,6 +76,7 @@ class SketchSession:
 
     def __init__(self, generator: Generator, store: ExperimentStore, evaluator: Evaluator | None = None, *,
                  preprocessor: Preprocessor | None = None, rerun_of: RerunLink | None = None,
+                 benchmark: BenchmarkPlan | None = None,
                  generator_setup_seconds: float | Unavailable = Unavailable(SETUP_NOT_MEASURED_REASON)) -> None:
         # Refuse a bad setup time now, since every round would otherwise fail to save the session record.
         if not isinstance(generator_setup_seconds, Unavailable):
@@ -88,6 +89,7 @@ class SketchSession:
         self.session_id = make_session_folder_name()
         self.folder = store.locate_session(self.session_id)
         self.rerun_of = rerun_of
+        self.benchmark = benchmark
         self.generator_setup_seconds = generator_setup_seconds
         self.rounds: list[RoundOutcome] = []
         self.selections: dict[str, SelectionEvent] = {}
@@ -102,7 +104,7 @@ class SketchSession:
 
         record = SessionRecord(schema_version=SCHEMA_VERSION, session_id=self.session_id, created_at=datetime.now(timezone.utc),
                                environment=collect_environment(), generator_setup_seconds=self.generator_setup_seconds,
-                               rerun_of=self.rerun_of)
+                               rerun_of=self.rerun_of, benchmark=self.benchmark)
 
         # Remember the record only once it is saved, so a failed save is retried by the next round.
         self.store.save_session(record)

@@ -1,6 +1,7 @@
 from rich.console import Console
 
 from sketchloop.cli.arguments import Command, parse_args
+from sketchloop.cli.benchmark import run_benchmark
 from sketchloop.cli.rerun import rerun_round
 from sketchloop.cli.run import run_session
 from sketchloop.cli.serve import launch_ui
@@ -20,7 +21,13 @@ def main(argv: list[str] | None = None) -> int:
     """
     args = parse_args(argv)
     console = Console()
-    commands = {Command.RUN: run_session, Command.SHOW: show_session, Command.RERUN: rerun_round, Command.UI: launch_ui}
+    commands = {
+        Command.RUN: run_session,
+        Command.SHOW: show_session,
+        Command.RERUN: rerun_round,
+        Command.UI: launch_ui,
+        Command.BENCHMARK: run_benchmark,
+    }
 
     # Say which settings file applies before anything else, so a file found in the working folder is never a surprise.
     if args.settings_file is not None:

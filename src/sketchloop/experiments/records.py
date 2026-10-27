@@ -90,6 +90,22 @@ class Hardware:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class BenchmarkPlan:
+    """
+    How many warm-up and measured rounds a benchmark session runs.
+    """
+    warmup_rounds: int  # Rounds run first and left out of the statistics, such as the one that loads the model
+    measured_rounds: int  # Rounds the statistics cover, after the warm-up
+
+    def __post_init__(self) -> None:
+        # Exclude bool explicitly, since it is a subclass of int.
+        counts = (self.warmup_rounds, self.measured_rounds)
+        are_ints = all(isinstance(count, int) and not isinstance(count, bool) for count in counts)
+        valid_counts = are_ints and self.warmup_rounds >= 0 and self.measured_rounds >= 1
+        require(valid_counts, f"Benchmark needs 0+ warm-up and 1+ measured rounds, got {counts}.")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Environment:
     """
     Python, platform, package versions, and hardware a session ran with, including sketchloop-ai itself.
@@ -107,7 +123,7 @@ class Environment:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SessionRecord:
     """
-    Contents of session.json: identity, creation time, environment, generator setup, and the round a rerun repeats.
+    Contents of session.json: identity, creation time, environment, generator setup, rerun link, and benchmark plan.
     """
     schema_version: int  # Record format version
     session_id: str  # Session folder name
@@ -115,6 +131,7 @@ class SessionRecord:
     environment: Environment  # Code and library versions
     generator_setup_seconds: float | Unavailable  # Time to create the session's first generator, before round 1
     rerun_of: RerunLink | None  # Original round for a rerun session, otherwise None
+    benchmark: BenchmarkPlan | None  # Warm-up and measured round counts for a benchmark session, otherwise None
 
     def __post_init__(self) -> None:
         require(self.created_at.utcoffset() is not None, "Session created_at must be timezone-aware.")
