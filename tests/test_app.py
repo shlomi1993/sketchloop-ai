@@ -211,15 +211,22 @@ def test_app_history_refresh_and_new_session(controller: AppController, sketch_f
     assert new_saved.rounds[0].iteration.parent_id is None, "The first round of a new session must not link to the old one"
 
 
-def test_app_records_setup(tmp_path: Path, sketch_file: Path) -> None:
+def test_app_records_frame_age_and_setup(tmp_path: Path, sketch_file: Path) -> None:
     """
-    Only the first session records the generator setup time, and a new session records that it reused the generator.
+    A webcam round records its frame age, an age with an upload is refused, and only the first session has the setup time.
     """
     controller = AppController(FakeGenerator(), FolderStore(tmp_path / "runs"), generator_setup_seconds=2.0)
+    frame = cv2.imread(str(sketch_file))
 
-    # The first session records the setup time.
-    controller.run_round(sketch_file, "upload", "chair", n_candidates=1)
+    # An age with the upload source is refused before anything is read or saved.
+    with pytest.raises(SketchLoopError, match="Only a streamed webcam frame has a frame age"):
+        controller.run_round(sketch_file, "upload", "chair", n_candidates=1, frame_age_seconds=0.4)
+    assert not controller.store.root.exists(), "A refused frame age must save nothing"
+
+    # A webcam round records the age, and the first session the setup time.
+    controller.run_round(frame, "webcam", "chair", n_candidates=1, frame_age_seconds=0.4)
     first = load_session(controller.session.folder)
+    assert first.rounds[0].frame_age_seconds == 0.4, f"Expected frame age 0.4, got {first.rounds[0].frame_age_seconds}"
     assert first.session.generator_setup_seconds == 2.0, f"Expected setup 2.0, got {first.session.generator_setup_seconds}"
 
     # A new session reuses the generator, so it records the reused reason instead of the setup time again.

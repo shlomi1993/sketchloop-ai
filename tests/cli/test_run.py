@@ -13,7 +13,7 @@ from sketchloop.cli import main
 from sketchloop.components import CAPTURE_SOURCES, EVALUATORS, STORES
 from sketchloop.domain import SketchSource
 from sketchloop.evaluation import Evaluator
-from sketchloop.experiments import FolderStore, RoundRecord, SessionRecord, load_session
+from sketchloop.experiments import NOT_STREAMED_REASON, FolderStore, RoundRecord, SessionRecord, load_session
 from sketchloop.settings import StorageSettings
 
 
@@ -59,11 +59,12 @@ def test_cli_full_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: p
     lines = output.splitlines()
     assert any(line.startswith("Generator setup: ") for line in lines), "The output must show the generator setup time"
 
-    # Round 1 saves its total, and the repeated round 2 reuses the sketch without a capture.
+    # Round 1 saves its total and the not-streamed frame age, and the repeated round 2 reuses the sketch without a capture.
     round1 = json.loads((round_dir / "round.json").read_text(encoding="utf-8"))
     round2 = json.loads((session_dirs[0] / "round-2" / "round.json").read_text(encoding="utf-8"))
     session_data = json.loads((session_dirs[0] / "session.json").read_text(encoding="utf-8"))
     assert isinstance(round1["total_seconds"], float), f"round.json must hold a total, got {round1.get('total_seconds')}"
+    assert round1["input"]["frame_age_seconds"] == {"unavailable": NOT_STREAMED_REASON}, "A file round is not streamed"
     assert "capture" in round1["timings_seconds"] and "capture" not in round2["timings_seconds"], "Only round 1 captured"
     assert isinstance(session_data["generator_setup_seconds"], float), "session.json must hold the generator setup time"
 

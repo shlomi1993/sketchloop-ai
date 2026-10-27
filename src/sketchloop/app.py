@@ -167,8 +167,9 @@ class AppController:
         """
         return self.generator.describe()
 
-    def _check_round_inputs(self, sketch: Path | np.ndarray | None, prompt: str, rotation: int, use_raw: bool) -> None:
-        # Refuse a missing sketch, a blank prompt, and rotation settings that preprocessing cannot apply.
+    def _check_round_inputs(self, sketch: Path | np.ndarray | None, source: SketchSource, prompt: str, rotation: int,
+                            use_raw: bool, frame_age_seconds: float | None) -> None:
+        # Refuse a missing sketch, a blank prompt, rotation settings that preprocessing cannot apply, and a misplaced age.
         if sketch is None:
             raise InvalidSketchError(NO_SKETCH_MESSAGE)
 
@@ -181,8 +182,12 @@ class AppController:
         if rotation and use_raw:
             raise SketchLoopError("Rotation cannot be combined with the raw sketch option, which skips preprocessing.")
 
+        if frame_age_seconds is not None and source != SketchSource.WEBCAM:
+            raise SketchLoopError(f"Only a streamed webcam frame has a frame age, got source {source}. Pass no frame age.")
+
     def run_round(self, sketch: Path | np.ndarray | None, source: SketchSource, prompt: str, *, n_candidates: int,
-                  seed: int | None = None, rotation: int = Rotation.DEG_000, use_raw: bool = False) -> RoundView:
+                  seed: int | None = None, rotation: int = Rotation.DEG_000, use_raw: bool = False,
+                  frame_age_seconds: float | None = None) -> RoundView:
         """
         Check the inputs, then run a round from a sketch file or a camera frame and return its view.
 
@@ -194,18 +199,20 @@ class AppController:
             seed (int | None, optional): Base seed, or None for the backend default. Defaults to None.
             rotation (int, optional): Degrees to turn the sketch clockwise before processing. Defaults to 0.
             use_raw (bool, optional): Generate from the raw sketch and skip preprocessing. Defaults to False.
+            frame_age_seconds (float | None, optional): Age of a streamed webcam frame when the round was taken, only for
+                the webcam source. Defaults to None.
 
         Returns:
             RoundView: The completed round.
         """
         # Check the inputs before reading any file, so a bad request writes nothing.
-        self._check_round_inputs(sketch, prompt, rotation, use_raw)
+        self._check_round_inputs(sketch, source, prompt, rotation, use_raw, frame_age_seconds)
 
         # Load and time a sketch file or a camera frame, keeping the prompt as typed.
         captured = capture_browser_sketch(sketch)
         outcome = self.session.run_round(captured.image, captured.payload, Guidance(prompt=prompt), source=source,
                                          rotation=rotation, use_raw=use_raw, n_candidates=n_candidates, seed=seed,
-                                         capture_seconds=captured.capture_seconds)
+                                         capture_seconds=captured.capture_seconds, frame_age_seconds=frame_age_seconds)
         return build_round_view(outcome, self.session.selections)
 
     def record_selection(self, iteration_id: str | None, candidate_ids: Sequence[str]) -> RoundView:

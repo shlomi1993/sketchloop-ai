@@ -10,8 +10,9 @@ from pathlib import Path
 from sketchloop.domain import (SCHEMA_VERSION, GenerationRequest, Guidance, ImageRef, InvalidSelectionError, Iteration,
                                Rotation, SelectionEvent, SketchSource, Unavailable, require, require_duration)
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
-from sketchloop.experiments import (SETUP_NOT_MEASURED_REASON, ExperimentStore, RerunLink, RoundRecord, RoundStage,
-                                    RoundStatus, SessionRecord, StoreError, collect_environment, describe_failure,
+from sketchloop.experiments import (FRAME_AGE_NOT_MEASURED_REASON, NOT_STREAMED_REASON, SETUP_NOT_MEASURED_REASON,
+                                    UNKNOWN_SOURCE_REASON, ExperimentStore, RerunLink, RoundRecord, RoundStage, RoundStatus,
+                                    SessionRecord, StoreError, collect_environment, describe_failure,
                                     require_known_source)
 from sketchloop.generation import GenerationOutput, Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor, StrokePreprocessor
@@ -30,6 +31,28 @@ class RoundOutcome:
     timings_seconds: Mapping[str, float]  # Duration by stage, with a first model load as model_load rather than generation
     total_seconds: float  # Capture plus the round's wall time until its files were saved
     scores: Mapping[str, float]  # Evaluator scores by candidate ID, empty with the no-op evaluator
+
+
+def resolve_frame_age(source: SketchSource | Unavailable, frame_age_seconds: float | None) -> float | Unavailable:
+    """
+    Decide the frame age a round records, refusing an age for a source that is not a streamed webcam frame.
+
+    Args:
+        source (SketchSource | Unavailable): Where the raw sketch came from.
+        frame_age_seconds (float | None): Seconds from the frame's arrival to the round, or None when not measured.
+
+    Returns:
+        float | Unavailable: The age for a webcam round, otherwise why it is unavailable.
+    """
+    if source != SketchSource.WEBCAM:
+        require(frame_age_seconds is None, f"Only a webcam round has a frame age, got source {source!r}.")
+        return Unavailable(UNKNOWN_SOURCE_REASON if isinstance(source, Unavailable) else NOT_STREAMED_REASON)
+
+    if frame_age_seconds is None:
+        return Unavailable(FRAME_AGE_NOT_MEASURED_REASON)
+
+    require_duration(frame_age_seconds, "Frame age")
+    return frame_age_seconds
 
 
 def measure_total_seconds(round_started: float, capture_seconds: float | None) -> float:
@@ -118,7 +141,8 @@ class SketchSession:
 
     def run_round(self, raw_sketch: ImageRef, raw_payload: bytes, guidance: Guidance, *, source: SketchSource | Unavailable,
                   rotation: int = Rotation.DEG_000, use_raw: bool = False, n_candidates: int = 1, seed: int | None = None,
-                  reuse: PreprocessedSketch | None = None, capture_seconds: float | None = None) -> RoundOutcome:
+                  reuse: PreprocessedSketch | None = None, capture_seconds: float | None = None,
+                  frame_age_seconds: float | None = None) -> RoundOutcome:
         """
         Preprocess the sketch, generate and score candidates, save the files and record, and link to the previous round.
 
@@ -135,6 +159,8 @@ class SketchSession:
                 Defaults to None.
             capture_seconds (float | None, optional): How long capturing the raw sketch took, or None when it was not
                 captured for this round. Defaults to None.
+            frame_age_seconds (float | None, optional): Age of a streamed webcam frame when the round started, or None.
+                Defaults to None.
 
         Returns:
             RoundOutcome: The round's folder, iteration, timings, total time, and scores.
@@ -142,6 +168,7 @@ class SketchSession:
         # Start the round clock first, then refuse values the record could not hold before writing anything.
         round_started = time.perf_counter()
         require_known_source(source)
+        recorded_frame_age = resolve_frame_age(source, frame_age_seconds)
         timings: dict[str, float] = {}
         if capture_seconds is not None:
             require_duration(capture_seconds, "Capture time")
@@ -152,7 +179,8 @@ class SketchSession:
         self._started_rounds += 1
         number = self._started_rounds
         draft = partial(RoundRecord, schema_version=SCHEMA_VERSION, number=number, started_at=datetime.now(timezone.utc),
-                        raw_sketch=raw_sketch, source=source, use_raw=use_raw, rotation=rotation)
+                        raw_sketch=raw_sketch, source=source, frame_age_seconds=recorded_frame_age, use_raw=use_raw,
+                        rotation=rotation)
         measure_total = partial(measure_total_seconds, round_started, capture_seconds)
         stage = RoundStage.PREPROCESSING
         steps: tuple[PreprocessingStep, ...] = ()

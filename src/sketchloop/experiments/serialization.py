@@ -6,9 +6,9 @@ from datetime import datetime
 
 from sketchloop.domain import (SCHEMA_VERSION, BackendIdentity, Candidate, EffectiveSettings, GenerationRequest,
                                GenerationResult, Guidance, ImageRef, Iteration, SelectionEvent, Unavailable, require)
-from sketchloop.experiments.records import (MISSING_HARDWARE_REASON, MISSING_SETUP_REASON, MISSING_SOURCE_REASON,
-                                            MISSING_TOTAL_REASON, Environment, ExperimentRecordError, Hardware, RerunLink,
-                                            RoundFailure, RoundRecord, SessionRecord)
+from sketchloop.experiments.records import (MISSING_FRAME_AGE_REASON, MISSING_HARDWARE_REASON, MISSING_SETUP_REASON,
+                                            MISSING_SOURCE_REASON, MISSING_TOTAL_REASON, Environment, ExperimentRecordError,
+                                            Hardware, RerunLink, RoundFailure, RoundRecord, SessionRecord)
 from sketchloop.preprocessing import PreprocessingStep
 
 
@@ -164,6 +164,7 @@ def round_to_dict(record: RoundRecord) -> dict[str, object]:
         "started_at": record.started_at.isoformat(),
         "input": {
             "source": encode_value(record.source),
+            "frame_age_seconds": encode_value(record.frame_age_seconds),
             "raw_sketch": asdict(record.raw_sketch),
             "use_raw": record.use_raw,
             "rotation": record.rotation,
@@ -220,15 +221,16 @@ def round_from_dict(data: Mapping[str, object]) -> RoundRecord:
     failure = RoundFailure(**failure_data) if failure_data is not None else None
     steps = tuple(PreprocessingStep(name=step["name"], params=step["params"]) for step in input_data["preprocessing"])
 
-    # Records written before sources or totals were tracked lack them, which is unknown rather than a default.
+    # Records written before sources, frame ages, or totals were tracked lack them, which is unknown rather than a default.
     source = decode_value(input_data["source"]) if "source" in input_data else Unavailable(MISSING_SOURCE_REASON)
+    frame_age = decode_value(input_data.get("frame_age_seconds", {"unavailable": MISSING_FRAME_AGE_REASON}))
     total = decode_value(data.get("total_seconds", {"unavailable": MISSING_TOTAL_REASON}))
     return RoundRecord(schema_version=data["schema_version"], number=data["round"], status=data["status"],
                        started_at=parse_time(data["started_at"]), raw_sketch=image_from_dict(input_data["raw_sketch"]),
-                       source=source, use_raw=input_data["use_raw"], rotation=input_data["rotation"], steps=steps,
-                       request=request, iteration=iteration, timings_seconds=data["timings_seconds"], total_seconds=total,
-                       evaluator=evaluation.get("evaluator"), scores=evaluation.get("scores", {}), selection=selection,
-                       failure=failure)
+                       source=source, frame_age_seconds=frame_age, use_raw=input_data["use_raw"],
+                       rotation=input_data["rotation"], steps=steps, request=request, iteration=iteration,
+                       timings_seconds=data["timings_seconds"], total_seconds=total, evaluator=evaluation.get("evaluator"),
+                       scores=evaluation.get("scores", {}), selection=selection, failure=failure)
 
 
 def hardware_to_dict(hardware: Hardware | Unavailable) -> dict[str, object]:

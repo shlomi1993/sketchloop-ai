@@ -18,7 +18,8 @@ from sketchloop.capture import CapturedSketch, CaptureSource, encode_frame, raw_
 from sketchloop.domain import (Guidance, InvalidRecordError, SketchLoopError, SketchSource, Unavailable,
                                UnsupportedConfigurationError, record_no_selection, select_candidates)
 from sketchloop.evaluation import Evaluator
-from sketchloop.experiments import SETUP_NOT_MEASURED_REASON, MemoryStore, RoundRecord, SessionRecord, StoreError
+from sketchloop.experiments import (FRAME_AGE_NOT_MEASURED_REASON, NOT_STREAMED_REASON, SETUP_NOT_MEASURED_REASON,
+                                    UNKNOWN_SOURCE_REASON, MemoryStore, RoundRecord, SessionRecord, StoreError)
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor
 from sketchloop.session import SketchSession
@@ -276,6 +277,39 @@ def test_session_records_stage_timings(first_load_generator: Generator) -> None:
     default_session.run_round(captured.image, captured.payload, guidance, source=camera.kind)
     setup = default_session.session_record.generator_setup_seconds
     assert setup == Unavailable(SETUP_NOT_MEASURED_REASON), f"Expected the not-measured reason, got {setup}"
+
+
+@pytest.mark.parametrize(("source", "frame_age", "expected"), [
+    ("webcam", 0.4, 0.4),
+    ("webcam", None, Unavailable(FRAME_AGE_NOT_MEASURED_REASON)),
+    ("file", None, Unavailable(NOT_STREAMED_REASON)),
+    (Unavailable("synthetic unknown source"), None, Unavailable(UNKNOWN_SOURCE_REASON))
+], ids=["webcam-with-age", "webcam-without-age", "file", "unknown-source"])
+def test_session_records_frame_age(source: str | Unavailable, frame_age: float | None, expected: float | Unavailable) -> None:
+    """
+    A webcam round records its frame age or why it is missing, other sources were not streamed, and an unknown one says so.
+    """
+    captured = StillCamera().capture()
+    session = SketchSession(FakeGenerator(), MemoryStore())
+    session.run_round(captured.image, captured.payload, Guidance(prompt="chair"), source=source, frame_age_seconds=frame_age)
+
+    # The record holds the age or the reason.
+    recorded = session.records[0].frame_age_seconds
+    assert recorded == expected, f"Expected frame age {expected}, got {recorded}"
+
+
+def test_session_refuses_frame_age_for_file() -> None:
+    """
+    A frame age for a file round is refused before anything is saved.
+    """
+    captured = StillCamera().capture()
+    store = MemoryStore()
+    session = SketchSession(FakeGenerator(), store)
+
+    # The round is refused, and the store stays empty.
+    with pytest.raises(InvalidRecordError, match="Only a webcam round has a frame age"):
+        session.run_round(captured.image, captured.payload, Guidance(prompt="chair"), source="file", frame_age_seconds=0.4)
+    assert (store.sessions, store.rounds, store.files) == ({}, {}, {}), "A refused round must save nothing"
 
 
 def test_session_refuses_load_longer_than_call(first_load_generator: Generator) -> None:

@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 import pytest
 import re
@@ -7,8 +8,8 @@ from pathlib import Path
 
 from sketchloop.app import NO_SKETCH_MESSAGE, AppController
 from sketchloop.backends.fake import FakeGenerator
-from sketchloop.domain import Rotation
-from sketchloop.experiments import FolderStore
+from sketchloop.domain import Rotation, Unavailable
+from sketchloop.experiments import NOT_STREAMED_REASON, FolderStore, load_session
 
 
 @pytest.fixture
@@ -102,8 +103,39 @@ def test_page_handlers_keep_frame_and_refuse_missing_sketch(controller: AppContr
     assert kept[0, 0].tolist() == [0, 0, 255], f"Expected the frame in BGR order, got {kept[0, 0].tolist()}"
     assert button.interactive is True, "Generate must be enabled once a frame and prompt exist"
 
-    # A frame from before the stream stopped disables Generate and is refused with its own message.
+    # A frame from before the stream stopped is not taken, disables Generate, and is refused with its own message.
     page.latest_frame_time -= ui.STALE_FRAME_INTERVALS * page.capture_interval_seconds + 1
+    assert page.take_fresh_frame() is None, "A stale frame must not be taken"
     assert page.update_generate_button("webcam", None, "chair").interactive is False, "A stale frame must disable Generate"
     with pytest.raises(gradio.Error, match=re.escape(ui.STALE_FRAME_MESSAGE)):
         page.run_generation("webcam", None, "chair", 2, None, 0, False, progress=lambda *args, **kwargs: None)
+
+
+@pytest.mark.usefixtures("no_network")
+def test_generation_records_webcam_frame_age(controller: AppController, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    A webcam round records how old its frame was when Generate ran, and an upload round records no frame age.
+    """
+    from sketchloop import ui
+
+    page = ui.SketchPage(controller, default_candidates=1, default_seed=None)
+    page_sketch = np.full((600, 900, 3), 210, dtype=np.uint8)
+    cv2.rectangle(page_sketch, (500, 100), (700, 200), (30, 30, 30), 4)
+    clock_seconds = [10.0]
+    monkeypatch.setattr(ui.time, "monotonic", lambda: clock_seconds[0])
+
+    # A frame kept at 10 s and generated from at 10.4 s is 0.4 s old, in the record and in the taken frame.
+    page.keep_frame(page_sketch, "webcam", None, "chair")
+    clock_seconds[0] = 10.4
+    taken = page.take_fresh_frame()
+    assert taken is not None and taken[1] == pytest.approx(0.4), f"Expected a fresh frame aged 0.4 s, got {taken}"
+    page.run_generation("webcam", None, "chair", 1, 7, 0, False, progress=lambda *args, **kwargs: None)
+    webcam_age = load_session(controller.session.folder).rounds[0].frame_age_seconds
+    assert webcam_age == pytest.approx(0.4), f"Expected a recorded frame age of 0.4 s, got {webcam_age}"
+
+    # An upload round passes no age, so it records that its sketch was not streamed.
+    upload_path = tmp_path / "upload.png"
+    upload_path.write_bytes(cv2.imencode(".png", page_sketch)[1].tobytes())
+    page.run_generation("upload", str(upload_path), "lamp", 1, 7, 0, False, progress=lambda *args, **kwargs: None)
+    upload_age = load_session(controller.session.folder).rounds[1].frame_age_seconds
+    assert upload_age == Unavailable(NOT_STREAMED_REASON), f"Expected the not-streamed reason, got {upload_age}"

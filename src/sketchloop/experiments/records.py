@@ -22,6 +22,10 @@ MISSING_HARDWARE_REASON: Final = "recorded before hardware was tracked"
 SETUP_NOT_MEASURED_REASON: Final = "not measured by the caller"
 SETUP_REUSED_REASON: Final = "generator reused from an earlier session"
 MISSING_SETUP_REASON: Final = "recorded before generator setup was timed"
+NOT_STREAMED_REASON: Final = "not a streamed webcam frame"
+UNKNOWN_SOURCE_REASON: Final = "the sketch source is unknown"
+FRAME_AGE_NOT_MEASURED_REASON: Final = "not measured by the caller"
+MISSING_FRAME_AGE_REASON: Final = "recorded before frame age was tracked"
 
 
 class RoundStage(StrEnum):
@@ -152,6 +156,7 @@ class RoundRecord:
     started_at: datetime  # Timezone-aware start time
     raw_sketch: ImageRef  # Raw sketch as loaded or captured
     source: SketchSource | Unavailable  # Where the raw sketch bytes came from, unavailable in older records
+    frame_age_seconds: float | Unavailable  # Seconds from the webcam frame's arrival to the start of the round
     use_raw: bool  # Whether generation used the raw sketch and skipped preprocessing
     rotation: int  # Clockwise rotation in degrees applied before preprocessing
     steps: tuple[PreprocessingStep, ...]  # Preprocessing steps applied, empty with --raw
@@ -175,11 +180,14 @@ class RoundRecord:
         require_known_source(self.source)
         require(all(math.isfinite(score) for score in self.scores.values()), "Scores must be finite numbers.")
 
-        # Durations are finite seconds of at least 0.
+        # Durations are finite seconds of at least 0, and only a streamed webcam frame has an age.
         for stage, seconds in self.timings_seconds.items():
             require_duration(seconds, f"Stage {stage} time")
         if not isinstance(self.total_seconds, Unavailable):
             require_duration(self.total_seconds, "Total round time")
+        if not isinstance(self.frame_age_seconds, Unavailable):
+            require_duration(self.frame_age_seconds, "Frame age")
+            require(self.source == SketchSource.WEBCAM, f"Only a webcam round has a frame age, got source {self.source!r}.")
 
         # A selection must name this round's iteration and candidates.
         if self.selection is not None:
