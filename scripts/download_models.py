@@ -8,6 +8,7 @@ from pathlib import Path
 
 from sketchloop.backends.diffusers import MODEL_SOURCES, first_line
 from sketchloop.settings import SettingsError, find_settings_file, load_settings
+from sketchloop.suggestion import FLORENCE_MODEL
 
 
 BYTES_PER_GIGABYTE = 1e9
@@ -41,7 +42,7 @@ def find_models_dir(config: Path | None) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     """
-    Download the diffusers backend's models at their pinned revisions into the models folder, skipping files already present.
+    Download the diffusers and prompt suggestion models at their pinned revisions, skipping files already present.
 
     Args:
         argv (list[str] | None, optional): Command-line arguments. Defaults to the process arguments.
@@ -70,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     # Download each repository, where files whose recorded metadata already matches are skipped.
     total_bytes = 0
     downloaded_bytes = 0
-    for source in MODEL_SOURCES:
+    for source in (*MODEL_SOURCES, FLORENCE_MODEL):
         folder = models_dir / source.folder
         print(f"Downloading {source.repo_id} to {folder.as_posix()}.", flush=True)
         before_bytes = folder_bytes(folder) if folder.is_dir() else 0
