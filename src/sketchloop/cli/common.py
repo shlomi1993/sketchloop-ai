@@ -15,7 +15,7 @@ from sketchloop.backends import GenerationBackend, make_generator
 from sketchloop.backends.diffusers import GenerationMode
 from sketchloop.cli.arguments import Command
 from sketchloop.components import make_store
-from sketchloop.domain import SketchLoopError, Unavailable
+from sketchloop.domain import ControlValue, SketchLoopError, Unavailable
 from sketchloop.experiments import ExperimentStore, Hardware, RoundStage, format_value
 from sketchloop.generation import Generator
 from sketchloop.session import RoundOutcome
@@ -110,13 +110,13 @@ def format_machine(hardware: Hardware | Unavailable) -> str:
     return f"{cpu_text}, {cores_text}, {memory_text}"
 
 
-def format_hardware(hardware: Hardware | Unavailable, device: object) -> str:
+def format_hardware(hardware: Hardware | Unavailable, device: ControlValue | Unavailable | None) -> str:
     """
     Format the machine and the device the backend generated on, such as "Apple M2 Pro, ..., generation on mps".
 
     Args:
         hardware (Hardware | Unavailable): Hardware the session recorded.
-        device (object): Device the round's backend reported, or None when it reported none.
+        device (ControlValue | Unavailable | None): Device the round's backend reported, or None when it reported none.
 
     Returns:
         str: The hardware on one line.

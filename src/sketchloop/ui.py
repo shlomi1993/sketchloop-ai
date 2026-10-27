@@ -97,7 +97,7 @@ def pick_rotation(choice: str, use_raw: bool) -> int:
     return Rotation.DEG_000 if use_raw else DEFAULT_ROTATION_BY_SOURCE[choice]
 
 
-def build_history_table(rows: Sequence[HistoryRow]) -> list[list[object]]:
+def build_history_table(rows: Sequence[HistoryRow]) -> list[list[str | int]]:
     """
     Turn history rows into table rows, showing a missing prompt as not recorded.
     """
@@ -301,7 +301,7 @@ class SketchPage:
         """
         return *build_round_outputs(self.controller.latest_round()), build_history_table(self.controller.list_history())
 
-    def show_history(self) -> list[list[object]]:
+    def show_history(self) -> list[list[str | int]]:
         """
         Return the current session's history table.
         """

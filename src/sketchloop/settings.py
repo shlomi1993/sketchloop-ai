@@ -9,13 +9,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Final
+from typing import Final, TypeVar
 
 from sketchloop.domain import GenerationBackend, Rotation, SketchLoopError
 
 
 SETTINGS_FILE_NAME: Final = "sketchloop.toml"
 SECTIONS: Final = ("generator", "capture", "preprocessing", "evaluator", "storage", "run", "ui")
+SettingsRecord = TypeVar("SettingsRecord")  # A settings dataclass, replaced by a copy of the same type
 
 
 class SettingKind(StrEnum):
@@ -321,18 +322,18 @@ def read_settings_values(path: Path) -> dict[str, object]:
     return values
 
 
-def replace_setting(record: object, key: str, parts: Sequence[str], value: object) -> object:
+def replace_setting(record: SettingsRecord, key: str, parts: Sequence[str], value: object) -> SettingsRecord:
     """
     Return a copy of a settings record with the value at the dotted path replaced.
 
     Args:
-        record (object): Settings record at this level.
+        record (SettingsRecord): Settings record at this level.
         key (str): Full dotted key, used in the error for an unknown key.
         parts (Sequence[str]): Remaining parts of the key.
         value (object): New value.
 
     Returns:
-        object: The updated copy.
+        SettingsRecord: The updated copy, of the same type as the record.
     """
     # An unknown key is a programming error, not a user error.
     name = parts[0]
