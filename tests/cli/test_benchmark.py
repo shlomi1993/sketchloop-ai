@@ -9,6 +9,8 @@ from pathlib import Path
 
 from rich.console import Console
 
+from sketchloop.backends.diffusers import TorchPrecision
+from sketchloop.backends.fake import FakeGenerator
 from sketchloop.cli import main
 from sketchloop.cli.benchmark import print_benchmark_conditions
 from sketchloop.components import CAPTURE_SOURCES
@@ -129,3 +131,35 @@ def test_cli_benchmark_failing_round(tmp_path: Path, capsys: pytest.CaptureFixtu
     output = " ".join(capsys.readouterr().out.split())
     assert "Benchmark conditions" in output and "No measured round completed." in output, "The conditions must say none completed"
     assert show_exit == 0 and "No measured round completed, so there are no statistics." in output, "show must say so too"
+
+
+@pytest.mark.parametrize(("flags", "settings_text", "expected"), [
+    (["--precision", "float16"], None, TorchPrecision.FLOAT16),
+    ([], '[generator.diffusers]\nprecision = "float32"\n', TorchPrecision.FLOAT32),
+    ([], None, None)
+], ids=["flag", "settings-file", "device-default"])
+def test_cli_benchmark_passes_precision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flags: list[str],
+                                        settings_text: str | None, expected: TorchPrecision | None) -> None:
+    """
+    A --precision flag or a settings value reaches the diffusers backend, and leaving both out keeps the device default.
+    """
+    received = []
+
+    def make_recording_generator(*args: object, precision: TorchPrecision | None = None, **kwargs: object) -> FakeGenerator:
+        """
+        Record the precision the command asked for and return the fake backend.
+        """
+        received.append(precision)
+        return FakeGenerator()
+
+    monkeypatch.setattr("sketchloop.cli.common.make_generator", make_recording_generator)
+
+    # A settings file in the working folder is found without --config.
+    if settings_text is not None:
+        (tmp_path / "sketchloop.toml").write_text(settings_text, encoding="utf-8")
+    exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "chair", "--backend", "diffusers", "--rounds", "1",
+                      "--warmup", "0", "--candidates", "1", "--runs-dir", str(tmp_path / "runs"), *flags])
+
+    # The benchmark ran, and the backend got the chosen precision or None for the device default.
+    assert exit_code == 0, f"The benchmark must succeed, got exit code {exit_code}"
+    assert received == [expected], f"Expected precision {expected}, got {received}"

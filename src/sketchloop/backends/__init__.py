@@ -5,7 +5,7 @@ Registry that creates a generation backend by name for the command line and the 
 from pathlib import Path
 from typing import Final
 
-from sketchloop.backends.diffusers import DiffusersSketchGenerator, GenerationMode
+from sketchloop.backends.diffusers import DiffusersSketchGenerator, GenerationMode, TorchPrecision
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.domain import GenerationBackend
 from sketchloop.generation import Generator
@@ -19,7 +19,7 @@ RERUNNABLE_BACKENDS: Final = {
 
 
 def make_generator(backend: GenerationBackend, mode: GenerationMode | None = None, *,
-                   models_dir: Path = Path("models")) -> Generator:
+                   models_dir: Path = Path("models"), precision: TorchPrecision | None = None) -> Generator:
     """
     Create a generation backend, without loading any model yet.
 
@@ -27,6 +27,7 @@ def make_generator(backend: GenerationBackend, mode: GenerationMode | None = Non
         backend (GenerationBackend): Backend to create.
         mode (GenerationMode | None, optional): Diffusers mode, or None for the device default. Defaults to None.
         models_dir (Path, optional): Folder with the downloaded diffusers models, ignored by the fake. Defaults to models.
+        precision (TorchPrecision | None, optional): Diffusers precision, or None for the device default. Defaults to None.
 
     Returns:
         Generator: The generation backend.
@@ -34,4 +35,4 @@ def make_generator(backend: GenerationBackend, mode: GenerationMode | None = Non
     if backend == GenerationBackend.FAKE:
         return FakeGenerator()
 
-    return DiffusersSketchGenerator(models_dir, mode=mode)
+    return DiffusersSketchGenerator(models_dir, mode=mode, precision=precision)

@@ -60,6 +60,7 @@ class SettingRule:
 RULES: Final[dict[str, SettingRule]] = {
     "generator.backend": SettingRule(SettingKind.TEXT),
     "generator.diffusers.mode": SettingRule(SettingKind.TEXT),
+    "generator.diffusers.precision": SettingRule(SettingKind.TEXT),
     "generator.diffusers.models_dir": SettingRule(SettingKind.PATH),
     "capture.source": SettingRule(SettingKind.TEXT),
     "capture.camera_index": SettingRule(SettingKind.INTEGER, minimum=0),
@@ -86,6 +87,7 @@ class DiffusersSettings:
     Options used only by the diffusers backend.
     """
     mode: str | None = None  # fast or quality, None for the device default
+    precision: str | None = None  # float16 or float32, None for float16 on a GPU and float32 on CPU
     models_dir: Path = Path("models")  # Folder holding the downloaded model folders
 
 

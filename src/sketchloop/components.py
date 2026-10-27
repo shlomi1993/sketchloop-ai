@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Final, TypeAlias
 
 from sketchloop.backends import GenerationBackend
-from sketchloop.backends.diffusers import GenerationMode
+from sketchloop.backends.diffusers import GenerationMode, TorchPrecision
 from sketchloop.capture import CameraCapture, CaptureSource, FileCapture
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
 from sketchloop.experiments import ExperimentStore, FolderStore
@@ -110,7 +110,7 @@ def make_store(settings: StorageSettings) -> ExperimentStore:
 
 def check_component_names(settings: Settings, label: str) -> None:
     """
-    Refuse a backend, mode, or component name that no registry knows, naming the first bad key.
+    Refuse a backend, mode, precision, or component name that no registry knows, naming the first bad key.
 
     Args:
         settings (Settings): Settings to check.
@@ -119,13 +119,14 @@ def check_component_names(settings: Settings, label: str) -> None:
     choices_by_key: dict[str, tuple[str | None, Mapping[str, object] | list[str]]] = {
         "generator.backend": (settings.generator.backend, list(GenerationBackend)),
         "generator.diffusers.mode": (settings.generator.diffusers.mode, list(GenerationMode)),
+        "generator.diffusers.precision": (settings.generator.diffusers.precision, list(TorchPrecision)),
         "capture.source": (settings.capture.source, CAPTURE_SOURCES),
         "preprocessing.name": (settings.preprocessing.name, PREPROCESSORS),
         "evaluator.name": (settings.evaluator.name, EVALUATORS),
         "storage.store": (settings.storage.store, STORES),
     }
 
-    # An unset mode means the device default, so only a set one is checked.
+    # An unset mode or precision means the device default, so only a set one is checked.
     for key, (value, choices) in choices_by_key.items():
         if value is not None and value not in choices:
             raise SettingsError(f'{label}: {key} must be one of {join_choices(list(choices))}, got "{value}".')

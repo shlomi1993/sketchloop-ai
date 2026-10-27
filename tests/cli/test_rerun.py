@@ -7,6 +7,8 @@ import pytest
 
 from pathlib import Path
 
+from sketchloop.backends.diffusers import TorchDevice, TorchPrecision
+from sketchloop.backends.fake import FakeGenerator
 from sketchloop.cli import main
 from sketchloop.domain import Unavailable
 from sketchloop.experiments import MISSING_SOURCE_REASON, load_session
@@ -96,3 +98,62 @@ def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
     # show prints the rerun round's source, naming the reason when it is unavailable.
     shown_source = "(source: unavailable (recorded before input sources were tracked))" if drop_source else "(source: file)"
     assert shown_source in " ".join(show_output.split()), f"show must print {shown_source}"
+
+
+def record_float16_round(runs_dir: Path, monkeypatch: pytest.MonkeyPatch, adapter: str) -> Path:
+    """
+    Run one fake round, then record it as made by the given adapter in float16, and return its session folder.
+    """
+    answers = iter(["1", "q"])
+    monkeypatch.setattr("builtins.input", lambda *prompt: next(answers))
+    main(["run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--runs-dir", str(runs_dir)])
+    original = next(runs_dir.iterdir())
+    record_file = original / "round-1" / "round.json"
+    data = json.loads(record_file.read_text(encoding="utf-8"))
+    data["result"]["backend"]["adapter"] = adapter
+    data["result"]["effective"]["controls"]["dtype"] = "float16"
+    record_file.write_text(json.dumps(data), encoding="utf-8")
+    return original
+
+
+def test_cli_rerun_passes_recorded_precision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    A rerun creates its backend with the precision the round recorded.
+    """
+    runs_dir = tmp_path / "runs"
+    original = record_float16_round(runs_dir, monkeypatch, "sketchloop.fake")
+    received = []
+
+    def make_recording_generator(*args: object, precision: TorchPrecision | None = None, **kwargs: object) -> FakeGenerator:
+        """
+        Record the precision the rerun asked for and return the fake backend.
+        """
+        received.append(precision)
+        return FakeGenerator()
+
+    monkeypatch.setattr("sketchloop.cli.common.make_generator", make_recording_generator)
+    exit_code = main(["rerun", str(original), "--round", "1", "--runs-dir", str(runs_dir)])
+
+    # The rerun succeeded and asked for the recorded float16.
+    assert exit_code == 0, f"The rerun must succeed, got exit code {exit_code}"
+    assert received == [TorchPrecision.FLOAT16], f"Expected the recorded float16, got {received}"
+
+
+def test_cli_rerun_refuses_float16_on_cpu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                          capsys: pytest.CaptureFixture[str]) -> None:
+    """
+    A diffusers round recorded in float16 cannot be rerun on a CPU-only machine, and no backend is created.
+    """
+    runs_dir = tmp_path / "runs"
+    original = record_float16_round(runs_dir, monkeypatch, "sketchloop.diffusers")
+    capsys.readouterr()
+    monkeypatch.setattr("sketchloop.cli.rerun.select_device", lambda: TorchDevice.CPU)
+    monkeypatch.setattr("sketchloop.cli.common.make_generator", refuse_generator)
+    exit_code = main(["rerun", str(original), "--round", "1", "--runs-dir", str(runs_dir)])
+
+    # The rerun fails with one line that says why.
+    captured = capsys.readouterr()
+    output = " ".join((captured.out + captured.err).split())
+    assert exit_code == 1, f"The rerun must fail, got exit code {exit_code}"
+    expected = "Round 1 ran in float16 on a GPU, so it cannot be rerun on this CPU-only machine."
+    assert expected in output, f"Unexpected output {output}"

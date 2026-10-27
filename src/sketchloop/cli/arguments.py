@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Final
 
 from sketchloop.backends import GenerationBackend
-from sketchloop.backends.diffusers import GenerationMode
+from sketchloop.backends.diffusers import GenerationMode, TorchPrecision
 from sketchloop.components import NO_RUN_SKETCH_MESSAGE, check_component_names
 from sketchloop.domain import Rotation
 from sketchloop.settings import Settings, SettingsError, find_settings_file, load_settings, override_settings
@@ -41,6 +41,7 @@ FLAG_SETTINGS: Final[dict[str, dict[str, str]]] = {
         "rotate": "preprocessing.rotation",
         "backend": "generator.backend",
         "mode": "generator.diffusers.mode",
+        "precision": "generator.diffusers.precision",
         "camera_index": "capture.camera_index",
     },
     Command.UI: {
@@ -50,6 +51,7 @@ FLAG_SETTINGS: Final[dict[str, dict[str, str]]] = {
         "capture_interval": "ui.capture_interval_seconds",
         "backend": "generator.backend",
         "mode": "generator.diffusers.mode",
+        "precision": "generator.diffusers.precision",
     },
     Command.RERUN: {"runs_dir": "storage.runs_dir"},
     Command.BENCHMARK: {
@@ -60,6 +62,7 @@ FLAG_SETTINGS: Final[dict[str, dict[str, str]]] = {
         "rotate": "preprocessing.rotation",
         "backend": "generator.backend",
         "mode": "generator.diffusers.mode",
+        "precision": "generator.diffusers.precision",
     },
 }
 
@@ -143,9 +146,10 @@ def check_settings(args: argparse.Namespace, settings: Settings, label: str) -> 
         settings (Settings): Settings after the flags were applied.
         label (str): Settings file name used in messages.
     """
-    # Only the diffusers backend has modes, while a mode in the file's [generator.diffusers] is simply unused.
-    if "mode" in args and settings.generator.backend != GenerationBackend.DIFFUSERS:
-        raise SettingsError(f"--mode needs --backend {GenerationBackend.DIFFUSERS}")
+    # Only the diffusers backend has modes and precisions, while values in the file's [generator.diffusers] are simply unused.
+    for option in ("mode", "precision"):
+        if option in args and settings.generator.backend != GenerationBackend.DIFFUSERS:
+            raise SettingsError(f"--{option} needs --backend {GenerationBackend.DIFFUSERS}")
 
     if args.command not in (Command.RUN, Command.BENCHMARK):
         return
@@ -213,6 +217,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     run_parser.add_argument("--rotate", type=int, choices=list(Rotation), default=unset, help="degrees to turn the sketch clockwise before processing (settings preprocessing.rotation, default 0)")  # noqa: E501
     run_parser.add_argument("--backend", type=GenerationBackend, choices=list(GenerationBackend), default=unset, help="generation backend to use (settings generator.backend, default fake)")  # noqa: E501
     run_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="diffusers mode (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
+    run_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="diffusers precision (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
     run_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
 
     # Show or rerun a saved session.
@@ -236,6 +241,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     benchmark_parser.add_argument("--rotate", type=int, choices=list(Rotation), default=unset, help="degrees to turn the sketch clockwise before processing (settings preprocessing.rotation, default 0)")  # noqa: E501
     benchmark_parser.add_argument("--backend", type=GenerationBackend, choices=list(GenerationBackend), default=unset, help="generation backend to use (settings generator.backend, default fake)")  # noqa: E501
     benchmark_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="diffusers mode (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
+    benchmark_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="diffusers precision (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
     benchmark_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for run outputs (settings storage.runs_dir, default runs)")  # noqa: E501
     benchmark_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
 
@@ -247,6 +253,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ui_parser.add_argument("--capture-interval", type=parse_positive_seconds, default=unset, help="seconds between webcam frames the page keeps, so Generate uses a fresh one (settings ui.capture_interval_seconds, default 0.5)")  # noqa: E501
     ui_parser.add_argument("--backend", type=GenerationBackend, choices=list(GenerationBackend), default=unset, help="generation backend to use (settings generator.backend, default fake)")  # noqa: E501
     ui_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="diffusers mode (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
+    ui_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="diffusers precision (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
     ui_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
     args = parser.parse_args(argv)
 

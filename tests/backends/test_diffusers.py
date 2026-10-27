@@ -80,8 +80,37 @@ def test_diffusers_maps_request() -> None:
     assert result.backend.execution == "in_process" and "scribble" in str(result.backend.model_id), "Backend not identified"
     assert [candidate.image.mode for candidate in result.candidates] == ["RGB", "RGB"], "Candidates must be RGB images"
 
-    # The description names the device, mode, and default step count, so the person expects the run time.
-    assert "on CPU in quality mode, running 20 steps" in generator.describe(), f"Unexpected description {generator.describe()}"
+    # The description names the device, mode, precision, and default step count, so the person expects the run time.
+    description = generator.describe()
+    assert "on CPU in quality mode and float32, running 20 steps" in description, f"Unexpected description {description}"
+
+
+@pytest.mark.parametrize(("device", "precision", "expected"), [
+    ("cuda", None, "float16"),
+    ("mps", None, "float16"),
+    ("mps", "float32", "float32"),
+    ("cpu", None, "float32"),
+], ids=["cuda-default", "mps-default", "mps-float32", "cpu-default"])
+def test_diffusers_precision(device: str, precision: str | None, expected: str) -> None:
+    """
+    float16 is the default on a GPU, float32 can still be chosen there, and the precision is recorded as the effective dtype.
+    """
+    generator = DiffusersSketchGenerator(mode="quality", device=device, precision=precision, runner=RecordingRunner())
+    sketch, payload = make_sketch()
+    output = generator.generate(GenerationRequest(sketch=sketch, guidance=Guidance(prompt="chair"), seed=1), payload)
+
+    # The record and the description both name the precision the models ran in.
+    dtype = output.result.effective.controls["dtype"]
+    assert dtype == expected, f"Expected dtype {expected}, got {dtype}"
+    assert f"and {expected}," in generator.describe(), f"The description must name {expected}"
+
+
+def test_diffusers_refuses_float16_on_cpu() -> None:
+    """
+    float16 on the CPU is refused when the backend is created, before any model is loaded.
+    """
+    with pytest.raises(GenerationBackendError, match="float16 needs a GPU"):
+        DiffusersSketchGenerator(mode="fast", device="cpu", precision="float16")
 
 
 def test_diffusers_missing_model(tmp_path: Path) -> None:

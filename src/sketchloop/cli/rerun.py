@@ -7,8 +7,8 @@ import argparse
 from pathlib import Path
 from rich.console import Console
 
-from sketchloop.backends import RERUNNABLE_BACKENDS
-from sketchloop.backends.diffusers import GenerationMode
+from sketchloop.backends import RERUNNABLE_BACKENDS, GenerationBackend
+from sketchloop.backends.diffusers import GenerationMode, TorchDevice, TorchPrecision, select_device
 from sketchloop.cli.arguments import Command
 from sketchloop.cli.common import make_announced_generator, require_folder_store, show_round
 from sketchloop.cli.show import print_comparison
@@ -48,7 +48,7 @@ def find_rerunnable_round(saved: SavedSession, round_number: int) -> RoundRecord
 
 def make_rerun_generator(record: RoundRecord, console: Console, models_dir: Path) -> tuple[Generator, float]:
     """
-    Recreate the backend a round used, with its recorded diffusers mode.
+    Recreate the backend a round used, with its recorded diffusers mode and precision.
 
     Args:
         record (RoundRecord): Completed round to rerun.
@@ -62,10 +62,18 @@ def make_rerun_generator(record: RoundRecord, console: Console, models_dir: Path
     if adapter not in RERUNNABLE_BACKENDS:
         raise SketchLoopError(f"Round {record.number} used backend {adapter}, which rerun cannot recreate.")
 
-    # Pass the recorded mode, since the diffusers default depends on the device.
-    recorded_mode = record.iteration.result.effective.controls.get("mode")
+    # Pass the recorded mode and precision, since the diffusers defaults depend on the device.
+    controls = record.iteration.result.effective.controls
+    recorded_mode, recorded_precision = controls.get("mode"), controls.get("dtype")
     mode = GenerationMode(recorded_mode) if recorded_mode in list(GenerationMode) else None
-    return make_announced_generator(RERUNNABLE_BACKENDS[adapter], mode, console, models_dir=models_dir)
+    precision = TorchPrecision(recorded_precision) if recorded_precision in list(TorchPrecision) else None
+
+    # A float16 round came from a GPU, and rerun keeps the recorded precision, so a CPU-only machine cannot repeat it.
+    is_diffusers = RERUNNABLE_BACKENDS[adapter] == GenerationBackend.DIFFUSERS
+    if is_diffusers and precision == TorchPrecision.FLOAT16 and select_device() == TorchDevice.CPU:
+        raise SketchLoopError(f"Round {record.number} ran in float16 on a GPU, so it cannot be rerun on this CPU-only machine.")
+
+    return make_announced_generator(RERUNNABLE_BACKENDS[adapter], mode, console, models_dir=models_dir, precision=precision)
 
 
 def rerun_round(args: argparse.Namespace, console: Console) -> None:

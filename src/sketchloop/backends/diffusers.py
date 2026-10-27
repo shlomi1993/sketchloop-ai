@@ -46,6 +46,14 @@ class GenerationMode(StrEnum):
     QUALITY = "quality"
 
 
+class TorchPrecision(StrEnum):
+    """
+    Floating-point precision the diffusers models run in.
+    """
+    FLOAT16 = "float16"
+    FLOAT32 = "float32"
+
+
 class GenerationBackendError(SketchLoopError, RuntimeError):
     """
     A real generation backend cannot load its models or fails while generating.
@@ -253,11 +261,20 @@ class DiffusersSketchGenerator(Generator):
     ADAPTER_NAME: Final = "sketchloop.diffusers"
 
     def __init__(self, model_dir: Path = Path("models"), *, mode: GenerationMode | None = None,
-                 device: TorchDevice | None = None, runner: PipelineRunner | None = None) -> None:
+                 device: TorchDevice | None = None, precision: TorchPrecision | None = None,
+                 runner: PipelineRunner | None = None) -> None:
         self._model_dir = model_dir
         self.device = TorchDevice(device) if device else select_device()
         default_mode = GenerationMode.FAST if self.device == TorchDevice.CPU else GenerationMode.QUALITY
         self.mode = GenerationMode(mode) if mode else default_mode
+
+        # Half precision halves the models' memory and is faster on a GPU, but has no fast CPU kernels, so the CPU uses float32.
+        default_precision = TorchPrecision.FLOAT32 if self.device == TorchDevice.CPU else TorchPrecision.FLOAT16
+        self.precision = TorchPrecision(precision) if precision else default_precision
+        if self.precision == TorchPrecision.FLOAT16 and self.device == TorchDevice.CPU:
+            message = "float16 needs a GPU, but this backend runs on the CPU. Pass --precision float32 or set generator.diffusers.precision."  # noqa: E501
+            raise GenerationBackendError(message)
+
         self._runner = runner
         self._runtime: dict[str, ControlValue] = {}
 
@@ -281,11 +298,12 @@ class DiffusersSketchGenerator(Generator):
 
     def describe(self) -> str:
         """
-        Say which model, device, mode, and step count this backend uses, so slow CPU runs are expected.
+        Say which model, device, mode, precision, and step count this backend uses, so slow CPU runs are expected.
         """
         model = "Stable Diffusion 1.5 and ControlNet scribble"
         steps = MODE_SETTINGS[self.mode].steps
-        return f"Using the diffusers backend with {model} on {self.device.upper()} in {self.mode} mode, running {steps} steps."
+        run_conditions = f"on {self.device.upper()} in {self.mode} mode and {self.precision}"
+        return f"Using the diffusers backend with {model} {run_conditions}, running {steps} steps."
 
     def _list_model_sources(self) -> tuple[ModelSource, ...]:
         return MODEL_SOURCES if self.mode == GenerationMode.FAST else (BASE_MODEL, CONTROLNET_MODEL)
@@ -311,7 +329,7 @@ class DiffusersSketchGenerator(Generator):
         transformers.utils.logging.set_verbosity_error()
 
         # Load the base model with the scribble ControlNet but no safety checker, whose weights are not downloaded.
-        dtype = torch.float16 if self.device == TorchDevice.CUDA else torch.float32
+        dtype = getattr(torch, self.precision)
         controlnet_folder = str(self._model_dir / CONTROLNET_MODEL.folder)
         try:
             controlnet = diffusers.ControlNetModel.from_pretrained(controlnet_folder, dtype=dtype)
@@ -389,11 +407,10 @@ class DiffusersSketchGenerator(Generator):
     def _collect_effective_settings(self, request: GenerationRequest, controls: dict[str, ControlValue],
                             candidates: list[Candidate], resolution: str) -> EffectiveSettings:
         # Combine the controls with the mode, device, scheduler, and seeds actually used. session.json records library versions.
-        dtype = "float16" if self.device == TorchDevice.CUDA else "float32"
         settings: dict[str, ControlValue] = {
             "mode": self.mode.value,
             "device": self.device.value,
-            "dtype": dtype,
+            "dtype": self.precision.value,
             "scheduler": MODE_SETTINGS[self.mode].scheduler,
             "resolution": resolution,
             "seeds": " ".join(str(candidate.seed) for candidate in candidates),

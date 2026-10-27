@@ -51,6 +51,8 @@ def launches(monkeypatch: pytest.MonkeyPatch) -> list[tuple[AppController, dict[
     ("run", ["--seed", "-1"], None, r"must be at least 0, got -1"),
     ("ui", ["--candidates", "0"], None, r"must be at least 1, got 0"),
     ("ui", ["--mode", "fast"], None, r"--mode needs --backend diffusers"),
+    ("run", ["--precision", "float16"], None, r"--precision needs --backend diffusers"),
+    ("run", [], '[generator.diffusers]\nprecision = "fp16"\n', r'generator\.diffusers\.precision must be one of .+"fp16"\.'),
     ("run", [], '[generator]\nbackend = "difusers"\n', r'sketchloop\.toml: generator\.backend must be one of .+"difusers"\.'),
     ("ui", [], "[ui]\ncandidates = true\n", r"sketchloop\.toml: ui\.candidates must be an integer, got (?i:true)\."),
     ("run", [], '[generator]\nmdoe = "fast"\n', r"sketchloop\.toml: unknown key generator\.mdoe\. Keys in \[generator\]: "),
@@ -62,7 +64,8 @@ def launches(monkeypatch: pytest.MonkeyPatch) -> list[tuple[AppController, dict[
     ("ui", ["--capture-interval", "inf"], None, r"must be greater than 0 seconds, got inf"),
     ("ui", [], "[ui]\ncapture_interval_seconds = inf\n", r"capture_interval_seconds must be greater than 0, got inf\."),
     ("run", [], "seed = 7\n", re.escape("sketchloop.toml: seed must be inside a section such as [run]."))
-], ids=["candidates-0", "negative-seed", "ui-candidates-0", "mode-without-diffusers", "misspelled-backend", "boolean-candidates",
+], ids=["candidates-0", "negative-seed", "ui-candidates-0", "mode-without-diffusers", "precision-without-diffusers",
+        "misspelled-precision", "misspelled-backend", "boolean-candidates",
         "unknown-key", "broken-toml", "rotation-with-raw", "memory-store", "missing-config", "infinite-interval-flag",
         "infinite-interval-file", "top-level-key"])
 def test_cli_rejects_invalid_options(tmp_path: Path, capsys: pytest.CaptureFixture[str], command: str, option: list[str],
