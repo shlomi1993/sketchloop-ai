@@ -389,7 +389,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <tr><td>capture.py</td><td>Load PNG or JPEG files, encode frames, OpenCV camera capture, each returning a <code>CapturedSketch</code> with its capture time</td><td>app.py, cli/run.py, components.py</td></tr>
           <tr><td>preprocessing.py</td><td><code>Preprocessor</code> base class and the stroke pipeline with recorded steps</td><td>session.py</td></tr>
           <tr><td>generation.py</td><td><code>Generator</code> base class, capabilities, request validation</td><td>both backends, session.py</td></tr>
-          <tr><td>backends/diffusers.py</td><td>Real model: SD 1.5 + ControlNet scribble, fast and quality modes</td><td>backends.make_generator</td></tr>
+          <tr><td>backends/diffusers.py</td><td>Real model: SD 1.5 + ControlNet scribble, fast and quality modes, float16 or float32</td><td>backends.make_generator</td></tr>
           <tr><td>backends/fake.py</td><td>Deterministic labeled fake backend</td><td>backends.make_generator, tests</td></tr>
           <tr><td>evaluation.py</td><td><code>Evaluator</code> base class and the no-op scorer</td><td>session.py</td></tr>
           <tr><td>experiments/</td><td>One module each for <code>records</code>, <code>provenance</code> (environment and redacted failures), <code>serialization</code>, <code>stores</code> (<code>FolderStore</code>, <code>MemoryStore</code>), <code>loading</code> with checksums, <code>replay</code> (rerun requests and comparison), <code>hardware</code> (CPU, cores, memory), and <code>benchmark</code> (stage statistics)</td><td>session.py, cli/show.py, cli/rerun.py</td></tr>

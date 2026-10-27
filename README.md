@@ -16,7 +16,7 @@ The intended loop is **draw → capture → preprocess → generate alternatives
 | T05 | `sketchloop show` and `sketchloop rerun` reopen and rerun an earlier session | ✅ Done |
 | T06 | `sketchloop ui` runs sessions in a local browser page | ✅ Done |
 | T07 | `sketchloop.toml` switches the model, image source, evaluator, or storage | ✅ Done |
-| T08 | Timing per stage | ⏳ Next |
+| T08 | Timing per stage | ✅ Done |
 | T09 | Full demo and evaluation report | ⬜ Planned |
 
 Details are in the [roadmap](docs/ROADMAP.md) and [current status](docs/STATUS.md).
@@ -53,9 +53,9 @@ By default the images come from a labeled fake backend (deterministic noise).
 Each session also writes `session.json` and a `round.json` per round with the prompt, settings, seeds, timings, checksums, and selection. Run `sketchloop show runs/<session>` to print a saved session and check its files without loading a model. Run `sketchloop rerun runs/<session> --round 1` to repeat a round as a new linked session from the stored `sketch.png` and recorded settings. It reports which candidates came out byte-identical and what changed, without claiming exact replay.
 Every round prints how long each stage took (capture, preprocessing, model load, generation, evaluation, and saving) with the total and the CPU, cores, and memory it ran on, and `session.json` also records how long creating the backend took.
 
-To measure latency, run `sketchloop benchmark examples/sketch-photo.jpg --prompt "modern chair" --rounds 5 --warmup 1`. It runs the warm-up rounds and then the measured rounds from the same file with one loaded backend, records no selection, and prints the conditions, each warm-up round, and the median, p95, minimum, and maximum of every stage and the total. It uses seed 0 unless `--seed` or `run.seed` sets one, and it takes the same `--candidates`, `--raw`, `--rotate`, `--backend`, `--mode`, and `--runs-dir` options as `run`. With fewer than 20 measured rounds the p95 is only indicative. `sketchloop show` prints the same summary for a saved benchmark session.
+To measure latency, run `sketchloop benchmark examples/sketch-photo.jpg --prompt "modern chair" --rounds 5 --warmup 1`. It runs the warm-up rounds and then the measured rounds from the same file with one loaded backend, records no selection, and prints the conditions, each warm-up round, and the median, p95, minimum, and maximum of every stage and the total. It uses seed 0 unless `--seed` or `run.seed` sets one, and it takes the same `--candidates`, `--raw`, `--rotate`, `--backend`, `--mode`, `--precision`, and `--runs-dir` options as `run`. With fewer than 20 measured rounds the p95 is only indicative. `sketchloop show` prints the same summary for a saved benchmark session.
 
-To work in a browser instead of the terminal, run `sketchloop ui`. It opens a page served only on this machine, usually at `http://127.0.0.1:7860`, with no share link and Gradio analytics off. Take a webcam picture or upload a PNG or JPEG, enter a prompt, and click Generate. Tick the candidates you like, or none, and click Record selection, then change the sketch or prompt and generate the next round. The page shows the current session's history, and New session starts a fresh session with the loaded model. `sketchloop ui` takes the same `--backend`, `--mode`, `--runs-dir`, and `--seed` options as `run`, and `--candidates` sets the default count, 2 by default. The page keeps the newest webcam frame every `--capture-interval` seconds, 0.5 by default, so Generate uses the sketch as it is now without a separate snapshot. All browser tabs share one session, and reloading the page keeps it. Each round records whether its sketch came from a file, the camera, the browser webcam, or an upload.
+To work in a browser instead of the terminal, run `sketchloop ui`. It opens a page served only on this machine, usually at `http://127.0.0.1:7860`, with no share link and Gradio analytics off. Take a webcam picture or upload a PNG or JPEG, enter a prompt, and click Generate. Tick the candidates you like, or none, and click Record selection, then change the sketch or prompt and generate the next round. The page shows the current session's history, and New session starts a fresh session with the loaded model. `sketchloop ui` takes the same `--backend`, `--mode`, `--precision`, `--runs-dir`, and `--seed` options as `run`, and `--candidates` sets the default count, 2 by default. The page keeps the newest webcam frame every `--capture-interval` seconds, 0.5 by default, so Generate uses the sketch as it is now without a separate snapshot. All browser tabs share one session, and reloading the page keeps it. Each round records whether its sketch came from a file, the camera, the browser webcam, or an upload.
 
 ## Real model
 
@@ -66,7 +66,7 @@ python scripts/download_models.py
 sketchloop run examples/sketch-photo.jpg --prompt "modern chair" --backend diffusers
 ```
 
-The download script fetches about 6 GB into the ignored `models/` folder and skips files already present. The backend uses CUDA, then Apple MPS, then the CPU. `--mode fast` uses 4 steps with LCM-LoRA and no negative prompt and is the default on CPU, and `--mode quality` (20 steps) is the default on a GPU. Run the real-model test with `python -m pytest -m model`, since default checks skip it.
+The download script fetches about 6 GB into the ignored `models/` folder and skips files already present. The backend uses CUDA, then Apple MPS, then the CPU. `--mode fast` uses 4 steps with LCM-LoRA and no negative prompt and is the default on CPU, and `--mode quality` (20 steps) is the default on a GPU. `--precision float16` is the default on a GPU and `float32` on the CPU, which cannot run float16, and `generator.diffusers.precision` sets it in the settings file. Run the real-model test with `python -m pytest -m model`, since default checks skip it.
 
 ## Settings file
 
