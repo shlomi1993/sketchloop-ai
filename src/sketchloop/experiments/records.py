@@ -19,6 +19,9 @@ ROUND_FILE: Final = "round.json"
 MISSING_SOURCE_REASON: Final = "recorded before input sources were tracked"
 MISSING_TOTAL_REASON: Final = "recorded before total round time was measured"
 MISSING_HARDWARE_REASON: Final = "recorded before hardware was tracked"
+SETUP_NOT_MEASURED_REASON: Final = "not measured by the caller"
+SETUP_REUSED_REASON: Final = "generator reused from an earlier session"
+MISSING_SETUP_REASON: Final = "recorded before generator setup was timed"
 
 
 class RoundStage(StrEnum):
@@ -100,16 +103,19 @@ class Environment:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SessionRecord:
     """
-    Contents of session.json: identity, creation time, environment, and the round a rerun repeats.
+    Contents of session.json: identity, creation time, environment, generator setup, and the round a rerun repeats.
     """
     schema_version: int  # Record format version
     session_id: str  # Session folder name
     created_at: datetime  # Timezone-aware creation time
     environment: Environment  # Code and library versions
+    generator_setup_seconds: float | Unavailable  # Time to create the session's first generator, before round 1
     rerun_of: RerunLink | None  # Original round for a rerun session, otherwise None
 
     def __post_init__(self) -> None:
         require(self.created_at.utcoffset() is not None, "Session created_at must be timezone-aware.")
+        if not isinstance(self.generator_setup_seconds, Unavailable):
+            require_duration(self.generator_setup_seconds, "Generator setup time")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

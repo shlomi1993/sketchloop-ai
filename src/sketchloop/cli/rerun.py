@@ -42,7 +42,7 @@ def find_rerunnable_round(saved: SavedSession, round_number: int) -> RoundRecord
     return next(record for record in saved.rounds if record.number == round_number)
 
 
-def make_rerun_generator(record: RoundRecord, console: Console, models_dir: Path) -> Generator:
+def make_rerun_generator(record: RoundRecord, console: Console, models_dir: Path) -> tuple[Generator, float]:
     """
     Recreate the backend a round used, with its recorded diffusers mode.
 
@@ -52,7 +52,7 @@ def make_rerun_generator(record: RoundRecord, console: Console, models_dir: Path
         models_dir (Path): Folder with the downloaded diffusers models.
 
     Returns:
-        Generator: The recreated backend.
+        tuple[Generator, float]: The recreated backend and the seconds creating it took.
     """
     adapter = record.iteration.result.backend.adapter
     if adapter not in RERUNNABLE_BACKENDS:
@@ -77,7 +77,7 @@ def rerun_round(args: argparse.Namespace, console: Console) -> None:
     store = require_folder_store(settings.storage, Command.RERUN)
     original = load_session(args.session_folder)
     record = find_rerunnable_round(original, args.round_number)
-    generator = make_rerun_generator(record, console, settings.generator.diffusers.models_dir)
+    generator, setup_seconds = make_rerun_generator(record, console, settings.generator.diffusers.models_dir)
 
     # Read the stored sketches, reusing the processed one so generation gets the same input bytes.
     round_folder = original.folder / f"round-{record.number}"
@@ -90,7 +90,8 @@ def rerun_round(args: argparse.Namespace, console: Console) -> None:
     # Run one round in a new linked session with the recorded settings, without asking for a selection or timing a capture.
     request = rebuild_request(record, generator.capabilities)
     link = RerunLink(session_id=original.session.session_id, round_number=record.number, iteration_id=record.iteration.id)
-    session = SketchSession(generator, store, make_evaluator(settings.evaluator), rerun_of=link)
+    session = SketchSession(generator, store, make_evaluator(settings.evaluator), rerun_of=link,
+                            generator_setup_seconds=setup_seconds)
     outcome = session.run_round(record.raw_sketch, raw_payload, request.guidance, source=record.source,
                                 rotation=record.rotation, use_raw=record.use_raw, n_candidates=request.n_candidates,
                                 seed=request.seed, reuse=reuse)

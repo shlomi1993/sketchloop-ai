@@ -10,8 +10,9 @@ from pathlib import Path
 from sketchloop.domain import (SCHEMA_VERSION, GenerationRequest, Guidance, ImageRef, InvalidSelectionError, Iteration,
                                Rotation, SelectionEvent, SketchSource, Unavailable, require, require_duration)
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
-from sketchloop.experiments import (ExperimentStore, RerunLink, RoundRecord, RoundStage, RoundStatus, SessionRecord,
-                                    StoreError, collect_environment, describe_failure, require_known_source)
+from sketchloop.experiments import (SETUP_NOT_MEASURED_REASON, ExperimentStore, RerunLink, RoundRecord, RoundStage,
+                                    RoundStatus, SessionRecord, StoreError, collect_environment, describe_failure,
+                                    require_known_source)
 from sketchloop.generation import GenerationOutput, Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor, StrokePreprocessor
 
@@ -51,7 +52,12 @@ class SketchSession:
     """
 
     def __init__(self, generator: Generator, store: ExperimentStore, evaluator: Evaluator | None = None, *,
-                 preprocessor: Preprocessor | None = None, rerun_of: RerunLink | None = None) -> None:
+                 preprocessor: Preprocessor | None = None, rerun_of: RerunLink | None = None,
+                 generator_setup_seconds: float | Unavailable = Unavailable(SETUP_NOT_MEASURED_REASON)) -> None:
+        # Refuse a bad setup time now, since every round would otherwise fail to save the session record.
+        if not isinstance(generator_setup_seconds, Unavailable):
+            require_duration(generator_setup_seconds, "Generator setup time")
+
         self.generator = generator
         self.store = store
         self.evaluator = evaluator or NoOpEvaluator()
@@ -59,6 +65,7 @@ class SketchSession:
         self.session_id = make_session_folder_name()
         self.folder = store.locate_session(self.session_id)
         self.rerun_of = rerun_of
+        self.generator_setup_seconds = generator_setup_seconds
         self.rounds: list[RoundOutcome] = []
         self.selections: dict[str, SelectionEvent] = {}
         self.session_record: SessionRecord | None = None
@@ -71,7 +78,8 @@ class SketchSession:
             return
 
         record = SessionRecord(schema_version=SCHEMA_VERSION, session_id=self.session_id, created_at=datetime.now(timezone.utc),
-                               environment=collect_environment(), rerun_of=self.rerun_of)
+                               environment=collect_environment(), generator_setup_seconds=self.generator_setup_seconds,
+                               rerun_of=self.rerun_of)
 
         # Remember the record only once it is saved, so a failed save is retried by the next round.
         self.store.save_session(record)

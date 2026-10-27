@@ -115,7 +115,7 @@ def test_session_record_has_no_machine_name(monkeypatch: pytest.MonkeyPatch) -> 
         renamed = os.uname_result((real.sysname, sentinel, real.release, real.version, real.machine))
         monkeypatch.setattr(os, "uname", lambda: renamed)
     record = SessionRecord(schema_version=SCHEMA_VERSION, session_id="synthetic", created_at=datetime.now(timezone.utc),
-                           environment=collect_environment(), rerun_of=None)
+                           environment=collect_environment(), generator_setup_seconds=0.1, rerun_of=None)
 
     # The machine name appears nowhere in session.json, and hardware has exactly the CPU, cores, and memory.
     encoded = session_to_dict(record)

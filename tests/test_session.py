@@ -15,10 +15,10 @@ import sketchloop
 from sketchloop.app import AppController
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import CapturedSketch, CaptureSource, encode_frame, raw_image_ref
-from sketchloop.domain import (Guidance, InvalidRecordError, SketchLoopError, SketchSource, UnsupportedConfigurationError,
-                               record_no_selection, select_candidates)
+from sketchloop.domain import (Guidance, InvalidRecordError, SketchLoopError, SketchSource, Unavailable,
+                               UnsupportedConfigurationError, record_no_selection, select_candidates)
 from sketchloop.evaluation import Evaluator
-from sketchloop.experiments import MemoryStore, RoundRecord, SessionRecord, StoreError
+from sketchloop.experiments import SETUP_NOT_MEASURED_REASON, MemoryStore, RoundRecord, SessionRecord, StoreError
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor
 from sketchloop.session import SketchSession
@@ -232,7 +232,7 @@ def test_session_records_stage_timings(first_load_generator: Generator) -> None:
     Capture, a reported model load, saving, and the total are recorded, saved as shown, and kept up to a failure.
     """
     camera, store = StillCamera(), FlakyMemoryStore()
-    session = SketchSession(first_load_generator, store, preprocessor=IdentityPreprocessor())
+    session = SketchSession(first_load_generator, store, preprocessor=IdentityPreprocessor(), generator_setup_seconds=1.5)
     captured = camera.capture()
     guidance = Guidance(prompt="chair")
     first = session.run_round(captured.image, captured.payload, guidance, source=camera.kind,
@@ -254,10 +254,11 @@ def test_session_records_stage_timings(first_load_generator: Generator) -> None:
     second_stages = set(second.timings_seconds)
     assert second_stages == {"preprocessing", "generation", "evaluation", "saving"}, f"Unexpected stages {second_stages}"
 
-    # The saved records hold exactly the shown timings and totals.
+    # The saved records hold exactly the shown timings and totals, and the session holds the setup time.
     saved = [store.rounds[(session.session_id, number)] for number in (1, 2)]
     shown = [(outcome.timings_seconds, outcome.total_seconds) for outcome in (first, second)]
     assert [(record.timings_seconds, record.total_seconds) for record in saved] == shown, "Saved timings differ from shown"
+    assert session.session_record.generator_setup_seconds == 1.5, "The session must record the generator setup time"
 
     # A failed round keeps the stages it finished and a total, and a failed file save is a saving failure.
     with pytest.raises(UnsupportedConfigurationError):
@@ -269,6 +270,12 @@ def test_session_records_stage_timings(first_load_generator: Generator) -> None:
     assert set(failed_generation.timings_seconds) == {"capture", "preprocessing"}, f"Bad partial {failed_generation}"
     assert failed_generation.total_seconds >= 0.5, f"A failed round must keep a total, got {failed_generation.total_seconds}"
     assert failed_saving.failure.stage == "saving", f"A failed file save must be a saving failure, got {failed_saving.failure}"
+
+    # A library caller that measures no setup records why.
+    default_session = SketchSession(FakeGenerator(), MemoryStore())
+    default_session.run_round(captured.image, captured.payload, guidance, source=camera.kind)
+    setup = default_session.session_record.generator_setup_seconds
+    assert setup == Unavailable(SETUP_NOT_MEASURED_REASON), f"Expected the not-measured reason, got {setup}"
 
 
 def test_session_refuses_load_longer_than_call(first_load_generator: Generator) -> None:

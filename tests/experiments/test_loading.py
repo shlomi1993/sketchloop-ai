@@ -8,8 +8,8 @@ from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import load_sketch_file
 from sketchloop.domain import (Guidance, SketchSource, Unavailable, UnsupportedConfigurationError, record_no_selection,
                                select_candidates)
-from sketchloop.experiments import (MISSING_HARDWARE_REASON, MISSING_TOTAL_REASON, ExperimentRecordError, FolderStore,
-                                    Hardware, load_session)
+from sketchloop.experiments import (MISSING_HARDWARE_REASON, MISSING_SETUP_REASON, MISSING_TOTAL_REASON,
+                                    ExperimentRecordError, FolderStore, Hardware, load_session)
 from sketchloop.session import SketchSession
 
 
@@ -106,12 +106,13 @@ def test_damaged_candidate_listed(tmp_path: Path, damage: str, problem: str) -> 
     ("round-1/round.json", lambda data: data["input"].update(source="scanner"), "source must be file, camera, webcam, or upload"),
     ("round-1/round.json", lambda data: data["timings_seconds"].update(generation=-1.0), "finite seconds"),
     ("round-1/round.json", lambda data: data.update(total_seconds=float("inf")), "finite seconds"),
+    ("session.json", lambda data: data.update(generator_setup_seconds=-0.5), "finite seconds"),
     ("session.json", lambda data: data["environment"].update(hardware={"cpu": "", "logical_cores": 0, "memory_bytes": 1}),
      "Hardware cpu must be non-empty text")
 ])
 def test_invalid_records_rejected(tmp_path: Path, file_name: str, edit: Callable[[dict], None], message: str) -> None:
     """
-    Traversal, a bad schema, lineage, time, score, source, duration, or hardware refuse to load.
+    Traversal, a bad schema, lineage, time, score, source, duration, setup, or hardware refuse to load.
     """
     session = run_two_rounds(tmp_path)
     record_file = session.folder / file_name
@@ -127,10 +128,10 @@ def test_invalid_records_rejected(tmp_path: Path, file_name: str, edit: Callable
 
 def test_timing_fields_round_trip(tmp_path: Path) -> None:
     """
-    Totals and hardware load back unchanged, and older files load as unavailable.
+    Totals, hardware, and generator setup load back unchanged, and older files load as unavailable.
     """
     raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
-    session = SketchSession(FakeGenerator(), FolderStore(tmp_path))
+    session = SketchSession(FakeGenerator(), FolderStore(tmp_path), generator_setup_seconds=2.5)
     session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.WEBCAM, capture_seconds=0.1)
     saved = load_session(session.folder)
     record, expected = saved.rounds[0], session.records[0]
@@ -139,14 +140,16 @@ def test_timing_fields_round_trip(tmp_path: Path) -> None:
     loaded_round = (record.timings_seconds, record.total_seconds)
     assert loaded_round == (expected.timings_seconds, expected.total_seconds), f"Round fields changed: {loaded_round}"
     recorded_session = session.session_record
-    loaded_hardware = saved.session.environment.hardware
-    assert loaded_hardware == recorded_session.environment.hardware, f"Hardware changed: {loaded_hardware}"
+    loaded_session = (saved.session.environment.hardware, saved.session.generator_setup_seconds)
+    expected_session = (recorded_session.environment.hardware, 2.5)
+    assert loaded_session == expected_session, f"Session fields changed: {loaded_session}"
 
     # Delete the new keys to stand in for files written before they were tracked.
     session_file, round_file = session.folder / "session.json", session.folder / "round-1" / "round.json"
     session_data = json.loads(session_file.read_text(encoding="utf-8"))
     round_data = json.loads(round_file.read_text(encoding="utf-8"))
-    removals = [(session_data["environment"], "hardware"), (round_data, "total_seconds")]
+    removals = [(session_data["environment"], "hardware"), (session_data, "generator_setup_seconds"),
+                (round_data, "total_seconds")]
     for data, key in removals:
         del data[key]
     session_file.write_text(json.dumps(session_data), encoding="utf-8")
@@ -156,6 +159,7 @@ def test_timing_fields_round_trip(tmp_path: Path) -> None:
     # Each missing value loads as unavailable with its reason.
     older_session, older_round = older.session, older.rounds[0]
     assert older_session.environment.hardware == Unavailable(MISSING_HARDWARE_REASON), "Missing hardware must be unavailable"
+    assert older_session.generator_setup_seconds == Unavailable(MISSING_SETUP_REASON), "Missing setup must be unavailable"
     assert older_round.total_seconds == Unavailable(MISSING_TOTAL_REASON), "A missing total must be unavailable"
 
 

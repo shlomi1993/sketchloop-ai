@@ -1,3 +1,5 @@
+import time
+
 from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
@@ -15,9 +17,9 @@ from sketchloop.settings import GeneratorSettings, StorageSettings
 
 
 def make_announced_generator(backend: GenerationBackend, mode: GenerationMode | None, console: Console, *,
-                             models_dir: Path) -> Generator:
+                             models_dir: Path) -> tuple[Generator, float]:
     """
-    Create the chosen generation backend and print which backend, device, and mode it uses.
+    Create and time the chosen generation backend, then print which backend, device, and mode it uses and the setup time.
 
     Args:
         backend (GenerationBackend): Backend to create.
@@ -26,16 +28,20 @@ def make_announced_generator(backend: GenerationBackend, mode: GenerationMode | 
         models_dir (Path): Folder with the downloaded diffusers models.
 
     Returns:
-        Generator: The generation backend.
+        tuple[Generator, float]: The generation backend and the seconds creating it took.
     """
+    # Time only the creation, which for diffusers imports torch and selects the device but loads no model yet.
+    started = time.perf_counter()
     generator = make_generator(backend, mode, models_dir=models_dir)
+    setup_seconds = time.perf_counter() - started
     console.print(generator.describe())
-    return generator
+    console.print(f"Generator setup: {setup_seconds:.2f} s")
+    return generator, setup_seconds
 
 
-def make_configured_generator(settings: GeneratorSettings, console: Console) -> Generator:
+def make_configured_generator(settings: GeneratorSettings, console: Console) -> tuple[Generator, float]:
     """
-    Create and announce the backend the settings name, with its diffusers mode and models folder.
+    Create, time, and announce the backend the settings name, with its diffusers mode and models folder.
     """
     mode = settings.diffusers.mode
     return make_announced_generator(GenerationBackend(settings.backend), GenerationMode(mode) if mode else None, console,

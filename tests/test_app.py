@@ -10,8 +10,8 @@ from pathlib import Path
 from sketchloop.app import NO_SKETCH_MESSAGE, AppController
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import InvalidSketchError
-from sketchloop.domain import InvalidSelectionError, SketchLoopError, UnsupportedConfigurationError
-from sketchloop.experiments import FolderStore, load_session
+from sketchloop.domain import InvalidSelectionError, SketchLoopError, Unavailable, UnsupportedConfigurationError
+from sketchloop.experiments import SETUP_REUSED_REASON, FolderStore, load_session
 
 
 def write_sketch_png(path: Path, channels: int) -> Path:
@@ -209,3 +209,21 @@ def test_app_history_refresh_and_new_session(controller: AppController, sketch_f
     assert controller.session.generator is generator, "A new session must reuse the loaded generator"
     assert controller.session.folder != old_folder and restarted.number == 1, "A new session must number rounds from 1 anew"
     assert new_saved.rounds[0].iteration.parent_id is None, "The first round of a new session must not link to the old one"
+
+
+def test_app_records_setup(tmp_path: Path, sketch_file: Path) -> None:
+    """
+    Only the first session records the generator setup time, and a new session records that it reused the generator.
+    """
+    controller = AppController(FakeGenerator(), FolderStore(tmp_path / "runs"), generator_setup_seconds=2.0)
+
+    # The first session records the setup time.
+    controller.run_round(sketch_file, "upload", "chair", n_candidates=1)
+    first = load_session(controller.session.folder)
+    assert first.session.generator_setup_seconds == 2.0, f"Expected setup 2.0, got {first.session.generator_setup_seconds}"
+
+    # A new session reuses the generator, so it records the reused reason instead of the setup time again.
+    controller.start_new_session()
+    controller.run_round(sketch_file, "upload", "lamp", n_candidates=1)
+    reused = load_session(controller.session.folder).session.generator_setup_seconds
+    assert reused == Unavailable(SETUP_REUSED_REASON), f"A new session must record the reused reason, got {reused}"

@@ -8,10 +8,11 @@ from typing import Final
 
 from sketchloop.capture import CapturedSketch, InvalidSketchError, encode_frame, load_sketch_file
 from sketchloop.domain import (
-    Guidance, InvalidSelectionError, Iteration, Rotation, SelectionEvent, SketchLoopError, SketchSource,
+    Guidance, InvalidSelectionError, Iteration, Rotation, SelectionEvent, SketchLoopError, SketchSource, Unavailable,
     record_no_selection, select_candidates)
 from sketchloop.evaluation import Evaluator
-from sketchloop.experiments import ExperimentStore, RoundRecord, RoundStage, RoundStatus
+from sketchloop.experiments import (SETUP_NOT_MEASURED_REASON, SETUP_REUSED_REASON, ExperimentStore, RoundRecord, RoundStage,
+                                    RoundStatus)
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import Preprocessor
 from sketchloop.session import RoundOutcome, SketchSession
@@ -140,7 +141,8 @@ class AppController:
     Framework-free service the browser UI calls: one loaded generator and the current session, shared by all tabs.
     """
     def __init__(self, generator: Generator, store: ExperimentStore, evaluator: Evaluator | None = None, *,
-                 preprocessor: Preprocessor | None = None) -> None:
+                 preprocessor: Preprocessor | None = None,
+                 generator_setup_seconds: float | Unavailable = Unavailable(SETUP_NOT_MEASURED_REASON)) -> None:
         # The page shows candidates from their saved files, so refuse a store that keeps none.
         if store.root is None:
             raise SketchLoopError(NO_FILES_MESSAGE)
@@ -149,7 +151,8 @@ class AppController:
         self.store = store
         self.evaluator = evaluator
         self.preprocessor = preprocessor
-        self.session = SketchSession(generator, store, evaluator, preprocessor=preprocessor)
+        self.session = SketchSession(generator, store, evaluator, preprocessor=preprocessor,
+                                     generator_setup_seconds=generator_setup_seconds)
 
     @property
     def max_candidates(self) -> int:
@@ -249,4 +252,6 @@ class AppController:
         """
         Start a fresh session folder with the same loaded generator, store, evaluator, and preprocessor.
         """
-        self.session = SketchSession(self.generator, self.store, self.evaluator, preprocessor=self.preprocessor)
+        # The generator is reused, so this session paid no setup, and repeating the first value would count it twice.
+        self.session = SketchSession(self.generator, self.store, self.evaluator, preprocessor=self.preprocessor,
+                                     generator_setup_seconds=Unavailable(SETUP_REUSED_REASON))

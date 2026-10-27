@@ -27,8 +27,9 @@ def launch_ui(args: argparse.Namespace, console: Console) -> None:
     # Create the backend once, and refuse a default candidate count the backend cannot produce.
     settings = args.settings
     store = make_store(settings.storage)
-    controller = AppController(make_configured_generator(settings.generator, console), store, make_evaluator(settings.evaluator),
-                               preprocessor=make_preprocessor(settings.preprocessing))
+    generator, setup_seconds = make_configured_generator(settings.generator, console)
+    controller = AppController(generator, store, make_evaluator(settings.evaluator),
+                               preprocessor=make_preprocessor(settings.preprocessing), generator_setup_seconds=setup_seconds)
     limit, candidates = controller.max_candidates, settings.ui.candidates
     if candidates > limit:
         raise SketchLoopError(f"{candidates} candidates exceed the limit of {limit}. Lower --candidates or ui.candidates.")

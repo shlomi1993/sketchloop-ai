@@ -6,8 +6,9 @@ from datetime import datetime
 
 from sketchloop.domain import (SCHEMA_VERSION, BackendIdentity, Candidate, EffectiveSettings, GenerationRequest,
                                GenerationResult, Guidance, ImageRef, Iteration, SelectionEvent, Unavailable, require)
-from sketchloop.experiments.records import (MISSING_HARDWARE_REASON, MISSING_SOURCE_REASON, MISSING_TOTAL_REASON, Environment,
-                                            ExperimentRecordError, Hardware, RerunLink, RoundFailure, RoundRecord, SessionRecord)
+from sketchloop.experiments.records import (MISSING_HARDWARE_REASON, MISSING_SETUP_REASON, MISSING_SOURCE_REASON,
+                                            MISSING_TOTAL_REASON, Environment, ExperimentRecordError, Hardware, RerunLink,
+                                            RoundFailure, RoundRecord, SessionRecord)
 from sketchloop.preprocessing import PreprocessingStep
 
 
@@ -282,6 +283,7 @@ def session_to_dict(record: SessionRecord) -> dict[str, object]:
             "packages": packages,
             "hardware": hardware_to_dict(environment.hardware),
         },
+        "generator_setup_seconds": encode_value(record.generator_setup_seconds),
         "rerun_of": link_data,
     }
 
@@ -299,11 +301,12 @@ def session_from_dict(data: Mapping[str, object]) -> SessionRecord:
     check_schema_version(data)
     environment_data, link_data = data["environment"], data["rerun_of"]
 
-    # Sessions written before hardware was tracked lack it, which is unknown rather than a default.
+    # Sessions written before hardware or generator setup were tracked lack them, which is unknown rather than a default.
     packages = {name: decode_value(version) for name, version in environment_data["packages"].items()}
     hardware = hardware_from_dict(environment_data.get("hardware", {"unavailable": MISSING_HARDWARE_REASON}))
     environment = Environment(py_version=environment_data["python"], platform=environment_data["platform"], packages=packages,
                               hardware=hardware)
+    setup_seconds = decode_value(data.get("generator_setup_seconds", {"unavailable": MISSING_SETUP_REASON}))
 
     # Rebuild the rerun link.
     link = None
@@ -311,4 +314,5 @@ def session_from_dict(data: Mapping[str, object]) -> SessionRecord:
         link = RerunLink(session_id=link_data["session_id"], round_number=link_data["round"],
                          iteration_id=link_data["iteration_id"])
     return SessionRecord(schema_version=data["schema_version"], session_id=data["session_id"],
-                         created_at=parse_time(data["created_at"]), environment=environment, rerun_of=link)
+                         created_at=parse_time(data["created_at"]), environment=environment,
+                         generator_setup_seconds=setup_seconds, rerun_of=link)
