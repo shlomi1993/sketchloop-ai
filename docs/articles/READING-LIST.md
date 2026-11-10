@@ -10,9 +10,9 @@ A ranked reading list of about 15 articles for the project. Date is the first pu
 | 4 | Latent Diffusion Models | How the backend works and what it costs | T03 | Dec 2021 | 9 | 32 | [arXiv](https://arxiv.org/abs/2112.10752) | ✅ Read |
 | 5 | LCM-LoRA | The fast mode's speed and quality | T03 | Nov 2023 | 6 | 0 | [arXiv](https://arxiv.org/abs/2311.05556) | ✅ Read |
 | 6 | Sketch-to-Architecture | Architectural sketch demos | T03 | Oct 2023 | 6 | 0 | [arXiv](https://arxiv.org/abs/2403.20186) | ✅ Read |
-| 7 | CLIP | Optional prompt-alignment scores | T04 | Feb 2021 | 27 | 11 | [arXiv](https://arxiv.org/abs/2103.00020) | ⏳ In progress |
-| 8 | GenAI and Design Fixation | Fixation and idea diversity risks | T04 | Mar 2024 | 16 | 0 | [arXiv](https://arxiv.org/abs/2403.11164) | ⬜ Pending |
-| 9 | T2I for Architectural Ideation | Exploration within design constraints | T04 | Apr 2023 | 12 | 0 | [arXiv](https://arxiv.org/abs/2304.10182) | ⬜ Pending |
+| 7 | CLIP | Optional prompt-alignment scores | T04 | Feb 2021 | 27 | 11 | [arXiv](https://arxiv.org/abs/2103.00020) | ✅ Read |
+| 8 | GenAI and Design Fixation | Fixation and idea diversity risks | T04 | Mar 2024 | 16 | 0 | [arXiv](https://arxiv.org/abs/2403.11164) | ✅ Read |
+| 9 | T2I for Architectural Ideation | Exploration within design constraints | T04 | Apr 2023 | 12 | 0 | [arXiv](https://arxiv.org/abs/2304.10182) | ⏳ In progress |
 | 10 | Design Ideation with AI | Prompt entry and user control | T06 | Jul 2023 | About 10 | 0 | [DOI](https://doi.org/10.1145/3563657.3596014) | ⬜ Pending |
 | 11 | Baudoux Wizard-of-Oz study | How gallery images shape later sketches | T06 | Jul 2024 | 18 | 0 | [Lab page](https://codesign.berkeley.edu/papers/baudoux-WOZ-DCC) | ⬜ Pending |
 | 12 | Human-MLLM Sketch Ideation Taxonomy | Shifting human and AI roles | T06 | Feb 2026 | 5 | 0 | [arXiv](https://arxiv.org/abs/2602.22171) | ⬜ Pending |
