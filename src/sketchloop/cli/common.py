@@ -5,16 +5,13 @@ Helpers shared by subcommands for creating the backend, the store, and printing 
 import time
 
 from collections.abc import Mapping
-from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from typing import Final
 
-from sketchloop.backends import GenerationBackend, make_generator
-from sketchloop.backends.diffusers import GenerationMode, TorchPrecision
 from sketchloop.cli.arguments import Command
-from sketchloop.components import make_store
+from sketchloop.components import make_generator, make_store
 from sketchloop.domain import ControlValue, SketchLoopError, Unavailable
 from sketchloop.experiments import ExperimentStore, Hardware, RoundStage, format_value
 from sketchloop.generation import Generator
@@ -25,38 +22,24 @@ from sketchloop.settings import GeneratorSettings, StorageSettings
 GIBIBYTE: Final = 1024**3
 
 
-def make_announced_generator(backend: GenerationBackend, mode: GenerationMode | None, console: Console, *,
-                             models_dir: Path, precision: TorchPrecision | None = None) -> tuple[Generator, float]:
+def make_configured_generator(settings: GeneratorSettings, console: Console) -> tuple[Generator, float]:
     """
-    Create and time the chosen generation backend, then print which backend, device, and mode it uses and the setup time.
+    Create and time the backend the settings name, then print which backend, device, and mode it uses and the setup time.
 
     Args:
-        backend (GenerationBackend): Backend to create.
-        mode (GenerationMode | None): Diffusers mode, or None for the device default.
+        settings (GeneratorSettings): Backend name and its diffusers mode, precision, and models folder.
         console (Console): Console used for output.
-        models_dir (Path): Folder with the downloaded diffusers models.
-        precision (TorchPrecision | None, optional): Diffusers precision, or None for the device default. Defaults to None.
 
     Returns:
         tuple[Generator, float]: The generation backend and the seconds creating it took.
     """
     # Time only the creation, which for diffusers imports torch and selects the device but loads no model yet.
     started = time.perf_counter()
-    generator = make_generator(backend, mode, models_dir=models_dir, precision=precision)
+    generator = make_generator(settings)
     setup_seconds = time.perf_counter() - started
     console.print(generator.describe())
     console.print(f"Generator setup: {setup_seconds:.2f} s")
     return generator, setup_seconds
-
-
-def make_configured_generator(settings: GeneratorSettings, console: Console) -> tuple[Generator, float]:
-    """
-    Create, time, and announce the backend the settings name, with its diffusers mode, precision, and models folder.
-    """
-    mode, precision = settings.diffusers.mode, settings.diffusers.precision
-    return make_announced_generator(GenerationBackend(settings.backend), GenerationMode(mode) if mode else None, console,
-                                    models_dir=settings.diffusers.models_dir,
-                                    precision=TorchPrecision(precision) if precision else None)
 
 
 def require_folder_store(settings: StorageSettings, command: Command) -> ExperimentStore:

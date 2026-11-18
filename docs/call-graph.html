@@ -134,7 +134,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <text class="s" x="110" y="204" text-anchor="middle">make_controller, imports ui</text>
           <rect class="box" x="250" y="160" width="180" height="62" rx="6"/>
           <text class="n" x="340" y="181" text-anchor="middle">factories</text>
-          <text class="sm" x="340" y="198" text-anchor="middle">backends.make_generator</text>
+          <text class="sm" x="340" y="198" text-anchor="middle">components.make_generator</text>
           <text class="sm" x="340" y="213" text-anchor="middle">components.make_* · suggester</text>
           <rect class="hotbox" x="480" y="160" width="180" height="62" rx="6"/>
           <text class="n" x="570" y="186" text-anchor="middle">AppController</text>
@@ -392,14 +392,13 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <tr><td>capture.py</td><td>Load PNG or JPEG files, encode frames, OpenCV camera capture, each returning a <code>CapturedSketch</code> with its capture time</td><td>app.py, cli/run.py, components.py</td></tr>
           <tr><td>preprocessing.py</td><td><code>Preprocessor</code> base class and the stroke pipeline with recorded steps</td><td>session.py</td></tr>
           <tr><td>generation.py</td><td><code>Generator</code> base class, capabilities, request validation</td><td>both backends, session.py</td></tr>
-          <tr><td>backends/diffusers.py</td><td>Real model: SD 1.5 + ControlNet scribble, fast and quality modes, float16 or float32</td><td>backends.make_generator</td></tr>
-          <tr><td>backends/fake.py</td><td>Deterministic labeled fake backend</td><td>backends.make_generator, tests</td></tr>
+          <tr><td>backends/diffusers.py</td><td>Real model: SD 1.5 + ControlNet scribble, fast and quality modes, float16 or float32</td><td>components.make_generator</td></tr>
+          <tr><td>backends/fake.py</td><td>Deterministic labeled fake backend</td><td>components.make_generator, tests</td></tr>
           <tr><td>evaluation.py</td><td><code>Evaluator</code> base class and the no-op scorer</td><td>session.py</td></tr>
           <tr><td>experiments/</td><td>One module each for <code>records</code>, <code>provenance</code> (environment and redacted failures), <code>serialization</code>, <code>stores</code> (<code>FolderStore</code>, <code>MemoryStore</code>), <code>loading</code> with checksums, <code>replay</code> (rerun requests and comparison), <code>hardware</code> (CPU, cores, memory), and <code>benchmark</code> (stage statistics)</td><td>session.py, cli/show.py, cli/rerun.py</td></tr>
-          <tr><td>domain.py</td><td>Typed records: <code>ImageRef</code>, <code>Guidance</code>, <code>Iteration</code>, <code>SelectionEvent</code>, errors, and shared enums such as <code>SketchSource</code>, <code>Rotation</code>, and <code>GenerationBackend</code></td><td>everything</td></tr>
+          <tr><td>domain.py</td><td>Typed records: <code>ImageRef</code>, <code>Guidance</code>, <code>Iteration</code>, <code>SelectionEvent</code>, errors, and shared enums such as <code>SketchSource</code> and <code>Rotation</code></td><td>everything</td></tr>
           <tr><td>settings.py</td><td>Read <code>sketchloop.toml</code>, apply flag overrides, check types</td><td>cli/arguments.py</td></tr>
-          <tr><td>components.py</td><td>Name registries that build capture, preprocessor, evaluator, store</td><td>cli package</td></tr>
-          <tr><td>backends/__init__.py</td><td><code>make_generator</code> for the fake or diffusers backend</td><td>cli/common.py</td></tr>
+          <tr><td>components.py</td><td>Name registries that build the generation backend, capture, preprocessor, evaluator, store</td><td>cli package</td></tr>
           <tr><td>cli/</td><td>Subcommands, one module each: <code>arguments</code> parses flags and settings, <code>run</code>, <code>show</code>, <code>rerun</code>, <code>benchmark</code> for repeated timed rounds, and <code>serve</code> for <code>ui</code>, with shared helpers in <code>common</code></td><td>the <code>sketchloop</code> command</td></tr>
         </tbody>
       </table>
@@ -409,7 +408,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
   <section>
     <h2>5 · Rules the wiring enforces</h2>
     <ul class="rules">
-      <li>Swapping a component means adding a registry entry in <code>components.py</code> or <code>backends/__init__.py</code> and naming it in settings. The session and UI do not change.</li>
+      <li>Swapping a component means adding a registry entry in <code>components.py</code> and naming it in settings. The session and UI do not change.</li>
       <li>Human choice stays explicit. Ticking nothing is recorded as an explicit choice of none, and scores never select anything.</li>
       <li>A failed round stays visible as failed, with the stage it failed in, and never overwrites an earlier round.</li>
       <li>Fake output is labeled on every caption and status line, so it cannot be mistaken for model output.</li>

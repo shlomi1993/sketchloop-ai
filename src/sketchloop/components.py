@@ -6,22 +6,34 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Final, TypeAlias
 
-from sketchloop.backends import GenerationBackend
-from sketchloop.backends.diffusers import GenerationMode, TorchPrecision
+from sketchloop.backends.diffusers import DiffusersSketchGenerator, GenerationMode, TorchPrecision
+from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import CameraCapture, CaptureSource, FileCapture
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
 from sketchloop.experiments import ExperimentStore, FolderStore
+from sketchloop.generation import Generator
 from sketchloop.preprocessing import Preprocessor, StrokePreprocessor
-from sketchloop.settings import (CaptureSettings, EvaluatorSettings, PreprocessingSettings, Settings, SettingsError,
-                                 StorageSettings, join_choices)
+from sketchloop.settings import (CaptureSettings, EvaluatorSettings, GeneratorSettings, PreprocessingSettings, Settings,
+                                 SettingsError, StorageSettings, join_choices)
 
 
+FAKE_BACKEND: Final = "fake"
 NO_RUN_SKETCH_MESSAGE: Final = 'give a sketch file or --camera, or set capture.source = "camera" in the settings file'
 
+GeneratorFactory: TypeAlias = Callable[[GeneratorSettings], Generator]
 CaptureFactory: TypeAlias = Callable[[CaptureSettings, Path | None], CaptureSource]
 PreprocessorFactory: TypeAlias = Callable[[PreprocessingSettings], Preprocessor]
 EvaluatorFactory: TypeAlias = Callable[[EvaluatorSettings], Evaluator]
 StoreFactory: TypeAlias = Callable[[StorageSettings], ExperimentStore]
+
+
+def make_diffusers_generator(settings: GeneratorSettings) -> Generator:
+    """
+    Create the SD 1.5 and ControlNet scribble backend with the configured mode, precision, and models folder.
+    """
+    options = settings.diffusers
+    return DiffusersSketchGenerator(options.models_dir, mode=GenerationMode(options.mode) if options.mode else None,
+                                    precision=TorchPrecision(options.precision) if options.precision else None)
 
 
 def make_file_capture(settings: CaptureSettings, sketch_file: Path | None) -> CaptureSource:
@@ -42,6 +54,10 @@ def make_file_capture(settings: CaptureSettings, sketch_file: Path | None) -> Ca
 
 
 # Components by the name a settings file uses. Tests and library callers may add entries, and nothing is discovered.
+GENERATORS: Final[dict[str, GeneratorFactory]] = {
+    FAKE_BACKEND: lambda settings: FakeGenerator(),
+    "diffusers": make_diffusers_generator,
+}
 CAPTURE_SOURCES: Final[dict[str, CaptureFactory]] = {
     "file": make_file_capture,
     "camera": lambda settings, sketch_file: CameraCapture(settings.camera_index),
@@ -55,6 +71,20 @@ EVALUATORS: Final[dict[str, EvaluatorFactory]] = {
 STORES: Final[dict[str, StoreFactory]] = {
     "folder": lambda settings: FolderStore(settings.runs_dir)
 }
+
+
+# Backend names by the adapter name a round recorded, so rerun can recreate the backend.
+RERUNNABLE_BACKENDS: Final[dict[str, str]] = {
+    FakeGenerator.ADAPTER_NAME: FAKE_BACKEND,
+    DiffusersSketchGenerator.ADAPTER_NAME: "diffusers",
+}
+
+
+def make_generator(settings: GeneratorSettings) -> Generator:
+    """
+    Create the configured generation backend, without loading any model yet.
+    """
+    return GENERATORS[settings.backend](settings)
 
 
 def make_capture_source(settings: CaptureSettings, sketch_file: Path | None) -> CaptureSource:
@@ -101,7 +131,7 @@ def check_component_names(settings: Settings, label: str) -> None:
         label (str): Settings file name used in messages.
     """
     choices_by_key: dict[str, tuple[str | None, Mapping[str, object] | list[str]]] = {
-        "generator.backend": (settings.generator.backend, list(GenerationBackend)),
+        "generator.backend": (settings.generator.backend, GENERATORS),
         "generator.diffusers.mode": (settings.generator.diffusers.mode, list(GenerationMode)),
         "generator.diffusers.precision": (settings.generator.diffusers.precision, list(TorchPrecision)),
         "capture.source": (settings.capture.source, CAPTURE_SOURCES),

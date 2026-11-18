@@ -10,7 +10,7 @@ from dataclasses import dataclass, fields, is_dataclass, replace
 from pathlib import Path
 from typing import Final, TypeVar, get_args
 
-from sketchloop.domain import GenerationBackend, Rotation, SketchLoopError
+from sketchloop.domain import Rotation, SketchLoopError
 
 
 SETTINGS_FILE_NAME: Final = "sketchloop.toml"
@@ -47,7 +47,7 @@ class GeneratorSettings:
     """
     The generation backend and its options.
     """
-    backend: str = GenerationBackend.FAKE  # Registry name of the generation backend
+    backend: str = "fake"  # Registry name of the generation backend
     diffusers: DiffusersSettings = DiffusersSettings()  # Options used only by the diffusers backend
 
 

@@ -10,8 +10,8 @@ from rich.console import Console
 
 from sketchloop.app import AppController
 from sketchloop.cli.common import make_configured_generator
-from sketchloop.components import make_evaluator, make_preprocessor, make_store
-from sketchloop.domain import GenerationBackend, SketchLoopError
+from sketchloop.components import FAKE_BACKEND, make_evaluator, make_preprocessor, make_store
+from sketchloop.domain import SketchLoopError
 from sketchloop.settings import Settings
 from sketchloop.suggestion import FlorenceSuggester, PromptSuggester, TemplateSuggester
 
@@ -41,7 +41,7 @@ def make_controller(settings: Settings, console: Console) -> AppController:
     generator, setup_seconds = make_configured_generator(settings.generator, console)
 
     # Name the sketched object with the local model next to a real backend, and use the fixed styles with the fake.
-    is_real = settings.generator.backend == GenerationBackend.DIFFUSERS
+    is_real = settings.generator.backend != FAKE_BACKEND
     suggester = FlorenceSuggester(settings.generator.diffusers.models_dir) if is_real else TemplateSuggester()
     threading.Thread(target=warm_up_suggester, args=(suggester, console), daemon=True).start()
     controller = AppController(generator, store, make_evaluator(settings.evaluator),

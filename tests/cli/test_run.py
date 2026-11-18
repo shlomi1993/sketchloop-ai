@@ -198,7 +198,7 @@ def test_cli_rounds_track_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         created.append(FakeGenerator())
         return created[-1]
 
-    monkeypatch.setattr("sketchloop.backends.FakeGenerator", create_counted_fake)
+    monkeypatch.setattr("sketchloop.components.FakeGenerator", create_counted_fake)
 
     exit_code = main(["run", "--prompt", "chair", "--candidates", "2"])
     output = capsys.readouterr().out

@@ -61,7 +61,7 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         return FakeGenerator()
 
     # A settings file in another folder chooses diffusers in quality mode, its models and runs folders, and 3 candidates.
-    monkeypatch.setattr("sketchloop.backends.DiffusersSketchGenerator", record_diffusers)
+    monkeypatch.setattr("sketchloop.components.DiffusersSketchGenerator", record_diffusers)
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     config = config_dir / "ui.toml"

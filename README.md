@@ -190,13 +190,13 @@ The workflow does not depend on the UI. This runs one round with the fake backen
 ```python
 from pathlib import Path
 
-from sketchloop.backends import make_generator
+from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import load_sketch_file
-from sketchloop.domain import GenerationBackend, Guidance, SelectionEvent, SketchSource
+from sketchloop.domain import Guidance, SelectionEvent, SketchSource
 from sketchloop.experiments.stores import FolderStore
 from sketchloop.session import SketchSession
 
-session = SketchSession(make_generator(GenerationBackend.FAKE), FolderStore(Path("runs")))
+session = SketchSession(FakeGenerator(), FolderStore(Path("runs")))
 raw_sketch, payload = load_sketch_file(Path("examples/sketch-photo.jpg"))
 outcome = session.run_round(raw_sketch, payload, Guidance(prompt="modern chair"), source=SketchSource.FILE, n_candidates=2)
 candidates = outcome.iteration.result.candidates

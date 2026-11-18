@@ -12,6 +12,7 @@ from sketchloop.backends.fake import FakeGenerator
 from sketchloop.cli import main
 from sketchloop.domain import Unavailable
 from sketchloop.experiments import MISSING_SOURCE_REASON, load_session
+from sketchloop.settings import GeneratorSettings
 
 
 # Run every test from tmp_path, so a sketchloop.toml in the repository cannot change CLI settings.
@@ -61,12 +62,12 @@ def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
     original_source = load_session(original).rounds[0].source
 
     # The file asks for diffusers, but a rerun recreates the recorded fake backend, so diffusers must never be created.
-    monkeypatch.setattr("sketchloop.backends.DiffusersSketchGenerator", refuse_generator)
+    monkeypatch.setattr("sketchloop.components.DiffusersSketchGenerator", refuse_generator)
     rerun_exit = main(["rerun", str(original), "--round", "1", "--config", str(config)])
     rerun_output = capsys.readouterr().out
 
     rerun_folders = [path for path in runs_dir.iterdir() if path != original]
-    monkeypatch.setattr("sketchloop.backends.FakeGenerator", refuse_generator)
+    monkeypatch.setattr("sketchloop.components.FakeGenerator", refuse_generator)
     show_exit = main(["show", str(rerun_folders[0])]) if rerun_folders else None
     show_output = capsys.readouterr().out
 
@@ -124,11 +125,11 @@ def test_cli_rerun_passes_recorded_precision(tmp_path: Path, monkeypatch: pytest
     original = record_float16_round(runs_dir, monkeypatch, "sketchloop.fake")
     received = []
 
-    def make_recording_generator(*args: object, precision: TorchPrecision | None = None, **kwargs: object) -> FakeGenerator:
+    def make_recording_generator(settings: GeneratorSettings) -> FakeGenerator:
         """
         Record the precision the rerun asked for and return the fake backend.
         """
-        received.append(precision)
+        received.append(settings.diffusers.precision)
         return FakeGenerator()
 
     monkeypatch.setattr("sketchloop.cli.common.make_generator", make_recording_generator)

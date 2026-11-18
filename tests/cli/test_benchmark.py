@@ -15,6 +15,7 @@ from sketchloop.cli import main
 from sketchloop.cli.benchmark import print_benchmark_conditions
 from sketchloop.components import CAPTURE_SOURCES
 from sketchloop.experiments import BenchmarkPlan, load_session, summarize_benchmark
+from sketchloop.settings import GeneratorSettings
 
 
 # Run every test from tmp_path, so a sketchloop.toml in the repository cannot change CLI settings.
@@ -145,11 +146,11 @@ def test_cli_benchmark_passes_precision(tmp_path: Path, monkeypatch: pytest.Monk
     """
     received = []
 
-    def make_recording_generator(*args: object, precision: TorchPrecision | None = None, **kwargs: object) -> FakeGenerator:
+    def make_recording_generator(settings: GeneratorSettings) -> FakeGenerator:
         """
         Record the precision the command asked for and return the fake backend.
         """
-        received.append(precision)
+        received.append(settings.diffusers.precision)
         return FakeGenerator()
 
     monkeypatch.setattr("sketchloop.cli.common.make_generator", make_recording_generator)
