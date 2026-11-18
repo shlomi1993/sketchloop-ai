@@ -1,6 +1,6 @@
 # ADR 0017: Stage timings, hardware facts, and a benchmark command
 
-Status: accepted
+Status: accepted, amended in the T08 review (memory read with psutil)
 
 ## Context
 
@@ -36,3 +36,5 @@ Alternatives considered:
 ## Consequences
 
 Two component interfaces change: implementations and test substitutes of `CaptureSource` return `CapturedSketch`, and those of `ExperimentStore` implement `save_files`. Records stay readable in both directions within version 1, but older records cannot be given a model load, capture, saving, or total time after the fact. The final `round.json` write is outside every stage, and backend creation is recorded once per session rather than in a round. `make_announced_generator` and `make_configured_generator` now return the setup time with the generator. The page guards its newest frame with a lock so the frame and its arrival time are read together. Benchmark defaults to seed 0, so its images differ from a `run` with a random seed. Reruns of rounds recorded before T08 report the new hardware and runtime facts as differences. p95 from fewer than 20 measured rounds is interpolated and printed with that warning. Optimizing bottlenecks, a latency target, and the continuous-operation assessment follow in later T08 slices using benchmark results on the owner's hardware. Validation is offline with the fake backend and stubs, plus a benchmark run with the diffusers backend on the owner's Apple M2 Pro, which the owner chose over the laptop CPU, recorded with its conditions before the slice is called done.
+
+Amended during the T08 review: total memory is now read with `psutil` (7.2.2, already installed as a dependency of `accelerate` and now declared), the same way on every operating system, which replaced the three standard-library memory readers. The CPU name is still read per operating system, since no portable library reports the marketing name.

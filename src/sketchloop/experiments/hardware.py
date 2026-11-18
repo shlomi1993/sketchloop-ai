@@ -2,8 +2,8 @@
 Readers for the CPU name, logical cores, and memory size, never the machine's name.
 """
 
-import ctypes
 import os
+import psutil
 import re
 import subprocess
 import sys
@@ -15,23 +15,6 @@ from typing import Final
 
 from sketchloop.domain import Unavailable
 from sketchloop.experiments.records import Hardware
-
-
-class MemoryStatus(ctypes.Structure):
-    """
-    The MEMORYSTATUSEX structure that GlobalMemoryStatusEx fills in on Windows.
-    """
-    _fields_ = [
-        ("dwLength", ctypes.c_ulong),
-        ("dwMemoryLoad", ctypes.c_ulong),
-        ("ullTotalPhys", ctypes.c_ulonglong),
-        ("ullAvailPhys", ctypes.c_ulonglong),
-        ("ullTotalPageFile", ctypes.c_ulonglong),
-        ("ullAvailPageFile", ctypes.c_ulonglong),
-        ("ullTotalVirtual", ctypes.c_ulonglong),
-        ("ullAvailVirtual", ctypes.c_ulonglong),
-        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-    ]
 
 
 def read_sysctl(name: str) -> str | Unavailable:
@@ -79,36 +62,6 @@ def read_windows_cpu_name() -> str | Unavailable:
     return value if isinstance(value, str) and value.strip() else Unavailable("the Windows registry processor name is empty")
 
 
-def read_windows_memory_bytes() -> int | Unavailable:
-    """
-    Read the total physical memory through GlobalMemoryStatusEx.
-    """
-    status = MemoryStatus()
-    status.dwLength = ctypes.sizeof(MemoryStatus)
-
-    # ctypes.windll exists only on Windows, so its absence also means the size is unavailable.
-    try:
-        succeeded = ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
-    except (AttributeError, OSError):
-        return Unavailable("GlobalMemoryStatusEx could not be called")
-
-    memory_bytes = int(status.ullTotalPhys)
-    return memory_bytes if succeeded and memory_bytes > 0 else Unavailable("GlobalMemoryStatusEx reported no memory")
-
-
-def read_linux_memory_bytes() -> int | Unavailable:
-    """
-    Multiply the page size by the number of physical pages.
-    """
-    # Some systems lack these sysconf names, which also means the size is unavailable.
-    try:
-        memory_bytes = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-    except (AttributeError, OSError, ValueError):
-        return Unavailable("sysconf has no page size or page count")
-
-    return memory_bytes if memory_bytes > 0 else Unavailable("sysconf reported no memory")
-
-
 def clean_cpu_name(name: str | Unavailable) -> str | Unavailable:
     """
     Collapse whitespace in a CPU name and cut it to 120 characters, keeping an unavailable name as it is.
@@ -120,27 +73,11 @@ def clean_cpu_name(name: str | Unavailable) -> str | Unavailable:
     return cleaned or Unavailable("the CPU name was only whitespace")
 
 
-def read_mac_memory_bytes() -> int | Unavailable:
-    """
-    Read the total physical memory that macOS reports as text, which must be a whole positive number.
-    """
-    text = read_sysctl("hw.memsize")
-    if isinstance(text, Unavailable):
-        return text
-
-    return int(text) if text.isdecimal() and int(text) > 0 else Unavailable("sysctl hw.memsize is not a positive whole number")
-
-
-# Readers by sys.platform value, so each fact is read only the way its operating system reports it.
+# CPU name readers by sys.platform value, since each operating system reports the marketing name differently.
 CPU_NAME_READERS: Final[dict[str, Callable[[], str | Unavailable]]] = {
     "darwin": partial(read_sysctl, "machdep.cpu.brand_string"),
     "linux": read_linux_cpu_name,
     "win32": read_windows_cpu_name,
-}
-MEMORY_READERS: Final[dict[str, Callable[[], int | Unavailable]]] = {
-    "darwin": read_mac_memory_bytes,
-    "linux": read_linux_memory_bytes,
-    "win32": read_windows_memory_bytes,
 }
 
 
@@ -154,10 +91,15 @@ def read_cpu_name() -> str | Unavailable:
 
 def read_memory_bytes() -> int | Unavailable:
     """
-    Read the total physical memory the way this operating system reports it.
+    Read the total physical memory with psutil, which works the same way on every operating system.
     """
-    reader = MEMORY_READERS.get(sys.platform)
-    return reader() if reader else Unavailable("the memory size is not read on this operating system")
+    # Give a fixed reason, never exception text, when the system does not report its memory.
+    try:
+        memory_bytes = int(psutil.virtual_memory().total)
+    except (OSError, RuntimeError, NotImplementedError):
+        return Unavailable("psutil could not read the memory size")
+
+    return memory_bytes if memory_bytes > 0 else Unavailable("psutil reported no memory")
 
 
 def collect_hardware() -> Hardware:

@@ -17,6 +17,7 @@ dependencies = [
     "opencv-python==5.0.0.93",
     "peft==0.21.2",
     "pillow==12.3.0",
+    "psutil==7.2.2",
     "rich==15.0.0",
     "safetensors==0.8.0",
     "torch==2.14.1",
