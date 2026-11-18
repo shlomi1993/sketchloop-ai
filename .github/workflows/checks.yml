@@ -25,4 +25,4 @@ jobs:
       - if: runner.os == 'Linux'
         run: echo "PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu" >> "$GITHUB_ENV"
       - run: python install.py
-      - run: .venv/bin/python scripts/check.py
+      - run: sketchloop-ai-venv/bin/python scripts/check.py

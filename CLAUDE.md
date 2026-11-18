@@ -13,7 +13,7 @@ The imports below cover the first two "Start every session" steps. Read `docs/AR
 
 ## Claude Code specifics
 
-- Run checks with the project interpreter so they work on every OS: `.venv/Scripts/python.exe scripts/check.py` on Windows, `.venv/bin/python scripts/check.py` elsewhere. On Windows, `python3` may be a Microsoft Store stub, and `make` is often missing.
+- Run checks with the project interpreter so they work on every OS: `sketchloop-ai-venv/Scripts/python.exe scripts/check.py` on Windows, `sketchloop-ai-venv/bin/python scripts/check.py` elsewhere. On Windows, `python3` may be a Microsoft Store stub, and `make` is often missing.
 - Never append `echo "exit=$?"` to commands. The tool already reports exit codes.
 - The shell starts in the repository, so never prefix commands with `cd "<repo>" &&`, and avoid `${...}` expansions and pipes when a plain command works. Both trigger permission prompts.
 - Use WebFetch instead of curl for HTTP lookups.

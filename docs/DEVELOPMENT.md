@@ -7,13 +7,13 @@ Python 3.11+ runs the scaffold and its repository checks and pytest tests. Pytho
 From the repository root:
 
 ```sh
-python3 install.py && . .venv/bin/activate
+python3 install.py && . sketchloop-ai-venv/bin/activate
 python scripts/check.py
 ```
 
-The installer uses the Python interpreter that launches it to create `.venv`. It also works when invoked by path from another directory. Existing valid environments are reused; existing incomplete directories are not deleted or overwritten. To change Python versions, move the old environment aside and rerun with the desired interpreter. Installation stops on any failed command and reports success only after `pip check` and two readiness tests pass, covering editable package import and temporary artifact read/write. It does not run the full suite or download models. Initial dependency installation requires network access or cached packages. If creation fails because `venv`/`ensurepip` is unavailable, install your operating system's Python venv support and move the partial environment aside before retrying.
+The installer uses the Python interpreter that launches it to create `sketchloop-ai-venv`. It also works when invoked by path from another directory. Existing valid environments are reused; existing incomplete directories are not deleted or overwritten. To change Python versions, move the old environment aside and rerun with the desired interpreter. Installation stops on any failed command and reports success only after `pip check` and a readiness test passes, covering the editable package import. It does not run the full suite or download models. Initial dependency installation requires network access or cached packages. If creation fails because `venv`/`ensurepip` is unavailable, install your operating system's Python venv support and move the partial environment aside before retrying.
 
-On Windows, run `py -3 install.py` and activate with `.venv\Scripts\Activate.ps1`. Alternatively invoke `.venv/bin/python` or `.venv\Scripts\python.exe` directly. Checks run offline once the development dependencies are installed.
+On Windows, run `py -3 install.py` and activate with `sketchloop-ai-venv\Scripts\Activate.ps1`. Alternatively invoke `sketchloop-ai-venv/bin/python` or `sketchloop-ai-venv\Scripts\python.exe` directly. Checks run offline once the development dependencies are installed.
 
 For a library-only editable install without testing tools, which requires the build backend unless cached:
 
@@ -26,17 +26,17 @@ The package is an intentionally empty namespace scaffold. An import succeeding d
 
 ## Commands
 
-Run these from the repository root in the activated environment. Without activation, replace `python` with `.venv/bin/python` (Linux/macOS) or `.venv\Scripts\python.exe` (Windows). On Windows, `python3` may resolve to a Microsoft Store stub, so avoid it there.
+Run these from the repository root in the activated environment. Without activation, replace `python` with `sketchloop-ai-venv/bin/python` (Linux/macOS) or `sketchloop-ai-venv\Scripts\python.exe` (Windows). On Windows, `python3` may resolve to a Microsoft Store stub, so avoid it there.
 
 | Command | Purpose |
 | --- | --- |
-| `python3 install.py` (`py -3 install.py` on Windows) | Create/reuse `.venv`, install development dependencies, and run two readiness tests |
+| `python3 install.py` (`py -3 install.py` on Windows) | Create/reuse `sketchloop-ai-venv`, install development dependencies, and run a readiness test |
 | `python scripts/check.py` | Privacy/publication guard, local Markdown target checks, Python syntax checks, Ruff lint, pytest tests |
 | `python scripts/privacy_check.py` | Scan publishable working files and staged blobs; reject private artifact paths and suspicious data patterns |
 | `python -m pytest` | Run offline tests only |
 | `make check` | POSIX convenience alias for the full check (override `PYTHON` if needed) |
 
-The environment stays in `.venv` and uses the shell prompt name `sketchloop-ai`. Running the installer alone prepares it but cannot activate it in the calling terminal. If Conda shows `(base)`, run `conda deactivate` before activating the project environment to avoid stacked prompts. Check the selected interpreter with `python -c "import sys; print(sys.prefix)"`, which should point to this repository's `.venv`. Rerunning the installer refreshes the prompt name of an existing environment without removing its packages.
+The environment stays in `sketchloop-ai-venv` and uses the shell prompt name `sketchloop-ai`. Running the installer alone prepares it but cannot activate it in the calling terminal. If Conda shows `(base)`, run `conda deactivate` before activating the project environment to avoid stacked prompts. Check the selected interpreter with `python -c "import sys; print(sys.prefix)"`, which should point to this repository's `sketchloop-ai-venv`. Rerunning the installer refreshes the prompt name of an existing environment without removing its packages.
 
 Default verification is deliberately lightweight. As application code grows, add selected lint/type tools with reproducible versions and meaningful contract/integration tests. Keep hardware/network tests separately invoked and accurately report skipped coverage.
 

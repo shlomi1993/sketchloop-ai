@@ -52,12 +52,12 @@ flowchart LR
 ```sh
 git clone https://github.com/shlomi1993/sketchloop-ai.git
 cd sketchloop-ai
-python3 install.py && . .venv/bin/activate
+python3 install.py && . sketchloop-ai-venv/bin/activate
 ```
 
-On Windows, run `py -3 install.py` and then `.venv\Scripts\Activate.ps1`.
+On Windows, run `py -3 install.py` and then `sketchloop-ai-venv\Scripts\Activate.ps1`.
 
-The installer creates or reuses `.venv`, installs the package with its development tools, runs `pip check`, and runs two quick readiness tests. It cannot activate the environment in your terminal by itself, which is why the command above chains the activation.
+The installer creates or reuses `sketchloop-ai-venv`, installs the package with its development tools, runs `pip check`, and runs a quick readiness test. It cannot activate the environment in your terminal by itself, which is why the command above chains the activation.
 
 ### 2. Try it without a model
 
@@ -312,12 +312,12 @@ After the first supervisor meeting, T09 to T11 come first. See the [meeting note
 
 ```sh
 conda deactivate
-. .venv/bin/activate
+. sketchloop-ai-venv/bin/activate
 ```
 
 If both `(sketchloop-ai)` and `(base)` show, run `deactivate`, then `conda deactivate`, then activate again. To stop Conda from activating `base` in new terminals, run `conda config --set auto_activate_base false`.
 
-**Not sure which Python is active.** Run `python -c "import sys; print(sys.prefix)"`, which should print this repository's `.venv`. Rerunning the installer refreshes an existing environment without removing its packages.
+**Not sure which Python is active.** Run `python -c "import sys; print(sys.prefix)"`, which should print this repository's `sketchloop-ai-venv`. Rerunning the installer refreshes an existing environment without removing its packages.
 
 **Edits to the page do not show up.** Plain `sketchloop` does not reload code. Use `python scripts/dev_ui.py` while working on the page.
 

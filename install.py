@@ -11,8 +11,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-VENV = ROOT / ".venv"
 ENV_NAME = "sketchloop-ai"
+VENV_FOLDER = f"{ENV_NAME}-venv"
+VENV = ROOT / VENV_FOLDER
 
 
 def run(label: str, *command: str | Path) -> None:
@@ -37,27 +38,27 @@ def main() -> int:
     python = VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     try:
         if VENV.is_symlink():
-            raise RuntimeError(".venv is a symlink; use a local project environment.")
+            raise RuntimeError(f"{VENV_FOLDER} is a symlink; use a local project environment.")
 
         if VENV.exists():
             if not (VENV / "pyvenv.cfg").is_file() or not python.is_file():
-                raise RuntimeError("Existing .venv is invalid or incomplete. Move it aside and rerun the installer.")
+                raise RuntimeError(f"Existing {VENV_FOLDER} is invalid or incomplete. Move it aside and rerun the installer.")
 
-            print("Reusing .venv.", flush=True)
+            print(f"Reusing {VENV_FOLDER}.", flush=True)
         else:
-            run("Creating .venv...", sys.executable, "-m", "venv", "--prompt", ENV_NAME, VENV)
+            run(f"Creating {VENV_FOLDER}...", sys.executable, "-m", "venv", "--prompt", ENV_NAME, VENV)
 
         interpreter_check = (
             "import sys; from pathlib import Path; "
             "valid = sys.version_info >= (3, 11) and sys.prefix != sys.base_prefix "
             "and Path(sys.prefix).resolve() == Path(sys.argv[1]).resolve(); "
-            "sys.exit(0 if valid else 'Invalid .venv: move it aside and rerun the installer.')"
+            f"sys.exit(0 if valid else 'Invalid {VENV_FOLDER}: move it aside and rerun the installer.')"
         )
         run("Checking the environment interpreter...", python, "-c", interpreter_check, VENV)
         update_environment_prompt(VENV)
         run("Installing dependencies...", python, "-m", "pip", "--disable-pip-version-check", "install", "-e", ".[dev]")
         run("Checking dependency compatibility...", python, "-m", "pip", "check")
-        run("Running readiness tests...", python, "-m", "pytest", "-q", "tests/test_environment.py")
+        run("Running the readiness test...", python, "-m", "pytest", "-q", "tests/test_environment.py")
 
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         print("Installation did not complete: " + str(exc), file=sys.stderr)
@@ -65,8 +66,8 @@ def main() -> int:
               "dependency installation needs package-index access or cached packages.", file=sys.stderr)
         return 1
 
-    activation = r".venv\Scripts\Activate.ps1" if os.name == "nt" else ". .venv/bin/activate"
-    print(f"\nEnvironment ready: {ENV_NAME} (stored in .venv).")
+    activation = f"{VENV_FOLDER}\\Scripts\\Activate.ps1" if os.name == "nt" else f". {VENV_FOLDER}/bin/activate"
+    print(f"\nEnvironment ready: {ENV_NAME} (stored in {VENV_FOLDER}).")
     print("Activate it in your current terminal with the command below.")
     print("The installer cannot change the environment of the shell that launched it.")
     if os.environ.get("CONDA_DEFAULT_ENV"):

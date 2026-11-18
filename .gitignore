@@ -151,6 +151,7 @@ activemq-data/
 .env
 .envrc
 .venv
+/sketchloop-ai-venv/
 env/
 venv/
 ENV/
