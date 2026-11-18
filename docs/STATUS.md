@@ -54,7 +54,7 @@ In place:
 
 [ADR 0016](decisions/0016-keep-gradio-page-and-folder-store.md) keeps the Gradio page and the folder store over a separate JavaScript frontend or an SQL database, and names when to revisit them.
 
-Known hardware: Windows laptop without a GPU, laptop camera or USB webcam. A GPU or Colab may become available later.
+Known hardware: the owner's Apple M2 Pro, which runs the study, and a Windows laptop without a GPU. The system must keep installing and running on Windows and Linux so others can run experiments.
 
 ## Next action
 
