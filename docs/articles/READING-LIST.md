@@ -12,9 +12,9 @@ A ranked reading list of about 15 articles for the project. Date is the first pu
 | 6 | Sketch-to-Architecture | Architectural sketch demos | T03 | Oct 2023 | 6 | 0 | [arXiv](https://arxiv.org/abs/2403.20186) | ✅ Read |
 | 7 | CLIP | Optional prompt-alignment scores | T04 | Feb 2021 | 27 | 11 | [arXiv](https://arxiv.org/abs/2103.00020) | ✅ Read |
 | 8 | GenAI and Design Fixation | Fixation and idea diversity risks | T04 | Mar 2024 | 16 | 0 | [arXiv](https://arxiv.org/abs/2403.11164) | ✅ Read |
-| 9 | T2I for Architectural Ideation | Exploration within design constraints | T04 | Apr 2023 | 12 | 0 | [arXiv](https://arxiv.org/abs/2304.10182) | ⏳ In progress |
-| 10 | Design Ideation with AI | Prompt entry and user control | T06 | Jul 2023 | About 10 | 0 | [DOI](https://doi.org/10.1145/3563657.3596014) | ⬜ Pending |
-| 11 | Baudoux Wizard-of-Oz study | How gallery images shape later sketches | T06 | Jul 2024 | 18 | 0 | [Lab page](https://codesign.berkeley.edu/papers/baudoux-WOZ-DCC) | ⬜ Pending |
+| 9 | T2I for Architectural Ideation | Exploration within design constraints | T04 | Apr 2023 | 12 | 0 | [arXiv](https://arxiv.org/abs/2304.10182) | ✅ Read |
+| 10 | Design Ideation with AI | Prompt entry and user control | T06 | Jul 2023 | About 10 | 0 | [DOI](https://doi.org/10.1145/3563657.3596014) | ✅ Read |
+| 11 | Baudoux Wizard-of-Oz study | How gallery images shape later sketches | T06 | Jul 2024 | 18 | 0 | [Lab page](https://codesign.berkeley.edu/papers/baudoux-WOZ-DCC) | ⏳ In progress |
 | 12 | Human-MLLM Sketch Ideation Taxonomy | Shifting human and AI roles | T06 | Feb 2026 | 5 | 0 | [arXiv](https://arxiv.org/abs/2602.22171) | ⬜ Pending |
 | 13 | SDEdit | Sketch preservation versus realism | T07 | Aug 2021 | 10 | 19 | [arXiv](https://arxiv.org/abs/2108.01073) | ⬜ Pending |
 | 14 | T2I-Adapter | An alternative conditioning backend | T07 | Feb 2023 | 8 | 0 | [arXiv](https://arxiv.org/abs/2302.08453) | ⬜ Pending |
