@@ -26,7 +26,7 @@ from sketchloop.preprocessing import STROKE_CONTRAST
 CONDITIONING_LONG_SIDE_PIXELS: Final = 512
 LATENT_SIDE_MULTIPLE: Final = 8
 LCM_LORA_WEIGHTS: Final = "pytorch_lora_weights.safetensors"
-MISSING_LIBRARY_MESSAGE: Final = "The diffusers backend cannot import torch or diffusers. Run pip install -e . and retry."
+MISSING_LIBRARY_MESSAGE: Final = "The real backends cannot import torch or diffusers. Run pip install -e . and retry."
 
 
 class TorchDevice(StrEnum):
@@ -259,6 +259,7 @@ class DiffusersSketchGenerator(Generator):
 
     # Saved in every round record and looked up by rerun, so never rename it.
     ADAPTER_NAME: ClassVar[str] = "sketchloop.diffusers"
+    BACKEND_NAME: ClassVar[str] = "diffusers"  # Name in generator.backend and --backend
     MODEL_LABEL: ClassVar[str] = "Stable Diffusion 1.5 and ControlNet scribble"
 
     def __init__(self, model_dir: Path = Path("models"), *, mode: GenerationMode | None = None,
@@ -303,7 +304,7 @@ class DiffusersSketchGenerator(Generator):
         """
         steps = MODE_SETTINGS[self.mode].steps
         run_conditions = f"on {self.device.upper()} in {self.mode} mode and {self.precision}"
-        return f"Using the diffusers backend with {self.MODEL_LABEL} {run_conditions}, running {steps} steps."
+        return f"Using the {self.BACKEND_NAME} backend with {self.MODEL_LABEL} {run_conditions}, running {steps} steps."
 
     def _list_model_sources(self) -> tuple[ModelSource, ...]:
         return MODEL_SOURCES if self.mode == GenerationMode.FAST else (BASE_MODEL, CONTROLNET_MODEL)
@@ -356,7 +357,7 @@ class DiffusersSketchGenerator(Generator):
 
             pipeline.to(self.device)
         except Exception as error:
-            message = f"Cannot load the diffusers models: {first_line(error).rstrip('.')}. Rerun scripts/download_models.py."
+            message = f"Cannot load the {self.BACKEND_NAME} models: {first_line(error).rstrip('.')}. Rerun scripts/download_models.py."  # noqa: E501
             raise GenerationBackendError(message) from error
 
         self._runtime = describe_torch_runtime(torch, self.device)

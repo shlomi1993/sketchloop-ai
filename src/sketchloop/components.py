@@ -15,33 +15,33 @@ from sketchloop.evaluators.clip import CLIP_B32_MODEL, CLIP_L14_MODEL, ClipEvalu
 from sketchloop.experiments import ExperimentStore, FolderStore
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import MinimalPreprocessor, Preprocessor, StrokePreprocessor
-from sketchloop.settings import (CaptureSettings, GeneratorSettings, PreprocessingSettings, Settings, SettingsError,
-                                 StorageSettings, join_choices)
+from sketchloop.settings import (CaptureSettings, PreprocessingSettings, Settings, SettingsError, StorageSettings,
+                                 join_choices)
 
 
 FAKE_BACKEND: Final = "fake"
 NO_RUN_SKETCH_MESSAGE: Final = 'give a sketch file or --camera, or set capture.source = "camera" in the settings file'
 
-GeneratorFactory: TypeAlias = Callable[[GeneratorSettings], Generator]
+GeneratorFactory: TypeAlias = Callable[[Settings], Generator]
 CaptureFactory: TypeAlias = Callable[[CaptureSettings, Path | None], CaptureSource]
 PreprocessorFactory: TypeAlias = Callable[[PreprocessingSettings], Preprocessor]
 EvaluatorFactory: TypeAlias = Callable[[Settings], Evaluator]
 StoreFactory: TypeAlias = Callable[[StorageSettings], ExperimentStore]
 
 
-def make_diffusers_generator(settings: GeneratorSettings, generator_class: type[DiffusersSketchGenerator]) -> Generator:
+def make_diffusers_generator(settings: Settings, generator_class: type[DiffusersSketchGenerator]) -> Generator:
     """
     Create an SD 1.5 backend of the given class with the configured mode, precision, and models folder.
 
     Args:
-        settings (GeneratorSettings): Generator settings whose diffusers options apply.
+        settings (Settings): Settings whose generator.diffusers options and models folder apply.
         generator_class (type[DiffusersSketchGenerator]): Backend class to create, such as the ControlNet or adapter one.
 
     Returns:
         Generator: The backend, with no model loaded yet.
     """
-    options = settings.diffusers
-    return generator_class(options.models_dir, mode=GenerationMode(options.mode) if options.mode else None,
+    options = settings.generator.diffusers
+    return generator_class(settings.models.dir, mode=GenerationMode(options.mode) if options.mode else None,
                            precision=TorchPrecision(options.precision) if options.precision else None)
 
 
@@ -65,8 +65,8 @@ def make_file_capture(settings: CaptureSettings, sketch_file: Path | None) -> Ca
 # Components by the name a settings file uses. Tests and library callers may add entries, and nothing is discovered.
 GENERATORS: Final[dict[str, GeneratorFactory]] = {
     FAKE_BACKEND: lambda settings: FakeGenerator(),
-    "diffusers": lambda settings: make_diffusers_generator(settings, DiffusersSketchGenerator),
-    "t2i-adapter": lambda settings: make_diffusers_generator(settings, T2IAdapterSketchGenerator),
+    DiffusersSketchGenerator.BACKEND_NAME: lambda settings: make_diffusers_generator(settings, DiffusersSketchGenerator),
+    T2IAdapterSketchGenerator.BACKEND_NAME: lambda settings: make_diffusers_generator(settings, T2IAdapterSketchGenerator),
 }
 CAPTURE_SOURCES: Final[dict[str, CaptureFactory]] = {
     "file": make_file_capture,
@@ -78,8 +78,8 @@ PREPROCESSORS: Final[dict[str, PreprocessorFactory]] = {
 }
 EVALUATORS: Final[dict[str, EvaluatorFactory]] = {
     "none": lambda settings: NoOpEvaluator(),
-    "clip-b32": lambda settings: ClipEvaluator(CLIP_B32_MODEL, settings.generator.diffusers.models_dir),
-    "clip-l14": lambda settings: ClipEvaluator(CLIP_L14_MODEL, settings.generator.diffusers.models_dir),
+    "clip-b32": lambda settings: ClipEvaluator(CLIP_B32_MODEL, settings.models.dir),
+    "clip-l14": lambda settings: ClipEvaluator(CLIP_L14_MODEL, settings.models.dir),
 }
 STORES: Final[dict[str, StoreFactory]] = {
     "folder": lambda settings: FolderStore(settings.runs_dir)
@@ -95,16 +95,37 @@ EVALUATOR_MODELS: Final[dict[str, ModelSource]] = {
 # Backend names by the adapter name a round recorded, so rerun can recreate the backend.
 RERUNNABLE_BACKENDS: Final[dict[str, str]] = {
     FakeGenerator.ADAPTER_NAME: FAKE_BACKEND,
-    DiffusersSketchGenerator.ADAPTER_NAME: "diffusers",
-    T2IAdapterSketchGenerator.ADAPTER_NAME: "t2i-adapter",
+    DiffusersSketchGenerator.ADAPTER_NAME: DiffusersSketchGenerator.BACKEND_NAME,
+    T2IAdapterSketchGenerator.ADAPTER_NAME: T2IAdapterSketchGenerator.BACKEND_NAME,
 }
 
 
-def make_generator(settings: GeneratorSettings) -> Generator:
+def find_recorded_evaluator(evaluator: str | None, score_details: Mapping[str, str]) -> str | None:
     """
-    Create the configured generation backend, without loading any model yet.
+    Find the registry name of the evaluator a round recorded, so rerun can score with the same one.
+
+    Args:
+        evaluator (str | None): Evaluator class name the round recorded.
+        score_details (Mapping[str, str]): What the round recorded about its scores, such as the CLIP model.
+
+    Returns:
+        str | None: The evaluator's registry name, or None when the record does not name a known one.
     """
-    return GENERATORS[settings.backend](settings)
+    if evaluator == NoOpEvaluator.__name__:
+        return "none"
+
+    # Tell the CLIP models apart by the repository the round recorded, since they share one class.
+    if evaluator == ClipEvaluator.__name__:
+        return next((name for name, model in EVALUATOR_MODELS.items() if model.repo_id == score_details.get("model")), None)
+
+    return None
+
+
+def make_generator(settings: Settings) -> Generator:
+    """
+    Create the configured generation backend, which reads the models folder from the settings, without loading any model.
+    """
+    return GENERATORS[settings.generator.backend](settings)
 
 
 def make_capture_source(settings: CaptureSettings, sketch_file: Path | None) -> CaptureSource:
@@ -130,7 +151,7 @@ def make_preprocessor(settings: PreprocessingSettings) -> Preprocessor:
 
 def make_evaluator(settings: Settings) -> Evaluator:
     """
-    Create the configured evaluator, which reads the models folder from the generator settings, without loading any model.
+    Create the configured evaluator, which reads the models folder from the settings, without loading any model.
     """
     return EVALUATORS[settings.evaluator.name](settings)
 

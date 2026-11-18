@@ -107,6 +107,31 @@ def test_clip_loads_lazily_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert loads == [tmp_path / CLIP_L14_MODEL.folder], f"Expected one load from the L/14 folder, got {loads}"
 
 
+def test_clip_load_ahead_of_scoring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """
+    load() loads the model once, and a later load or evaluation does not load it again.
+    """
+    loads: list[Path] = []
+
+    def load_stub(evaluator: ClipEvaluator) -> StubEmbedder:
+        """
+        Count the load and return a stub embedder instead of the model.
+        """
+        loads.append(evaluator.model_folder)
+        return StubEmbedder([[1.0, 0.0]], [1.0, 0.0])
+
+    monkeypatch.setattr(ClipEvaluator, "_load_embedder", load_stub)
+    evaluator = ClipEvaluator(CLIP_B32_MODEL, tmp_path)
+    evaluator.load()
+    assert loads == [tmp_path / CLIP_B32_MODEL.folder], f"load() must load the model once, got {loads}"
+
+    # A second load and an evaluation reuse the loaded model.
+    evaluator.load()
+    request, output = generate_candidates(1)
+    evaluator.evaluate(output.result.candidates, output.payloads, request)
+    assert len(loads) == 1, f"The model must load only once, got {loads}"
+
+
 def test_clip_missing_download(tmp_path: Path) -> None:
     """
     A missing model folder fails with one line that names the folder and the download script.

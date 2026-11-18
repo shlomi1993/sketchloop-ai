@@ -170,8 +170,10 @@ Instead of repeating flags, copy [examples/sketchloop.toml](examples/sketchloop.
 backend = "diffusers"  # fake, diffusers, or t2i-adapter
 
 [generator.diffusers]
-mode = "fast"          # fast or quality
-models_dir = "models"  # also read by scripts/download_models.py
+mode = "fast"          # fast or quality, for diffusers and t2i-adapter
+
+[models]
+dir = "models"         # every model, also read by scripts/download_models.py
 
 [evaluator]
 name = "none"          # none, clip-b32, or clip-l14
@@ -182,10 +184,10 @@ runs_dir = "runs"
 
 - **Precedence:** a command-line flag overrides the file, and the file overrides the built-in default.
 - **Scope:** the file chooses the backend, mode, and precision, the image source for `run`, the preprocessor, the evaluator, the store and its runs folder, and the default candidates and seed for `run` and `ui`.
-- **Paths:** a relative `runs_dir` or `models_dir` is relative to the file's folder. Run `scripts/download_models.py` with the same file, so it downloads where the backend looks.
+- **Paths:** a relative `runs_dir` or `[models] dir` is relative to the file's folder. Run `scripts/download_models.py` with the same file, so it downloads where the backend looks.
 - **Feedback:** a command that uses a file first prints `Settings:` with its path, and a bad value exits with one line naming the key.
-- **Rerun:** `rerun` takes only the store, evaluator, and models folder from the file, and everything else from the recorded round.
-- **Evaluator:** `none`, the default, gives no scores. `clip-b32` (CLIP ViT-B/32, about 0.6 GB) and `clip-l14` (CLIP ViT-L/14, about 1.7 GB) score each candidate by the cosine similarity between its image and the prompt, from -1 to 1. They load from `models_dir` on the first round, which adds a few seconds to that round's evaluation time. The score says how well the image matches the words, not how good the design is, and each round records the CLIP model and revision that produced it.
+- **Rerun:** `rerun` takes only the store and models folder from the file, and everything else from the recorded round. It scores with the evaluator the round recorded, and uses the file's evaluator only when the recorded one cannot be recreated, saying so.
+- **Evaluator:** `none`, the default, gives no scores. `clip-b32` (CLIP ViT-B/32, about 0.6 GB) and `clip-l14` (CLIP ViT-L/14, about 1.7 GB) score each candidate by the cosine similarity between its image and the prompt, from -1 to 1. They load from the models folder before the first round's scoring, which adds a few seconds to that round's model load time. The score says how well the image matches the words, not how good the design is, and each round records the CLIP model and revision that produced it.
 
 ## Using it as a library
 

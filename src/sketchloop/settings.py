@@ -39,7 +39,6 @@ class DiffusersSettings:
     """
     mode: str | None = None  # fast or quality, None for the device default
     precision: str | None = None  # float16 or float32, None for float16 on a GPU and float32 on CPU
-    models_dir: Path = Path("models")  # Folder holding the downloaded model folders
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -49,6 +48,14 @@ class GeneratorSettings:
     """
     backend: str = "fake"  # Registry name of the generation backend
     diffusers: DiffusersSettings = DiffusersSettings()  # Options shared by the diffusers and t2i-adapter backends
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ModelsSettings:
+    """
+    Where every downloaded model lives, shared by the backends, evaluators, and prompt suggester.
+    """
+    dir: Path = Path("models")  # Folder holding the downloaded model folders
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -112,6 +119,7 @@ class Settings:
     Every component choice and default, from built-in values, a settings file, and command-line flags.
     """
     generator: GeneratorSettings = GeneratorSettings()  # Generation backend and its options
+    models: ModelsSettings = ModelsSettings()  # Folder holding every downloaded model
     capture: CaptureSettings = CaptureSettings()  # Image source for sketchloop run
     preprocessing: PreprocessingSettings = PreprocessingSettings()  # Preprocessor and run defaults
     evaluator: EvaluatorSettings = EvaluatorSettings()  # Candidate scorer

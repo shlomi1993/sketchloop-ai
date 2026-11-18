@@ -16,24 +16,24 @@ from sketchloop.domain import ControlValue, SketchLoopError, Unavailable
 from sketchloop.experiments import ExperimentStore, Hardware, RoundStage, format_value
 from sketchloop.generation import Generator
 from sketchloop.session import RoundOutcome
-from sketchloop.settings import GeneratorSettings, StorageSettings
+from sketchloop.settings import Settings, StorageSettings
 
 
 GIBIBYTE: Final = 1024**3
 
 
-def make_configured_generator(settings: GeneratorSettings, console: Console) -> tuple[Generator, float]:
+def make_configured_generator(settings: Settings, console: Console) -> tuple[Generator, float]:
     """
     Create and time the backend the settings name, then print which backend, device, and mode it uses and the setup time.
 
     Args:
-        settings (GeneratorSettings): Backend name and its diffusers mode, precision, and models folder.
+        settings (Settings): Settings naming the backend, its mode and precision, and the models folder.
         console (Console): Console used for output.
 
     Returns:
         tuple[Generator, float]: The generation backend and the seconds creating it took.
     """
-    # Time only the creation, which for diffusers imports torch and selects the device but loads no model yet.
+    # Time only the creation, which for a real backend imports torch and selects the device but loads no model yet.
     started = time.perf_counter()
     generator = make_generator(settings)
     setup_seconds = time.perf_counter() - started

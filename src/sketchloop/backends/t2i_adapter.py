@@ -29,6 +29,7 @@ class T2IAdapterSketchGenerator(DiffusersSketchGenerator):
 
     # Saved in every round record and looked up by rerun, so never rename it.
     ADAPTER_NAME: ClassVar[str] = "sketchloop.t2i-adapter"
+    BACKEND_NAME: ClassVar[str] = "t2i-adapter"  # Name in generator.backend and --backend
     MODEL_LABEL: ClassVar[str] = "Stable Diffusion 1.5 and T2I-Adapter sketch"
 
     def _list_model_sources(self) -> tuple[ModelSource, ...]:

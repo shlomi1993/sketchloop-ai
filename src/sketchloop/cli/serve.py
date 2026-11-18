@@ -38,11 +38,11 @@ def make_controller(settings: Settings, console: Console) -> AppController:
         AppController: Controller holding the loaded generator and a new session.
     """
     store = make_store(settings.storage)
-    generator, setup_seconds = make_configured_generator(settings.generator, console)
+    generator, setup_seconds = make_configured_generator(settings, console)
 
     # Name the sketched object with the local model next to a real backend, and use the fixed styles with the fake.
     is_real = settings.generator.backend != FAKE_BACKEND
-    suggester = FlorenceSuggester(settings.generator.diffusers.models_dir) if is_real else TemplateSuggester()
+    suggester = FlorenceSuggester(settings.models.dir) if is_real else TemplateSuggester()
     threading.Thread(target=warm_up_suggester, args=(suggester, console), daemon=True).start()
     controller = AppController(generator, store, make_evaluator(settings),
                                preprocessor=make_preprocessor(settings.preprocessing), suggester=suggester,

@@ -4,21 +4,22 @@ The rerun subcommand, which repeats a saved round in a new linked session and co
 
 import argparse
 
-from pathlib import Path
+from dataclasses import replace
 from rich.console import Console
 
 from sketchloop.backends.diffusers import GenerationMode, TorchDevice, TorchPrecision, select_device
 from sketchloop.cli.arguments import Command
 from sketchloop.cli.common import make_configured_generator, require_folder_store, show_round
 from sketchloop.cli.show import print_comparison
-from sketchloop.components import FAKE_BACKEND, RERUNNABLE_BACKENDS, make_evaluator
+from sketchloop.components import FAKE_BACKEND, RERUNNABLE_BACKENDS, find_recorded_evaluator, make_evaluator
 from sketchloop.domain import SketchLoopError
+from sketchloop.evaluation import Evaluator
 from sketchloop.experiments import (RerunLink, RoundRecord, RoundStatus, SavedSession, compare_rounds, load_session,
                                     rebuild_request)
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import PreprocessedSketch
 from sketchloop.session import SketchSession
-from sketchloop.settings import DiffusersSettings, GeneratorSettings
+from sketchloop.settings import DiffusersSettings, EvaluatorSettings, GeneratorSettings, Settings
 
 
 def find_rerunnable_round(saved: SavedSession, round_number: int) -> RoundRecord:
@@ -46,14 +47,14 @@ def find_rerunnable_round(saved: SavedSession, round_number: int) -> RoundRecord
     return next(record for record in saved.rounds if record.number == round_number)
 
 
-def make_rerun_generator(record: RoundRecord, console: Console, models_dir: Path) -> tuple[Generator, float]:
+def make_rerun_generator(record: RoundRecord, console: Console, settings: Settings) -> tuple[Generator, float]:
     """
-    Recreate the backend a round used, with its recorded diffusers mode and precision.
+    Recreate the backend a round used, with its recorded mode and precision.
 
     Args:
         record (RoundRecord): Completed round to rerun.
         console (Console): Console used for output.
-        models_dir (Path): Folder with the downloaded diffusers models.
+        settings (Settings): Current settings, of which only the models folder applies.
 
     Returns:
         tuple[Generator, float]: The recreated backend and the seconds creating it took.
@@ -62,7 +63,7 @@ def make_rerun_generator(record: RoundRecord, console: Console, models_dir: Path
     if adapter not in RERUNNABLE_BACKENDS:
         raise SketchLoopError(f"Round {record.number} used backend {adapter}, which rerun cannot recreate.")
 
-    # Pass the recorded mode and precision, since the diffusers defaults depend on the device.
+    # Pass the recorded mode and precision, since the real backends' defaults depend on the device.
     controls = record.iteration.result.effective.controls
     recorded_mode, recorded_precision = controls.get("mode"), controls.get("dtype")
     mode = recorded_mode if recorded_mode in list(GenerationMode) else None
@@ -73,8 +74,30 @@ def make_rerun_generator(record: RoundRecord, console: Console, models_dir: Path
     if backend != FAKE_BACKEND and precision == TorchPrecision.FLOAT16 and select_device() == TorchDevice.CPU:
         raise SketchLoopError(f"Round {record.number} ran in float16 on a GPU, so it cannot be rerun on this CPU-only machine.")
 
-    diffusers = DiffusersSettings(mode=mode, precision=precision, models_dir=models_dir)
-    return make_configured_generator(GeneratorSettings(backend=backend, diffusers=diffusers), console)
+    generator = GeneratorSettings(backend=backend, diffusers=DiffusersSettings(mode=mode, precision=precision))
+    return make_configured_generator(replace(settings, generator=generator), console)
+
+
+def make_rerun_evaluator(record: RoundRecord, console: Console, settings: Settings) -> Evaluator:
+    """
+    Recreate the evaluator a round recorded, or else use the one the settings name and say so.
+
+    Args:
+        record (RoundRecord): Completed round to rerun.
+        console (Console): Console used for output.
+        settings (Settings): Current settings, whose evaluator applies only when the recorded one cannot be recreated.
+
+    Returns:
+        Evaluator: The evaluator, with no model loaded yet.
+    """
+    name = find_recorded_evaluator(record.evaluator, record.score_details)
+    if name is not None:
+        return make_evaluator(replace(settings, evaluator=EvaluatorSettings(name=name)))
+
+    # Say which evaluator scores instead, since the scores would otherwise compare different evaluators silently.
+    message = f"The recorded evaluator {record.evaluator} cannot be recreated, so the rerun scores with {settings.evaluator.name} from the settings."  # noqa: E501
+    console.print(message, style="yellow", markup=False, soft_wrap=True)
+    return make_evaluator(settings)
 
 
 def rerun_round(args: argparse.Namespace, console: Console) -> None:
@@ -85,12 +108,12 @@ def rerun_round(args: argparse.Namespace, console: Console) -> None:
         args (argparse.Namespace): Parsed rerun options.
         console (Console): Console used for output.
     """
-    # Take only the store, evaluator, and models folder from settings, and everything else from the record.
+    # Take the store and models folder from settings, and everything else from the record, including a known evaluator.
     settings = args.settings
     store = require_folder_store(settings.storage, Command.RERUN)
     original = load_session(args.session_folder)
     record = find_rerunnable_round(original, args.round_number)
-    generator, setup_seconds = make_rerun_generator(record, console, settings.generator.diffusers.models_dir)
+    generator, setup_seconds = make_rerun_generator(record, console, settings)
 
     # Read the stored sketches, reusing the processed one so generation gets the same input bytes.
     round_folder = original.folder / f"round-{record.number}"
@@ -103,7 +126,7 @@ def rerun_round(args: argparse.Namespace, console: Console) -> None:
     # Run one round in a new linked session with the recorded settings, without asking for a selection or timing a capture.
     request = rebuild_request(record, generator.capabilities)
     link = RerunLink(session_id=original.session.session_id, round_number=record.number, iteration_id=record.iteration.id)
-    session = SketchSession(generator, store, make_evaluator(settings), rerun_of=link,
+    session = SketchSession(generator, store, make_rerun_evaluator(record, console, settings), rerun_of=link,
                             generator_setup_seconds=setup_seconds)
     outcome = session.run_round(record.raw_sketch, raw_payload, request.guidance, source=record.source,
                                 rotation=record.rotation, use_raw=record.use_raw, n_candidates=request.n_candidates,

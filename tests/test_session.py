@@ -9,8 +9,9 @@ import pytest
 import re
 import subprocess
 import sys
+import time
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Final
@@ -19,8 +20,8 @@ import sketchloop
 from sketchloop.app import AppController
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import CapturedSketch, CaptureSource, encode_frame, raw_image_ref
-from sketchloop.domain import (Guidance, InvalidRecordError, SketchLoopError, SketchSource, Unavailable,
-                               UnsupportedConfigurationError, record_no_selection, select_candidates)
+from sketchloop.domain import (Candidate, GenerationRequest, Guidance, InvalidRecordError, SketchLoopError, SketchSource,
+                               Unavailable, UnsupportedConfigurationError, record_no_selection, select_candidates)
 from sketchloop.evaluation import Evaluator
 from sketchloop.experiments import (FRAME_AGE_NOT_MEASURED_REASON, NOT_STREAMED_REASON, SETUP_NOT_MEASURED_REASON,
                                     UNKNOWN_SOURCE_REASON, MemoryStore, RoundRecord, SessionRecord, StoreError)
@@ -145,6 +146,31 @@ class FlakyMemoryStore(MemoryStore):
         """
         self.fail_if_armed("save_round")
         super().save_round(session_id, record, files)
+
+
+class SlowLoadingEvaluator(Evaluator):
+    """
+    Test evaluator whose load moves the test clock 30 s and whose scoring moves it 1 s, counting its loads.
+    """
+
+    def __init__(self, advance_clock: Callable[[float], None]) -> None:
+        self.advance_clock = advance_clock
+        self.loads = 0
+
+    def load(self) -> None:
+        """
+        Count the load and let 30 s pass.
+        """
+        self.loads += 1
+        self.advance_clock(30.0)
+
+    def evaluate(self, candidates: Sequence[Candidate], payloads: Mapping[str, bytes],
+                 request: GenerationRequest) -> Mapping[str, float]:
+        """
+        Let 1 s pass and score every candidate 0.5.
+        """
+        self.advance_clock(1.0)
+        return {candidate.id: 0.5 for candidate in candidates}
 
 
 def test_session_runs_with_substituted_components(tmp_path: Path, constant_evaluator: Evaluator) -> None:
@@ -281,6 +307,31 @@ def test_session_records_stage_timings(first_load_generator: Generator) -> None:
     default_session.run_round(captured.image, captured.payload, guidance, source=camera.kind)
     setup = default_session.session_record.generator_setup_seconds
     assert setup == Unavailable(SETUP_NOT_MEASURED_REASON), f"Expected the not-measured reason, got {setup}"
+
+
+@pytest.mark.usefixtures("counting_clock")
+def test_session_times_evaluator_load_as_model_load(first_load_generator: Generator) -> None:
+    """
+    An evaluator loads once before its first scoring, and its load joins the generator's in model_load, not evaluation.
+    """
+    # The counting clock replaces perf_counter, so its advance stands in for time spent loading and scoring.
+    evaluator = SlowLoadingEvaluator(time.perf_counter.advance)
+    session = SketchSession(first_load_generator, MemoryStore(), evaluator, preprocessor=IdentityPreprocessor())
+    captured = StillCamera().capture()
+    guidance = Guidance(prompt="chair")
+    first = session.run_round(captured.image, captured.payload, guidance, source="camera")
+    second = session.run_round(captured.image, captured.payload, guidance, source="camera")
+
+    # Each clock read adds 7 s, so the generator's 5 s load and the evaluator's 7 + 30 s load make model_load.
+    timings = first.timings_seconds
+    assert evaluator.loads == 1, f"The evaluator must load once per session, got {evaluator.loads} loads"
+    assert timings["model_load"] == pytest.approx(42.0), f"Expected 5 s + 37 s of loading, got {timings}"
+    assert timings["evaluation"] == pytest.approx(8.0), f"Evaluation must leave out the load, got {timings}"
+    assert first.total_seconds >= sum(timings.values()), f"Total {first.total_seconds} must cover the stages {timings}"
+
+    # Later rounds load nothing, so they record no model_load and the same scoring time.
+    assert "model_load" not in second.timings_seconds, f"A later round must not load again, got {second.timings_seconds}"
+    assert second.timings_seconds["evaluation"] == pytest.approx(8.0), f"Unexpected evaluation {second.timings_seconds}"
 
 
 @pytest.mark.parametrize(("source", "frame_age", "expected"), [

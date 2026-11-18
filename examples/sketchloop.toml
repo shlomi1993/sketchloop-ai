@@ -7,7 +7,9 @@ backend = "diffusers"  # fake, diffusers, or t2i-adapter
 [generator.diffusers]  # also used by the t2i-adapter backend
 mode = "fast"  # fast or quality, omit for the device default
 # precision = "float16"  # float16 or float32, omit for float16 on a GPU and float32 on CPU
-models_dir = "models"  # relative to this file, also used by scripts/download_models.py
+
+[models]
+dir = "models"  # relative to this file, holds every model, and scripts/download_models.py downloads here
 
 [capture]
 source = "camera"  # file or camera, for sketchloop run

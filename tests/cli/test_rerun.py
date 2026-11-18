@@ -5,14 +5,18 @@ Tests of the rerun subcommand's linked session and comparison report.
 import json
 import pytest
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from sketchloop.backends.diffusers import TorchDevice, TorchPrecision
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.cli import main
-from sketchloop.domain import Unavailable
+from sketchloop.components import EVALUATORS
+from sketchloop.domain import Candidate, GenerationRequest, Unavailable
+from sketchloop.evaluation import Evaluator
+from sketchloop.evaluators.clip import CLIP_B32_MODEL
 from sketchloop.experiments import MISSING_SOURCE_REASON, load_session
-from sketchloop.settings import GeneratorSettings
+from sketchloop.settings import Settings
 
 
 # Run every test from tmp_path, so a sketchloop.toml in the repository cannot change CLI settings.
@@ -125,11 +129,11 @@ def test_cli_rerun_passes_recorded_precision(tmp_path: Path, monkeypatch: pytest
     original = record_float16_round(runs_dir, monkeypatch, "sketchloop.fake")
     received = []
 
-    def make_recording_generator(settings: GeneratorSettings) -> FakeGenerator:
+    def make_recording_generator(settings: Settings) -> FakeGenerator:
         """
         Record the precision the rerun asked for and return the fake backend.
         """
-        received.append(settings.diffusers.precision)
+        received.append(settings.generator.diffusers.precision)
         return FakeGenerator()
 
     monkeypatch.setattr("sketchloop.cli.common.make_generator", make_recording_generator)
@@ -158,3 +162,60 @@ def test_cli_rerun_refuses_float16_on_cpu(tmp_path: Path, monkeypatch: pytest.Mo
     assert exit_code == 1, f"The rerun must fail, got exit code {exit_code}"
     expected = "Round 1 ran in float16 on a GPU, so it cannot be rerun on this CPU-only machine."
     assert expected in output, f"Unexpected output {output}"
+
+
+
+class RecordingEvaluator(Evaluator):
+    """
+    Test evaluator standing in for CLIP, recorded under its own class name and giving no scores.
+    """
+
+    def evaluate(self, candidates: Sequence[Candidate], payloads: Mapping[str, bytes],
+                 request: GenerationRequest) -> Mapping[str, float]:
+        """
+        Return no scores.
+        """
+        return {}
+
+
+@pytest.mark.parametrize(("recorded", "settings_evaluator", "expected_evaluator", "expects_note"), [
+    (None, "clip-b32", "NoOpEvaluator", False),
+    ({"evaluator": "ClipEvaluator", "score_details": {"model": CLIP_B32_MODEL.repo_id}}, "none", "RecordingEvaluator", False),
+    ({"evaluator": "ConstantEvaluator", "score_details": {}}, "none", "NoOpEvaluator", True)
+], ids=["none", "clip-b32", "unknown"])
+def test_cli_rerun_reuses_recorded_evaluator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+                                             recorded: dict[str, object] | None, settings_evaluator: str,
+                                             expected_evaluator: str, expects_note: bool) -> None:
+    """
+    A rerun scores with the evaluator the round recorded, and falls back to the settings evaluator with a note otherwise.
+    """
+    answers = iter(["1", "q"])
+    monkeypatch.setattr("builtins.input", lambda *prompt: next(answers))
+    runs_dir = tmp_path / "runs"
+    main(["run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--candidates", "1", "--runs-dir", str(runs_dir)])
+    original = next(runs_dir.iterdir())
+
+    # Rewrite the recorded evaluator to stand in for a CLIP round or an evaluator rerun cannot recreate.
+    if recorded is not None:
+        record_file = original / "round-1" / "round.json"
+        data = json.loads(record_file.read_text(encoding="utf-8"))
+        data["evaluation"] |= recorded
+        record_file.write_text(json.dumps(data), encoding="utf-8")
+
+    # The settings name another evaluator, and clip-b32 builds a stand-in so no model is needed.
+    monkeypatch.setitem(EVALUATORS, "clip-b32", lambda settings: RecordingEvaluator())
+    config = tmp_path / "rerun.toml"
+    config.write_text(f'[evaluator]\nname = "{settings_evaluator}"\n', encoding="utf-8")
+    capsys.readouterr()
+    exit_code = main(["rerun", str(original), "--round", "1", "--config", str(config), "--runs-dir", str(runs_dir)])
+    output = " ".join(capsys.readouterr().out.split())
+
+    # The rerun round records the expected evaluator.
+    rerun_folder = next(path for path in runs_dir.iterdir() if path != original)
+    rerun_evaluator = load_session(rerun_folder).rounds[0].evaluator
+    assert exit_code == 0, f"The rerun must succeed, got exit code {exit_code}"
+    assert rerun_evaluator == expected_evaluator, f"Expected the rerun to score with {expected_evaluator}, got {rerun_evaluator}"
+
+    # Only a fallback prints which settings evaluator replaced the recorded one.
+    note = "The recorded evaluator ConstantEvaluator cannot be recreated, so the rerun scores with none from the settings."
+    assert (note in output) == expects_note, f"Expected the fallback note only when falling back, got {output!r}"

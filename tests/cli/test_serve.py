@@ -13,6 +13,7 @@ import sketchloop
 from sketchloop.app import AppController
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.cli import main
+from sketchloop.suggestion import FLORENCE_MODEL
 
 
 # Run every test from tmp_path, so a sketchloop.toml in the repository cannot change CLI settings.
@@ -66,7 +67,8 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     config_dir.mkdir()
     config = config_dir / "ui.toml"
     config.write_text("\n".join(['[generator]', 'backend = "diffusers"', '[generator.diffusers]', 'mode = "quality"',
-                                 'models_dir = "weights"', '[storage]', 'runs_dir = "file-runs"', '[ui]', 'candidates = 3', '']),
+                                 '[models]', 'dir = "weights"', '[storage]', 'runs_dir = "file-runs"', '[ui]', 'candidates = 3',
+                                 '']),
                       encoding="utf-8")
     config_exit = main(["ui", "--config", str(config)])
     fake_flag_exit = main(["ui", "--config", str(config), "--backend", "fake"])
@@ -95,6 +97,11 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert config_options["default_candidates"] == 3, f"The file's ui.candidates must apply, got {config_options}"
     controller_runs = config_controller.store.root.resolve()
     assert controller_runs == (config_dir / "file-runs").resolve(), f"Runs must sit next to the file, got {controller_runs}"
+
+    # The prompt suggester reads its model from the same [models] folder as the backend.
+    suggester_folder = config_controller.suggester._model_folder.resolve()
+    expected_folder = (config_dir / "weights" / FLORENCE_MODEL.folder).resolve()
+    assert suggester_folder == expected_folder, f"The suggester must read {expected_folder}, got {suggester_folder}"
 
     # --backend fake beats the file without a mode conflict, so no diffusers backend is created.
     assert len(diffusers_calls) == 1, f"--backend fake must win over the file's diffusers, got {len(diffusers_calls)} calls"

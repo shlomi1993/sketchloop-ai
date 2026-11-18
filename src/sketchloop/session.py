@@ -32,7 +32,7 @@ class RoundOutcome:
     raw_sketch: ImageRef  # Raw sketch as loaded or captured
     steps: tuple[PreprocessingStep, ...]  # Preprocessing steps applied, empty with --raw
     iteration: Iteration  # Request, result, and link to the previous round
-    timings_seconds: Mapping[str, float]  # Duration by stage, with a first model load as model_load rather than generation
+    timings_seconds: Mapping[str, float]  # Duration by stage, with first model loads as model_load
     total_seconds: float  # Capture plus the round's wall time until its files were saved
     scores: Mapping[str, float]  # Evaluator scores by candidate ID, empty with the no-op evaluator
 
@@ -100,6 +100,7 @@ class SketchSession:
         self.session_record: SessionRecord | None = None
         self.records: list[RoundRecord] = []
         self._started_rounds = 0
+        self._evaluator_loaded = False
 
     def _write_session_record(self) -> None:
         # Save the session record once, before the first round's files.
@@ -144,6 +145,20 @@ class SketchSession:
 
         timings[RoundStage.GENERATION] = elapsed - load_seconds
         return output
+
+    def _load_evaluator(self, timings: dict[str, float]) -> None:
+        # Load the evaluator's model once, before its first scoring, so evaluation is only the time spent scoring.
+        if self._evaluator_loaded:
+            return
+
+        started = time.perf_counter()
+        self.evaluator.load()
+        load_seconds = time.perf_counter() - started
+        self._evaluator_loaded = True
+
+        # Count the load as model loading, beside any generator load, and skip evaluators that have nothing to load.
+        if type(self.evaluator).load is not Evaluator.load:
+            timings[RoundStage.MODEL_LOAD] = timings.get(RoundStage.MODEL_LOAD, 0.0) + load_seconds
 
     def run_round(self, raw_sketch: ImageRef, raw_payload: bytes, guidance: Guidance, *, source: SketchSource | Unavailable,
                   rotation: int = Rotation.DEG_000, use_raw: bool = False, n_candidates: int = 1, seed: int | None = None,
@@ -205,6 +220,7 @@ class SketchSession:
 
             # Score separately from generation and selection, and check the scores by building the record.
             stage = RoundStage.EVALUATION
+            self._load_evaluator(timings)
             started = time.perf_counter()
             scores = self.evaluator.evaluate(output.result.candidates, output.payloads, request)
             timings[RoundStage.EVALUATION] = time.perf_counter() - started

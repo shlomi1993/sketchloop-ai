@@ -75,7 +75,7 @@ def test_download_evaluators_on_request(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr(huggingface_hub, "snapshot_download", record_download)
     config = tmp_path / "sketchloop.toml"
-    settings_lines = ["[generator.diffusers]", 'models_dir = "models"', "[evaluator]", f'name = "{settings_evaluator}"']
+    settings_lines = ["[models]", 'dir = "models"', "[evaluator]", f'name = "{settings_evaluator}"']
     config.write_text("\n".join(settings_lines), encoding="utf-8")
     exit_code = download_main(["--config", str(config), *flags])
 

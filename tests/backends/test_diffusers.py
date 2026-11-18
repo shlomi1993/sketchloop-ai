@@ -82,6 +82,7 @@ def test_diffusers_maps_request() -> None:
 
     # The description names the device, mode, precision, and default step count, so the person expects the run time.
     description = generator.describe()
+    assert description.startswith("Using the diffusers backend with "), f"The description must name diffusers, got {description}"
     assert "on CPU in quality mode and float32, running 20 steps" in description, f"Unexpected description {description}"
 
 

@@ -69,7 +69,7 @@ def run_benchmark(args: argparse.Namespace, console: Console) -> None:
     store = require_folder_store(settings.storage, Command.BENCHMARK)
     capture_source = FileCapture(args.sketch)
     first_capture = capture_source.capture()
-    generator, setup_seconds = make_configured_generator(settings.generator, console)
+    generator, setup_seconds = make_configured_generator(settings, console)
     plan = BenchmarkPlan(warmup_rounds=args.warmup, measured_rounds=args.rounds)
     session = SketchSession(generator, store, make_evaluator(settings),
                             preprocessor=make_preprocessor(settings.preprocessing), benchmark=plan,

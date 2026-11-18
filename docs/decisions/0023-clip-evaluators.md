@@ -21,3 +21,5 @@ A top-level models setting would read better than a generator-named section, but
 ## Consequences
 
 Adding an evaluator touched the registry, the evaluator factories and their four callers, and the records, which feeds the T07 modularity evaluation. The first round's evaluation time includes CLIP's model load, so few-round benchmarks overstate it. `rerun` scores with the evaluator in the current settings, not the recorded one. On the M2 Pro, ViT-L/14 next to the T2I-Adapter backend peaked at 3.3 GB of process memory with no new swapping, and warm scoring took about 0.1 s per round. Whether CLIP scores track what participants prefer is unknown and is a research question, not a property of the system.
+
+Follow-up from the T07 modularity results: the shared folder moved to a top-level `[models] dir` setting, `rerun` now reuses the evaluator a round recorded when it can and otherwise says which settings evaluator it uses, and an evaluator's load is timed as `model_load` before its first scoring rather than as evaluation.

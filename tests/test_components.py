@@ -6,21 +6,22 @@ import pytest
 
 from pathlib import Path
 
-from sketchloop.backends.diffusers import ModelSource
-from sketchloop.components import EVALUATOR_MODELS, EVALUATORS, check_component_names, make_evaluator, make_preprocessor
+from sketchloop.backends.diffusers import DiffusersSketchGenerator, ModelSource
+from sketchloop.backends.t2i_adapter import T2IAdapterSketchGenerator
+from sketchloop.components import (EVALUATOR_MODELS, EVALUATORS, check_component_names, find_recorded_evaluator, make_evaluator,
+                                   make_generator, make_preprocessor)
 from sketchloop.evaluation import NoOpEvaluator
 from sketchloop.evaluators.clip import CLIP_B32_MODEL, CLIP_L14_MODEL, ClipEvaluator
 from sketchloop.preprocessing import MinimalPreprocessor, StrokePreprocessor
-from sketchloop.settings import (DiffusersSettings, EvaluatorSettings, GeneratorSettings, PreprocessingSettings, Settings,
-                                 SettingsError)
+from sketchloop.settings import (DiffusersSettings, EvaluatorSettings, GeneratorSettings, ModelsSettings, PreprocessingSettings,
+                                 Settings, SettingsError)
 
 
 def make_settings(evaluator_name: str, models_dir: Path) -> Settings:
     """
     Build settings naming an evaluator and a models folder.
     """
-    generator = GeneratorSettings(diffusers=DiffusersSettings(models_dir=models_dir))
-    return Settings(generator=generator, evaluator=EvaluatorSettings(name=evaluator_name))
+    return Settings(models=ModelsSettings(dir=models_dir), evaluator=EvaluatorSettings(name=evaluator_name))
 
 
 @pytest.mark.parametrize(("name", "model"), [("clip-b32", CLIP_B32_MODEL), ("clip-l14", CLIP_L14_MODEL)])
@@ -60,3 +61,34 @@ def test_preprocessors_registered(name: str, expected_type: type) -> None:
     preprocessor = make_preprocessor(PreprocessingSettings(name=name))
     assert isinstance(preprocessor, expected_type), f"{name} built {type(preprocessor).__name__}"
 
+
+
+@pytest.mark.parametrize(("backend", "expected_type"), [
+    ("diffusers", DiffusersSketchGenerator),
+    ("t2i-adapter", T2IAdapterSketchGenerator)
+])
+def test_real_backends_read_models_dir(tmp_path: Path, backend: str, expected_type: type) -> None:
+    """
+    Both real backends read their weights from the [models] folder, without loading any model.
+    """
+    generator_settings = GeneratorSettings(backend=backend, diffusers=DiffusersSettings(precision="float32"))
+    generator = make_generator(Settings(generator=generator_settings, models=ModelsSettings(dir=tmp_path)))
+    assert isinstance(generator, expected_type), f"{backend} built {type(generator).__name__}"
+    assert generator._model_dir == tmp_path, f"{backend} must read the [models] folder, got {generator._model_dir}"
+
+
+@pytest.mark.parametrize(("evaluator", "score_details", "expected"), [
+    ("NoOpEvaluator", {}, "none"),
+    ("ClipEvaluator", {"model": CLIP_B32_MODEL.repo_id, "revision": "older"}, "clip-b32"),
+    ("ClipEvaluator", {"model": CLIP_L14_MODEL.repo_id}, "clip-l14"),
+    ("ClipEvaluator", {"model": "someone/other-clip"}, None),
+    ("ClipEvaluator", {}, None),
+    ("ConstantEvaluator", {}, None),
+    (None, {}, None)
+], ids=["none", "clip-b32", "clip-l14", "unknown-clip", "clip-without-model", "unknown-class", "unrecorded"])
+def test_find_recorded_evaluator(evaluator: str | None, score_details: dict[str, str], expected: str | None) -> None:
+    """
+    A recorded evaluator maps back to its registry name, CLIP by its recorded repository, and anything else to None.
+    """
+    found = find_recorded_evaluator(evaluator, score_details)
+    assert found == expected, f"Expected {expected} for {evaluator} with {score_details}, got {found}"

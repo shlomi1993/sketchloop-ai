@@ -15,7 +15,7 @@ from sketchloop.backends.t2i_adapter import T2IAdapterSketchGenerator
 from sketchloop.components import GENERATORS, RERUNNABLE_BACKENDS
 from sketchloop.domain import GenerationRequest, Guidance, ImageRef
 from sketchloop.preprocessing import preprocess_sketch
-from sketchloop.settings import DiffusersSettings, GeneratorSettings
+from sketchloop.settings import DiffusersSettings, GeneratorSettings, Settings
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -103,6 +103,7 @@ def test_t2i_adapter_fast_mode() -> None:
     model_id = str(output.result.backend.model_id)
     assert "latent-consistency/lcm-lora-sdv1-5" in model_id, f"Fast mode must record the LCM-LoRA, got {model_id}"
     description = generator.describe()
+    assert description.startswith("Using the t2i-adapter backend with "), f"Expected the t2i-adapter name, got {description}"
     assert "T2I-Adapter sketch" in description, f"The description must name the adapter, got {description}"
     assert "on CPU in fast mode and float32, running 4 steps" in description, f"Unexpected description {description}"
 
@@ -129,8 +130,8 @@ def test_t2i_adapter_registered() -> None:
     """
     The settings name t2i-adapter creates the adapter backend, and rerun maps its recorded adapter name back.
     """
-    settings = GeneratorSettings(backend="t2i-adapter", diffusers=DiffusersSettings(mode="quality", precision="float32"))
-    generator = GENERATORS["t2i-adapter"](settings)
+    diffusers = DiffusersSettings(mode="quality", precision="float32")
+    generator = GENERATORS["t2i-adapter"](Settings(generator=GeneratorSettings(backend="t2i-adapter", diffusers=diffusers)))
 
     # The shared diffusers options reach the new backend.
     assert isinstance(generator, T2IAdapterSketchGenerator), f"Expected the adapter backend, got {type(generator)}"

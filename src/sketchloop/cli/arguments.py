@@ -216,8 +216,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     run_parser.add_argument("--raw", action=argparse.BooleanOptionalAction, default=unset, help="generate from your original sketch instead of the processed one (settings preprocessing.raw, default off)")  # noqa: E501
     run_parser.add_argument("--rotate", type=int, choices=list(Rotation), default=unset, help="degrees to turn the sketch clockwise before processing (settings preprocessing.rotation, default 0)")  # noqa: E501
     run_parser.add_argument("--backend", choices=list(GENERATORS), default=unset, help="generation backend to use (settings generator.backend, default fake)")  # noqa: E501
-    run_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="diffusers mode (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
-    run_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="diffusers precision (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
+    run_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="mode of a real backend (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
+    run_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="precision of a real backend (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
     run_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
 
     # Show or rerun a saved session.
@@ -240,8 +240,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     benchmark_parser.add_argument("--raw", action=argparse.BooleanOptionalAction, default=unset, help="generate from your original sketch instead of the processed one (settings preprocessing.raw, default off)")  # noqa: E501
     benchmark_parser.add_argument("--rotate", type=int, choices=list(Rotation), default=unset, help="degrees to turn the sketch clockwise before processing (settings preprocessing.rotation, default 0)")  # noqa: E501
     benchmark_parser.add_argument("--backend", choices=list(GENERATORS), default=unset, help="generation backend to use (settings generator.backend, default fake)")  # noqa: E501
-    benchmark_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="diffusers mode (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
-    benchmark_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="diffusers precision (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
+    benchmark_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="mode of a real backend (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
+    benchmark_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="precision of a real backend (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
     benchmark_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for run outputs (settings storage.runs_dir, default runs)")  # noqa: E501
     benchmark_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
 
@@ -252,8 +252,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ui_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for run outputs (settings storage.runs_dir, default runs)")  # noqa: E501
     ui_parser.add_argument("--capture-interval", type=parse_positive_seconds, default=unset, help="seconds between webcam frames the page keeps, so Generate uses a fresh one (settings ui.capture_interval_seconds, default 0.5)")  # noqa: E501
     ui_parser.add_argument("--backend", choices=list(GENERATORS), default=unset, help="generation backend to use (settings generator.backend, default fake)")  # noqa: E501
-    ui_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="diffusers mode (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
-    ui_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="diffusers precision (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
+    ui_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="mode of a real backend (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
+    ui_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="precision of a real backend (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
     ui_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
     # A bare sketchloop opens the browser page with the settings file's choices.
     if not (sys.argv[1:] if argv is None else argv):

@@ -35,6 +35,12 @@ class Evaluator(ABC):
         """
         ...
 
+    def load(self) -> None:
+        """
+        Load any model the evaluator needs before its first scoring, so the session can time the load apart from scoring.
+        """
+        return None
+
     def describe_scores(self) -> Mapping[str, str]:
         """
         Say which model produced the scores and what they measure, for the round record, which evaluators without scores skip.

@@ -94,6 +94,14 @@ class ClipEvaluator(Evaluator):
 
         return embed
 
+    def load(self) -> None:
+        """
+        Load the CLIP model now, once even when the page scores from several threads.
+        """
+        with self._load_lock:
+            if self._embedder is None:
+                self._embedder = self._load_embedder()
+
     def evaluate(self, candidates: Sequence[Candidate], payloads: Mapping[str, bytes],
                  request: GenerationRequest) -> Mapping[str, float]:
         """
@@ -107,11 +115,8 @@ class ClipEvaluator(Evaluator):
         Returns:
             Mapping[str, float]: Similarity from -1 to 1 by candidate ID.
         """
-        # Load the model on first use only, once even when the page scores from several threads.
-        with self._load_lock:
-            if self._embedder is None:
-                self._embedder = self._load_embedder()
-
+        # Load the model on first use when load was not called first.
+        self.load()
         image_payloads = [payloads[candidate.image.path] for candidate in candidates]
         image_embeddings, text_embedding = self._embedder(image_payloads, request.guidance.prompt)
         similarities = compute_cosine_similarities(image_embeddings, text_embedding)
