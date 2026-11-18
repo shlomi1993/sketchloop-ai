@@ -49,7 +49,7 @@ It retains environment-file checks and scans UTF-8 and BOM-marked UTF-16 text. S
 In place:
 - Installer (`install.py`), offline checks in `scripts/check.py` for publication guard, syntax, TOML, Markdown links, Ruff lint, and pytest, and GitHub Actions CI for Python 3.11/3.12.
 - Project docs: specification, architecture, experiment contract, roadmap, privacy policy, references with citations, research notes area, and a thesis outline.
-- Claude Code environment ([ADR 0003](decisions/0003-claude-code-environment.md)): `CLAUDE.md`, shared permissions, seven role subagents including a `frontend-developer` for the browser page, and the skills `/start-task`, `/handoff`, `/adr`, `/commit`, `/bisect`, `/readability`, and `/audit`. T06 used the researcher, architect, backend-developer, qa-engineer, code-reviewer, and privacy-reviewer subagents.
+- Claude Code environment ([ADR 0003](decisions/0003-claude-code-environment.md)): `CLAUDE.md`, shared permissions, eight role subagents including a `frontend-developer` and a `ux-reviewer` for the browser page, and the skills `/start-task`, `/handoff`, `/adr`, `/commit`, `/bisect`, `/readability`, and `/audit`. T06 used the researcher, architect, backend-developer, qa-engineer, code-reviewer, and privacy-reviewer subagents.
 - Research workspace and Ruff lint ([ADR 0004](decisions/0004-research-workspace-and-tooling.md)).
 
 [ADR 0016](decisions/0016-keep-gradio-page-and-folder-store.md) keeps the Gradio page and the folder store over a separate JavaScript frontend or an SQL database, and names when to revisit them.
