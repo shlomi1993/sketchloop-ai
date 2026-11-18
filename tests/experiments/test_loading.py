@@ -12,6 +12,7 @@ from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import load_sketch_file
 from sketchloop.domain import (Guidance, SketchSource, Unavailable, UnsupportedConfigurationError, record_no_selection,
                                select_candidates)
+from sketchloop.evaluation import Evaluator
 from sketchloop.experiments import (MISSING_FRAME_AGE_REASON, MISSING_HARDWARE_REASON, MISSING_SETUP_REASON,
                                     MISSING_TOTAL_REASON, BenchmarkPlan, ExperimentRecordError, FolderStore, Hardware,
                                     load_session)
@@ -172,6 +173,26 @@ def test_timing_fields_round_trip(tmp_path: Path) -> None:
     assert older_session.benchmark is None, f"A missing benchmark plan must load as none, got {older_session.benchmark}"
     assert older_round.total_seconds == Unavailable(MISSING_TOTAL_REASON), "A missing total must be unavailable"
     assert older_round.frame_age_seconds == Unavailable(MISSING_FRAME_AGE_REASON), "A missing frame age must be unavailable"
+
+
+def test_score_details_round_trip(tmp_path: Path, constant_evaluator: Evaluator) -> None:
+    """
+    The evaluator's description of its scores is saved with each round, and a round saved before it loads with none.
+    """
+    raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
+    session = SketchSession(FakeGenerator(), FolderStore(tmp_path), constant_evaluator)
+    session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.FILE, n_candidates=2, seed=7)
+    saved = load_session(session.folder).rounds[0]
+    expected = dict(constant_evaluator.describe_scores())
+    assert dict(saved.score_details) == expected, f"Expected score details {expected}, got {saved.score_details}"
+
+    # Delete the key to stand in for a round written before evaluators described their scores.
+    round_file = session.folder / "round-1" / "round.json"
+    round_data = json.loads(round_file.read_text(encoding="utf-8"))
+    del round_data["evaluation"]["score_details"]
+    round_file.write_text(json.dumps(round_data), encoding="utf-8")
+    older = load_session(session.folder).rounds[0]
+    assert dict(older.score_details) == {} and older.scores, f"An older round must load with no details, got {older}"
 
 
 def test_hardware_with_unavailable_fact_round_trips(tmp_path: Path) -> None:

@@ -74,7 +74,7 @@ python scripts/download_models.py
 sketchloop ui --backend diffusers
 ```
 
-The download script fetches about 7 GB into the git-ignored `models/` folder and skips files already present. To make the real model the default, copy [examples/sketchloop.toml](examples/sketchloop.toml) to `sketchloop.toml`, which already sets `backend = "diffusers"`. After that, plain `sketchloop` opens the page with the real model.
+The download script fetches about 7 GB into the git-ignored `models/` folder and skips files already present. It fetches a CLIP evaluator's weights only when the settings file names that evaluator or you ask for it, as in `python scripts/download_models.py --evaluator clip-b32 --evaluator clip-l14`. To make the real model the default, copy [examples/sketchloop.toml](examples/sketchloop.toml) to `sketchloop.toml`, which already sets `backend = "diffusers"`. After that, plain `sketchloop` opens the page with the real model.
 
 ## Using the browser page
 
@@ -173,6 +173,9 @@ backend = "diffusers"  # fake, diffusers, or t2i-adapter
 mode = "fast"          # fast or quality
 models_dir = "models"  # also read by scripts/download_models.py
 
+[evaluator]
+name = "none"          # none, clip-b32, or clip-l14
+
 [storage]
 runs_dir = "runs"
 ```
@@ -182,6 +185,7 @@ runs_dir = "runs"
 - **Paths:** a relative `runs_dir` or `models_dir` is relative to the file's folder. Run `scripts/download_models.py` with the same file, so it downloads where the backend looks.
 - **Feedback:** a command that uses a file first prints `Settings:` with its path, and a bad value exits with one line naming the key.
 - **Rerun:** `rerun` takes only the store, evaluator, and models folder from the file, and everything else from the recorded round.
+- **Evaluator:** `none`, the default, gives no scores. `clip-b32` (CLIP ViT-B/32, about 0.6 GB) and `clip-l14` (CLIP ViT-L/14, about 1.7 GB) score each candidate by the cosine similarity between its image and the prompt, from -1 to 1. They load from `models_dir` on the first round, which adds a few seconds to that round's evaluation time. The score says how well the image matches the words, not how good the design is, and each round records the CLIP model and revision that produced it.
 
 ## Using it as a library
 
@@ -219,10 +223,11 @@ flowchart TD
     app -. Suggest a prompt .-> suggester["PromptSuggester<br/>Florence-2 or fixed templates"]
     session --> pre["Preprocessor<br/>StrokePreprocessor"]
     session --> gen["Generator<br/>DiffusersSketchGenerator or FakeGenerator"]
-    session --> eval["Evaluator<br/>NoOpEvaluator"]
+    session --> eval["Evaluator<br/>NoOpEvaluator or ClipEvaluator"]
     session --> store["ExperimentStore<br/>FolderStore or MemoryStore"]
     gen --> models[("models/")]
     suggester --> models
+    eval --> models
     store --> runs[("runs/session folders")]
     cli["cli package<br/>run, rerun, show, benchmark"] --> session
 ```
@@ -238,13 +243,14 @@ The [full call graph](docs/call-graph.html) shows every handler and method. Open
 | [T2I-Adapter sketch](https://huggingface.co/TencentARC/t2iadapter_sketch_sd15v2) | Follows the sketch's lines in the `t2i-adapter` backend, converted once to safetensors by the download script | Apache 2.0 |
 | [LCM-LoRA](https://huggingface.co/latent-consistency/lcm-lora-sdv1-5) | Cuts sampling to 4 steps in `fast` mode | OpenRAIL++ |
 | [Florence-2-base](https://huggingface.co/florence-community/Florence-2-base) | Names the sketched object for prompt suggestions | MIT |
+| [CLIP ViT-B/32](https://huggingface.co/openai/clip-vit-base-patch32) and [CLIP ViT-L/14](https://huggingface.co/openai/clip-vit-large-patch14) | Optional `clip-b32` and `clip-l14` evaluators that score how well each candidate matches the prompt, downloaded only on request, with ViT-B/32 converted once to safetensors | MIT |
 
-The choices are explained in [ADR 0009](docs/decisions/0009-diffusers-backend.md) and [ADR 0019](docs/decisions/0019-offline-prompt-suggestions.md). On an Apple M2 Pro in float16, a 2-candidate round takes about 5 s in `fast` mode and 23 s in `quality` mode. On a laptop CPU, one fast image takes about 100 s.
+The choices are explained in [ADR 0009](docs/decisions/0009-diffusers-backend.md), [ADR 0019](docs/decisions/0019-offline-prompt-suggestions.md), and the [CLIP note](docs/research/model-clip.md). On an Apple M2 Pro in float16, a 2-candidate round takes about 5 s in `fast` mode and 23 s in `quality` mode. On a laptop CPU, one fast image takes about 100 s.
 
 ### Repository layout
 
 ```text
-src/sketchloop/   Library: domain records, capture, preprocessing, backends, session, experiments, cli, app, ui
+src/sketchloop/   Library: domain records, capture, preprocessing, backends, evaluators, session, experiments, cli, app, ui
 tests/            Offline pytest suite, mirroring src/
 scripts/          check.py, download_models.py, dev_ui.py, and the privacy guard
 examples/         Sample sketches and a settings file with every key

@@ -186,6 +186,7 @@ class RoundRecord:
     timings_seconds: Mapping[str, float]  # Duration by stage, holding only stages that ran and were timed
     total_seconds: float | Unavailable  # Capture time plus wall time of run_round until the files were saved
     evaluator: str | None  # Evaluator class name, None when the round failed
+    score_details: Mapping[str, str]  # Model, revision, and meaning of the scores, empty when the evaluator gave none
     scores: Mapping[str, float]  # Score by candidate ID
     selection: SelectionEvent | None  # The person's choice, None when not recorded
     failure: RoundFailure | None  # Why the round failed, None when complete
@@ -223,6 +224,7 @@ class RoundRecord:
         # Copy into read-only views so the recorded values cannot change after the fact.
         object.__setattr__(self, "timings_seconds", MappingProxyType(dict(self.timings_seconds)))
         object.__setattr__(self, "scores", MappingProxyType(dict(self.scores)))
+        object.__setattr__(self, "score_details", MappingProxyType(dict(self.score_details)))
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -27,6 +27,12 @@ class ConstantEvaluator(Evaluator):
         """
         return {candidate.id: 0.5 for candidate in candidates}
 
+    def describe_scores(self) -> Mapping[str, str]:
+        """
+        Say that the score is a fixed test value.
+        """
+        return {"score": "0.5 for every candidate, a test value"}
+
 
 class FirstLoadGenerator(FakeGenerator):
     """

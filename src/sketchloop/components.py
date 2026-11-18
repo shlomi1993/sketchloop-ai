@@ -6,16 +6,17 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Final, TypeAlias
 
-from sketchloop.backends.diffusers import DiffusersSketchGenerator, GenerationMode, TorchPrecision
+from sketchloop.backends.diffusers import DiffusersSketchGenerator, GenerationMode, ModelSource, TorchPrecision
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.backends.t2i_adapter import T2IAdapterSketchGenerator
 from sketchloop.capture import CameraCapture, CaptureSource, FileCapture
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
+from sketchloop.evaluators.clip import CLIP_B32_MODEL, CLIP_L14_MODEL, ClipEvaluator
 from sketchloop.experiments import ExperimentStore, FolderStore
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import Preprocessor, StrokePreprocessor
-from sketchloop.settings import (CaptureSettings, EvaluatorSettings, GeneratorSettings, PreprocessingSettings, Settings,
-                                 SettingsError, StorageSettings, join_choices)
+from sketchloop.settings import (CaptureSettings, GeneratorSettings, PreprocessingSettings, Settings, SettingsError,
+                                 StorageSettings, join_choices)
 
 
 FAKE_BACKEND: Final = "fake"
@@ -24,7 +25,7 @@ NO_RUN_SKETCH_MESSAGE: Final = 'give a sketch file or --camera, or set capture.s
 GeneratorFactory: TypeAlias = Callable[[GeneratorSettings], Generator]
 CaptureFactory: TypeAlias = Callable[[CaptureSettings, Path | None], CaptureSource]
 PreprocessorFactory: TypeAlias = Callable[[PreprocessingSettings], Preprocessor]
-EvaluatorFactory: TypeAlias = Callable[[EvaluatorSettings], Evaluator]
+EvaluatorFactory: TypeAlias = Callable[[Settings], Evaluator]
 StoreFactory: TypeAlias = Callable[[StorageSettings], ExperimentStore]
 
 
@@ -75,12 +76,20 @@ PREPROCESSORS: Final[dict[str, PreprocessorFactory]] = {
     "strokes": lambda settings: StrokePreprocessor()
 }
 EVALUATORS: Final[dict[str, EvaluatorFactory]] = {
-    "none": lambda settings: NoOpEvaluator()
+    "none": lambda settings: NoOpEvaluator(),
+    "clip-b32": lambda settings: ClipEvaluator(CLIP_B32_MODEL, settings.generator.diffusers.models_dir),
+    "clip-l14": lambda settings: ClipEvaluator(CLIP_L14_MODEL, settings.generator.diffusers.models_dir),
 }
 STORES: Final[dict[str, StoreFactory]] = {
     "folder": lambda settings: FolderStore(settings.runs_dir)
 }
 
+
+# Weights by evaluator name, which scripts/download_models.py fetches only for the evaluators asked for.
+EVALUATOR_MODELS: Final[dict[str, ModelSource]] = {
+    "clip-b32": CLIP_B32_MODEL,
+    "clip-l14": CLIP_L14_MODEL,
+}
 
 # Backend names by the adapter name a round recorded, so rerun can recreate the backend.
 RERUNNABLE_BACKENDS: Final[dict[str, str]] = {
@@ -118,11 +127,11 @@ def make_preprocessor(settings: PreprocessingSettings) -> Preprocessor:
     return PREPROCESSORS[settings.name](settings)
 
 
-def make_evaluator(settings: EvaluatorSettings) -> Evaluator:
+def make_evaluator(settings: Settings) -> Evaluator:
     """
-    Create the configured evaluator.
+    Create the configured evaluator, which reads the models folder from the generator settings, without loading any model.
     """
-    return EVALUATORS[settings.name](settings)
+    return EVALUATORS[settings.evaluator.name](settings)
 
 
 def make_store(settings: StorageSettings) -> ExperimentStore:

@@ -114,6 +114,9 @@ def print_round_record(record: RoundRecord, console: Console) -> None:
         console.print("FAKE BACKEND: these images are deterministic noise, not output from a real model.", style="yellow")
 
     console.print(f"Effective: {format_controls(record.iteration.result.effective.controls)}", markup=False, soft_wrap=True)
+    if record.scores:
+        console.print(f"Scores: {record.evaluator}, {format_controls(record.score_details)}", markup=False, soft_wrap=True)
+
     print_candidates(record, console)
     selection = describe_selection(record.iteration, record.selection) if record.selection else "not recorded"
     console.print(f"Selection: {selection}")

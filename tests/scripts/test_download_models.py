@@ -1,14 +1,19 @@
 """
-Tests of the model download script's source list and its one-time conversion of pickled weights to safetensors.
+Tests of the model download script's source lists, evaluator option, and one-time conversion of pickled weights to safetensors.
 """
 
+import huggingface_hub
+import pytest
 import torch
 
 from pathlib import Path
 from safetensors.torch import load_file
 
 from download_models import DOWNLOAD_SOURCES, convert_pickled_weights
+from download_models import main as download_main
+from sketchloop.backends.diffusers import ModelSource
 from sketchloop.backends.t2i_adapter import T2I_ADAPTER_MODEL
+from sketchloop.evaluators.clip import CLIP_B32_MODEL, CLIP_L14_MODEL
 
 
 def test_download_lists_adapter() -> None:
@@ -37,3 +42,50 @@ def test_convert_pickled_weights(tmp_path: Path) -> None:
     converted.write_bytes(b"kept")
     convert_pickled_weights(tmp_path)
     assert converted.read_bytes() == b"kept", "An existing safetensors file must not be converted again"
+
+
+def test_convert_names_transformers_weights(tmp_path: Path) -> None:
+    """
+    A transformers pytorch_model.bin becomes model.safetensors, the name transformers loads.
+    """
+    torch.save({"proj.weight": torch.ones(2, 2)}, tmp_path / "pytorch_model.bin")
+    convert_pickled_weights(tmp_path)
+    assert (tmp_path / "model.safetensors").is_file(), f"Expected model.safetensors, got {sorted(tmp_path.iterdir())}"
+
+
+@pytest.mark.usefixtures("isolated_cwd")
+@pytest.mark.parametrize(("settings_evaluator", "flags", "expected"), [
+    ("none", [], []),
+    ("none", ["--evaluator", "clip-l14"], [CLIP_L14_MODEL]),
+    ("clip-b32", [], [CLIP_B32_MODEL]),
+    ("clip-b32", ["--evaluator", "clip-l14", "--evaluator", "clip-b32"], [CLIP_B32_MODEL, CLIP_L14_MODEL]),
+], ids=["none", "flag", "settings", "both"])
+def test_download_evaluators_on_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings_evaluator: str,
+                                        flags: list[str], expected: list[ModelSource]) -> None:
+    """
+    Evaluator weights are fetched only for the evaluator the settings name and those passed with --evaluator, once each.
+    """
+    requested: list[tuple[str, str, Path]] = []
+
+    def record_download(repo_id: str, *, revision: str, local_dir: Path, allow_patterns: tuple[str, ...]) -> None:
+        """
+        Record the requested repository instead of downloading it.
+        """
+        requested.append((repo_id, revision, local_dir))
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", record_download)
+    config = tmp_path / "sketchloop.toml"
+    settings_lines = ["[generator.diffusers]", 'models_dir = "models"', "[evaluator]", f'name = "{settings_evaluator}"']
+    config.write_text("\n".join(settings_lines), encoding="utf-8")
+    exit_code = download_main(["--config", str(config), *flags])
+
+    # The generation and suggestion models always download, followed by exactly the requested evaluators.
+    repo_ids = [repo_id for repo_id, revision, local_dir in requested]
+    expected_ids = [source.repo_id for source in (*DOWNLOAD_SOURCES, *expected)]
+    assert exit_code == 0, f"The download must succeed, got exit code {exit_code}"
+    assert repo_ids == expected_ids, f"Expected downloads {expected_ids}, got {repo_ids}"
+
+    # Each evaluator lands in its own folder under the configured models folder at its pinned revision.
+    evaluator_downloads = requested[len(DOWNLOAD_SOURCES):]
+    expected_downloads = [(model.repo_id, model.revision, tmp_path / "models" / model.folder) for model in expected]
+    assert evaluator_downloads == expected_downloads, f"Expected {expected_downloads}, got {evaluator_downloads}"

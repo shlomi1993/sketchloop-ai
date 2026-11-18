@@ -11,6 +11,7 @@ from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import load_sketch_file
 from sketchloop.cli import main
 from sketchloop.domain import Guidance, SketchSource
+from sketchloop.evaluation import Evaluator
 from sketchloop.experiments import FolderStore
 from sketchloop.session import SketchSession
 
@@ -54,6 +55,21 @@ def test_show_prints_timings(tmp_path: Path, capsys: pytest.CaptureFixture[str])
     assert "Timings: capture 0.10 s" in output and "total " in output, "show must print the capture and the total"
     assert "(source: webcam), frame age 0.42 s" in output, "show must print the webcam frame age"
     assert "Recorded by an older sketchloop" not in output, "A current round must not get the older-timings note"
+
+
+def test_show_names_what_scored(tmp_path: Path, capsys: pytest.CaptureFixture[str], constant_evaluator: Evaluator) -> None:
+    """
+    show names the evaluator and what its scores mean when a round has scores, and stays silent without them.
+    """
+    raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
+    session = SketchSession(FakeGenerator(), FolderStore(tmp_path / "runs"), constant_evaluator)
+    session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.FILE, n_candidates=2, seed=7)
+    output = show_text(session.folder, capsys)
+    assert "Scores: ConstantEvaluator, score=0.5 for every candidate, a test value" in output, f"Missing score line in {output}"
+
+    # A round without scores prints no score line.
+    unscored = show_text(run_webcam_round(tmp_path / "unscored"), capsys)
+    assert "Scores:" not in unscored, "A round without scores must not print a score line"
 
 
 def test_show_older_session(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

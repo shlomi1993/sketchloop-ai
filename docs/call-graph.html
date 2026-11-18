@@ -163,7 +163,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
     <h2>2 · Runtime: who calls whom, from the page down to disk</h2>
     <figure>
       <div class="scroll">
-        <svg class="d" viewBox="0 0 1100 880" role="img" aria-label="Call graph. Browser events call handlers in ui.py, which call AppController methods, which call SketchSession. SketchSession.run_round calls, in order, the Preprocessor, Generator, Evaluator and ExperimentStore base classes, subclassed by StrokePreprocessor, FakeGenerator or DiffusersSketchGenerator with its T2IAdapterSketchGenerator subclass, NoOpEvaluator, and MemoryStore or FolderStore. FolderStore writes run folders and the diffusers backend reads model weights.">
+        <svg class="d" viewBox="0 0 1100 880" role="img" aria-label="Call graph. Browser events call handlers in ui.py, which call AppController methods, which call SketchSession. SketchSession.run_round calls, in order, the Preprocessor, Generator, Evaluator and ExperimentStore base classes, subclassed by StrokePreprocessor, FakeGenerator or DiffusersSketchGenerator with its T2IAdapterSketchGenerator subclass, NoOpEvaluator or ClipEvaluator, and MemoryStore or FolderStore. FolderStore writes run folders, and the diffusers backend and ClipEvaluator read model weights.">
           <defs>
             <marker id="m-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
             <marker id="m-ahh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahh"/></marker>
@@ -314,6 +314,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <path class="impl" d="M500,650 V614" marker-end="url(#m-ah)"/>
           <path class="impl" d="M455,744 H445 V626 H500"/>
           <path class="impl" d="M715,650 V614" marker-end="url(#m-ah)"/>
+          <path class="impl" d="M670,728 H660 V626 H715"/>
           <path class="impl" d="M930,650 V614" marker-end="url(#m-ah)"/>
           <path class="impl" d="M885,728 H875 V626 H930"/>
 
@@ -334,7 +335,11 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <text class="s" x="552.5" y="772" text-anchor="middle">LCM-LoRA fast mode, lazy load</text>
           <rect class="box" x="670" y="650" width="195" height="44" rx="6"/>
           <text class="n" x="767.5" y="668" text-anchor="middle">NoOpEvaluator</text>
-          <text class="s" x="767.5" y="685" text-anchor="middle">no scores yet, CLIP later</text>
+          <text class="s" x="767.5" y="685" text-anchor="middle">default, gives no scores</text>
+          <rect class="box" x="670" y="706" width="195" height="60" rx="6"/>
+          <text class="n" x="767.5" y="725" text-anchor="middle">ClipEvaluator</text>
+          <text class="s" x="767.5" y="742" text-anchor="middle">clip-b32 or clip-l14, lazy load</text>
+          <text class="s" x="767.5" y="757" text-anchor="middle">image-prompt cosine similarity</text>
           <rect class="box" x="885" y="650" width="195" height="44" rx="6"/>
           <text class="n" x="982.5" y="668" text-anchor="middle">MemoryStore</text>
           <text class="s" x="982.5" y="685" text-anchor="middle">tests, keeps no files</text>
@@ -345,6 +350,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <!-- Row G: files -->
           <path class="edge" d="M552.5,782 V804" marker-end="url(#m-ah)"/>
           <text class="t" x="560" y="798">reads weights</text>
+          <path class="edge" d="M690,766 V784 H660 V834 H654" marker-end="url(#m-ah)"/>
           <rect class="box" x="455" y="806" width="195" height="56" rx="6"/>
           <text class="n" x="552.5" y="828" text-anchor="middle">models/</text>
           <text class="s" x="552.5" y="846" text-anchor="middle">from scripts/download_models.py</text>
@@ -395,7 +401,8 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <tr><td>backends/diffusers.py</td><td>Real model: SD 1.5 + ControlNet scribble, fast and quality modes, float16 or float32</td><td>components.make_generator</td></tr>
           <tr><td>backends/t2i_adapter.py</td><td>Second real model: subclasses the diffusers backend to swap ControlNet for the T2I-Adapter sketch model, sharing its modes, controls, and settings</td><td>components.make_generator</td></tr>
           <tr><td>backends/fake.py</td><td>Deterministic labeled fake backend</td><td>components.make_generator, tests</td></tr>
-          <tr><td>evaluation.py</td><td><code>Evaluator</code> base class and the no-op scorer</td><td>session.py</td></tr>
+          <tr><td>evaluation.py</td><td><code>Evaluator</code> base class, <code>EvaluationError</code>, and the no-op scorer</td><td>session.py</td></tr>
+          <tr><td>evaluators/clip.py</td><td><code>ClipEvaluator</code>: scores each candidate by the cosine similarity between its image and the prompt with CLIP ViT-B/32 or ViT-L/14, loaded lazily, and describes the model, revision, and meaning recorded with the scores</td><td>components.py</td></tr>
           <tr><td>experiments/</td><td>One module each for <code>records</code>, <code>provenance</code> (environment and redacted failures), <code>serialization</code>, <code>stores</code> (<code>FolderStore</code>, <code>MemoryStore</code>), <code>loading</code> with checksums, <code>replay</code> (rerun requests and comparison), <code>hardware</code> (CPU, cores, memory), and <code>benchmark</code> (stage statistics)</td><td>session.py, cli/show.py, cli/rerun.py</td></tr>
           <tr><td>domain.py</td><td>Typed records: <code>ImageRef</code>, <code>Guidance</code>, <code>Iteration</code>, <code>SelectionEvent</code>, errors, and shared enums such as <code>SketchSource</code> and <code>Rotation</code></td><td>everything</td></tr>
           <tr><td>settings.py</td><td>Read <code>sketchloop.toml</code>, apply flag overrides, check types</td><td>cli/arguments.py</td></tr>

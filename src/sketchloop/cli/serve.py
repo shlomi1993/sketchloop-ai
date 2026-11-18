@@ -44,7 +44,7 @@ def make_controller(settings: Settings, console: Console) -> AppController:
     is_real = settings.generator.backend != FAKE_BACKEND
     suggester = FlorenceSuggester(settings.generator.diffusers.models_dir) if is_real else TemplateSuggester()
     threading.Thread(target=warm_up_suggester, args=(suggester, console), daemon=True).start()
-    controller = AppController(generator, store, make_evaluator(settings.evaluator),
+    controller = AppController(generator, store, make_evaluator(settings),
                                preprocessor=make_preprocessor(settings.preprocessing), suggester=suggester,
                                generator_setup_seconds=setup_seconds)
     limit, candidates = controller.max_candidates, settings.ui.candidates

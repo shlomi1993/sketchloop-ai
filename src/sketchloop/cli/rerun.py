@@ -103,7 +103,7 @@ def rerun_round(args: argparse.Namespace, console: Console) -> None:
     # Run one round in a new linked session with the recorded settings, without asking for a selection or timing a capture.
     request = rebuild_request(record, generator.capabilities)
     link = RerunLink(session_id=original.session.session_id, round_number=record.number, iteration_id=record.iteration.id)
-    session = SketchSession(generator, store, make_evaluator(settings.evaluator), rerun_of=link,
+    session = SketchSession(generator, store, make_evaluator(settings), rerun_of=link,
                             generator_setup_seconds=setup_seconds)
     outcome = session.run_round(record.raw_sketch, raw_payload, request.guidance, source=record.source,
                                 rotation=record.rotation, use_raw=record.use_raw, n_candidates=request.n_candidates,

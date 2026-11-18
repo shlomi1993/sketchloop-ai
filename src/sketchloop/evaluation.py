@@ -5,7 +5,13 @@ Evaluator interface for optional candidate scoring, kept separate from generatio
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 
-from sketchloop.domain import Candidate, GenerationRequest
+from sketchloop.domain import Candidate, GenerationRequest, SketchLoopError
+
+
+class EvaluationError(SketchLoopError, RuntimeError):
+    """
+    An evaluator cannot load its model or fails while scoring.
+    """
 
 
 class Evaluator(ABC):
@@ -28,6 +34,12 @@ class Evaluator(ABC):
             Mapping[str, float]: Score by candidate ID, empty when the evaluator gives no scores.
         """
         ...
+
+    def describe_scores(self) -> Mapping[str, str]:
+        """
+        Say which model produced the scores and what they measure, for the round record, which evaluators without scores skip.
+        """
+        return {}
 
 
 class NoOpEvaluator(Evaluator):

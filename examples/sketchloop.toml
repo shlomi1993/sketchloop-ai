@@ -19,7 +19,7 @@ rotation = 0  # 0, 90, 180, or 270, for sketchloop run
 raw = false
 
 [evaluator]
-name = "none"
+name = "none"  # none, clip-b32, or clip-l14, and scripts/download_models.py fetches the CLIP model named here
 
 [storage]
 store = "folder"

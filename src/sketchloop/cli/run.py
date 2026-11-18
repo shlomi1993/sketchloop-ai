@@ -231,6 +231,6 @@ def run_session(args: argparse.Namespace, console: Console) -> None:
     capture_source = make_capture_source(settings.capture, args.sketch)
     sketch = capture_source.capture()
     generator, setup_seconds = make_configured_generator(settings.generator, console)
-    session = SketchSession(generator, store, make_evaluator(settings.evaluator),
+    session = SketchSession(generator, store, make_evaluator(settings),
                             preprocessor=make_preprocessor(settings.preprocessing), generator_setup_seconds=setup_seconds)
     TerminalSession(session, capture_source, console, settings=settings, prompt=args.prompt, sketch=sketch).run()

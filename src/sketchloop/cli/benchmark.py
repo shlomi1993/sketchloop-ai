@@ -71,7 +71,7 @@ def run_benchmark(args: argparse.Namespace, console: Console) -> None:
     first_capture = capture_source.capture()
     generator, setup_seconds = make_configured_generator(settings.generator, console)
     plan = BenchmarkPlan(warmup_rounds=args.warmup, measured_rounds=args.rounds)
-    session = SketchSession(generator, store, make_evaluator(settings.evaluator),
+    session = SketchSession(generator, store, make_evaluator(settings),
                             preprocessor=make_preprocessor(settings.preprocessing), benchmark=plan,
                             generator_setup_seconds=setup_seconds)
 

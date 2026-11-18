@@ -154,7 +154,7 @@ def round_to_dict(record: RoundRecord) -> dict[str, object]:
     """
     iteration, selection, failure = record.iteration, record.selection, record.failure
     steps = [{"name": step.name, "params": dict(step.params)} for step in record.steps]
-    evaluation = {"evaluator": record.evaluator, "scores": dict(record.scores)}
+    evaluation = {"evaluator": record.evaluator, "score_details": dict(record.score_details), "scores": dict(record.scores)}
     selection_data = {
         "id": selection.id,
         "candidate_ids": list(selection.selected_candidate_ids),
@@ -234,7 +234,8 @@ def round_from_dict(data: Mapping[str, object]) -> RoundRecord:
                        source=source, frame_age_seconds=frame_age, use_raw=input_data["use_raw"],
                        rotation=input_data["rotation"], steps=steps, request=request, iteration=iteration,
                        timings_seconds=data["timings_seconds"], total_seconds=total, evaluator=evaluation.get("evaluator"),
-                       scores=evaluation.get("scores", {}), selection=selection, failure=failure)
+                       score_details=evaluation.get("score_details", {}), scores=evaluation.get("scores", {}),
+                       selection=selection, failure=failure)
 
 
 def hardware_to_dict(hardware: Hardware | Unavailable) -> dict[str, object]:

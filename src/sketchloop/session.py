@@ -210,7 +210,7 @@ class SketchSession:
             timings[RoundStage.EVALUATION] = time.perf_counter() - started
             record = draft(status=RoundStatus.COMPLETE, steps=steps, request=request, iteration=iteration,
                            timings_seconds=timings, total_seconds=measure_total(), evaluator=type(self.evaluator).__name__,
-                           scores=scores, selection=None, failure=None)
+                           score_details=self.evaluator.describe_scores(), scores=scores, selection=None, failure=None)
 
             # Store and time the raw and processed sketches and the candidates, then write the record once with the total.
             stage = RoundStage.SAVING
@@ -224,7 +224,7 @@ class SketchSession:
             # Keep a failed record in the history even when it cannot be saved, so the attempt stays visible.
             sketches = {raw_sketch.path: raw_payload} | ({request.sketch.path: sketch_payload} if request else {})
             failed = draft(status=RoundStatus.FAILED, steps=steps, request=request, iteration=None, timings_seconds=timings,
-                           total_seconds=measure_total(), evaluator=None, scores={}, selection=None,
+                           total_seconds=measure_total(), evaluator=None, score_details={}, scores={}, selection=None,
                            failure=describe_failure(stage, error))
             self.records.append(failed)
 
