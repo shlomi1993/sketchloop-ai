@@ -14,7 +14,7 @@ from sketchloop.evaluation import Evaluator, NoOpEvaluator
 from sketchloop.evaluators.clip import CLIP_B32_MODEL, CLIP_L14_MODEL, ClipEvaluator
 from sketchloop.experiments import ExperimentStore, FolderStore
 from sketchloop.generation import Generator
-from sketchloop.preprocessing import Preprocessor, StrokePreprocessor
+from sketchloop.preprocessing import MinimalPreprocessor, Preprocessor, StrokePreprocessor
 from sketchloop.settings import (CaptureSettings, GeneratorSettings, PreprocessingSettings, Settings, SettingsError,
                                  StorageSettings, join_choices)
 
@@ -73,7 +73,8 @@ CAPTURE_SOURCES: Final[dict[str, CaptureFactory]] = {
     "camera": lambda settings, sketch_file: CameraCapture(settings.camera_index),
 }
 PREPROCESSORS: Final[dict[str, PreprocessorFactory]] = {
-    "strokes": lambda settings: StrokePreprocessor()
+    "strokes": lambda settings: StrokePreprocessor(),
+    "minimal": lambda settings: MinimalPreprocessor(),
 }
 EVALUATORS: Final[dict[str, EvaluatorFactory]] = {
     "none": lambda settings: NoOpEvaluator(),

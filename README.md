@@ -30,7 +30,7 @@ flowchart LR
 ## Features
 
 - **Sketch input:** a live webcam, an uploaded image, or a PNG or JPEG file.
-- **Preprocessing:** finds the paper, corrects perspective and tilt, crops to the strokes, normalizes contrast, and resizes to 512 px. The raw image is always kept.
+- **Preprocessing:** finds the paper, corrects perspective and tilt, crops to the strokes, normalizes contrast, and resizes to 512 px. A `minimal` preprocessor only converts, rotates, and resizes, for clean scans and digital drawings. The raw image is always kept.
 - **Real generation:** Stable Diffusion 1.5 with ControlNet scribble, in a `fast` mode (LCM-LoRA, 4 steps) or a `quality` mode (20 steps), on CUDA, Apple MPS, or the CPU.
 - **Offline prompt suggestions:** a local Florence-2 model names the sketched object and proposes style prompts. No cloud service is involved.
 - **Human choice:** candidates are only suggestions. The person records an explicit selection, or none, each round.

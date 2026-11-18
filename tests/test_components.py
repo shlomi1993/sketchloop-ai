@@ -7,10 +7,12 @@ import pytest
 from pathlib import Path
 
 from sketchloop.backends.diffusers import ModelSource
-from sketchloop.components import EVALUATOR_MODELS, EVALUATORS, check_component_names, make_evaluator
+from sketchloop.components import EVALUATOR_MODELS, EVALUATORS, check_component_names, make_evaluator, make_preprocessor
 from sketchloop.evaluation import NoOpEvaluator
 from sketchloop.evaluators.clip import CLIP_B32_MODEL, CLIP_L14_MODEL, ClipEvaluator
-from sketchloop.settings import DiffusersSettings, EvaluatorSettings, GeneratorSettings, Settings, SettingsError
+from sketchloop.preprocessing import MinimalPreprocessor, StrokePreprocessor
+from sketchloop.settings import (DiffusersSettings, EvaluatorSettings, GeneratorSettings, PreprocessingSettings, Settings,
+                                 SettingsError)
 
 
 def make_settings(evaluator_name: str, models_dir: Path) -> Settings:
@@ -48,3 +50,13 @@ def test_unknown_evaluator_name_refused(tmp_path: Path) -> None:
     check_component_names(make_settings("clip-l14", tmp_path), "sketchloop.toml")
     with pytest.raises(SettingsError, match='evaluator.name must be one of none, clip-b32, or clip-l14, got "clip"'):
         check_component_names(make_settings("clip", tmp_path), "sketchloop.toml")
+
+
+@pytest.mark.parametrize(("name", "expected_type"), [("strokes", StrokePreprocessor), ("minimal", MinimalPreprocessor)])
+def test_preprocessors_registered(name: str, expected_type: type) -> None:
+    """
+    Each preprocessor name in the settings builds its preprocessor.
+    """
+    preprocessor = make_preprocessor(PreprocessingSettings(name=name))
+    assert isinstance(preprocessor, expected_type), f"{name} built {type(preprocessor).__name__}"
+

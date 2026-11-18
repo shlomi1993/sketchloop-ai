@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from sketchloop.preprocessing import preprocess_sketch
+from sketchloop.preprocessing import preprocess_minimally, preprocess_sketch
 
 
 def make_noisy_scene() -> np.ndarray:
@@ -132,3 +132,24 @@ def test_noisy_capture() -> None:
     # Few dark pixels remain, so the hand and tablecloth are gone.
     dark_share = len(dark_rows) / processed.size
     assert dark_share < 0.15, f"Only thin strokes may remain, not the hand, got {dark_share:.0%} dark pixels"
+
+
+def test_minimal_preprocessing_keeps_the_whole_drawing() -> None:
+    """
+    The minimal preprocessor turns, converts, and resizes the whole image without finding the paper or cropping.
+    """
+    page = np.full((600, 900), 210, dtype=np.uint8)
+    cv2.rectangle(page, (500, 100), (700, 200), 30, 4)
+    _, encoded = cv2.imencode(".png", page)
+
+    result = preprocess_minimally(encoded.tobytes(), rotation=90)
+    processed = cv2.imdecode(np.frombuffer(result.payload, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+
+    # Only the grayscale, rotate, and resize steps are recorded, with the rotation applied.
+    step_names = [step.name for step in result.steps]
+    assert step_names == ["grayscale", "rotate", "resize"], f"Unexpected steps {step_names}"
+    assert result.steps[1].params == {"degrees_clockwise": 90}, f"Unexpected rotation {result.steps[1].params}"
+
+    # The whole page is kept, turned upright, so the long side is now the height.
+    assert processed.shape == (512, 341), f"Expected the uncropped page turned and resized, got {processed.shape}"
+

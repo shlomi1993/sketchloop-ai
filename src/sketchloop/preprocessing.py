@@ -516,6 +516,30 @@ def preprocess_sketch(payload: bytes, rotation: int = Rotation.DEG_000) -> Prepr
     return PreprocessedSketch(image=image, payload=processed, steps=tuple(steps))
 
 
+def preprocess_minimally(payload: bytes, rotation: int = Rotation.DEG_000) -> PreprocessedSketch:
+    """
+    Turn an already clean drawing upright, in grayscale, and resized to 512 px, without finding the paper or cropping.
+
+    Args:
+        payload (bytes): Encoded raw sketch image.
+        rotation (int, optional): Clockwise rotation in degrees, one of 0, 90, 180, or 270. Defaults to 0.
+
+    Returns:
+        PreprocessedSketch: The processed image reference, PNG bytes, and applied steps.
+    """
+    if rotation not in ROTATE_CODES:
+        raise ValueError(f"Rotation {rotation} is not supported. Use 0, 90, 180, or 270 degrees clockwise.")
+
+    resized, resize_params = resize_long_side(rotate_image(decode_grayscale(payload), rotation))
+    steps = (
+        PreprocessingStep(name="grayscale", params={}),
+        PreprocessingStep(name="rotate", params={"degrees_clockwise": rotation}),
+        PreprocessingStep(name="resize", params=resize_params),
+    )
+    image, processed = encode_processed_sketch(resized)
+    return PreprocessedSketch(image=image, payload=processed, steps=steps)
+
+
 class Preprocessor(ABC):
     """
     Prepares a raw sketch for generation and records each applied step with the parameters it used.
@@ -546,3 +570,15 @@ class StrokePreprocessor(Preprocessor):
         Preprocess the sketch with preprocess_sketch.
         """
         return preprocess_sketch(payload, rotation)
+
+
+class MinimalPreprocessor(Preprocessor):
+    """
+    Preprocessor for clean drawings, such as scans or digital uploads, that only converts, rotates, and resizes.
+    """
+
+    def preprocess(self, payload: bytes, rotation: int) -> PreprocessedSketch:
+        """
+        Preprocess the sketch with preprocess_minimally.
+        """
+        return preprocess_minimally(payload, rotation)

@@ -14,7 +14,7 @@ source = "camera"  # file or camera, for sketchloop run
 camera_index = 0
 
 [preprocessing]
-name = "strokes"
+name = "strokes"  # strokes for paper photos, or minimal for clean scans and digital drawings
 rotation = 0  # 0, 90, 180, or 270, for sketchloop run
 raw = false
 
