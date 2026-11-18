@@ -16,9 +16,9 @@ The original proposal is private and is not needed to develop this project. Neve
 - Keep capture, preprocessing, generation, evaluation, human selection, orchestration, persistence, and UI separate.
 - Start with manual triggering and one real generative model. A fake backend supports tests but does not satisfy the working-system milestone.
 - Preserve the source sketch, effective configuration, outputs, timings, and iteration lineage. Never claim exact replay when a backend cannot guarantee it.
-- Human selection remains explicit. Similarity scores are research signals, not proof of design quality or satisfaction of functional constraints.
+- Human choice stays with the person. Explicit selections and acceptance inferred from what the person draws next are recorded as different things. Inferred acceptance and similarity scores are research signals, not proof of design quality or satisfaction of functional constraints.
 - Default checks must work without a camera, GPU, network, model weights, or credentials. Hardware/model tests are separate and explicitly invoked.
-- Continuous generation, collaborative use, personalization, and participant studies are extensions, not MVP blockers.
+- The primary objective is a system that supports the guided-sketching user study in `docs/decisions/0021-guided-sketching-and-user-study.md`. Continuous generation, collaborative use, and personalization are extensions, not blockers.
 
 ## Work cycle
 

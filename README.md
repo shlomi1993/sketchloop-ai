@@ -274,20 +274,23 @@ The original research proposal is private and deliberately excluded from Git. Ev
 
 ## Project status
 
-| Task | Outcome | Status |
+| Task | Description | Status |
 | --- | --- | --- |
-| T01 | Typed contracts, the fake backend, and the `sketchloop` command | ✅ Done |
-| T02 | Image and webcam input with preprocessing | ✅ Done |
-| T03 | Real generation with SD 1.5 and ControlNet scribble | ✅ Done |
-| T04 | Several manual rounds in one session | ✅ Done |
-| T05 | Session records, `show`, and `rerun` | ✅ Done |
-| T06 | Local browser page | ✅ Done |
-| T07 | Replaceable components and `sketchloop.toml` | ✅ Done, tested offline |
-| T08 | Stage timings, hardware records, and `benchmark` | ✅ Done |
-| T09 | Full demo and evaluation report | ⬜ Planned |
-| T10 | Contingency | ⬜ Planned |
+| T01 | Set up the environment and agents, design the architecture | ✅ Done |
+| T02 | Develop webcam capture and sketch preprocessing | ✅ Done |
+| T03 | Integrate a sketch-conditioned image generation model | ✅ Done |
+| T04 | Support repeated generate-and-select rounds per session | ✅ Done |
+| T05 | Add experiment records, inspection, and replay | ✅ Done |
+| T06 | Develop a local browser user interface | ✅ Done |
+| T07 | Make components replaceable through a settings file | ✅ Done, tested offline |
+| T08 | Measure performance and evaluate the whole system | ✅ Done |
+| T09 | Develop next-stroke suggestions with implicit acceptance | ⬜ Planned |
+| T10 | Develop a study mode with data export | ⬜ Planned |
+| T11 | Conduct the user study with participants | ⬜ Planned |
+| T12 | Write the final project documentation | ⬜ Planned |
+| T13 | Reserve time for delayed or unfinished work | ⬜ Planned |
 
-Page improvements from the owner's feedback are tracked as U1 to U4 in the [roadmap](docs/ROADMAP.md). The current state and next action are in [STATUS.md](docs/STATUS.md).
+After the first supervisor meeting, T09 to T11 come first. See the [meeting notes](docs/meetings/2026-11-supervisor-meeting-1.md) and the [roadmap](docs/ROADMAP.md), which also tracks page improvements U1 to U4. The current state and next action are in [STATUS.md](docs/STATUS.md).
 
 ## Documentation
 

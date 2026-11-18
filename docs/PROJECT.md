@@ -42,6 +42,18 @@ Acceptance examples operationalize the proposal; they are repository planning de
 | R09 | Evaluation (pp. 4-5, §5) | Verify the full capture-to-display flow, runtime measurements, record integrity, and reconstruction of a previous run. Report conditions and limitations. Broader comparisons and user evaluation depend on resources and progress. |
 | R10 | Reusable research deliverables (p. 5, §6) | Deliver library, working camera-based system, model/component integration layer, experiment management, UI, technical documentation, usage examples, and demonstrations supporting future research. |
 
+## Supervisor requirements
+
+After the first supervisor meeting ([notes](meetings/2026-11-supervisor-meeting-1.md), [ADR 0021](decisions/0021-guided-sketching-and-user-study.md)), the primary objective is a system that supports a user study of guided sketching: four design tasks, five participants, each task with and without the system, and 40 drawings for expert evaluation. The system should guide the person through the design rather than produce it. These requirements come from that meeting, not from the proposal. They refine R03 to R05 and R09, and R01 to R10 still apply. [ROADMAP.md](ROADMAP.md) plans them as T09 to T11.
+
+| ID | Requirement | Observable acceptance |
+| --- | --- | --- |
+| S01 | Guided sketching | On request, the system shows visual suggestions for continuing the drawing toward the stated goal, such as wheels for a car, overlaid on the live sketch. It never replaces the physical sketch or presents a finished design as the result. |
+| S02 | Implicit acceptance | Each suggestion is recorded as followed, not followed, or undetermined, inferred from the strokes drawn after it, with the method, score, and threshold kept so the inference can be recomputed. It is recorded separately from explicit selections. |
+| S03 | Study conditions | A study session records a pseudonymous participant code, the design task, and the condition, with or without AI. Without AI, the same capture and records run with suggestions turned off. |
+| S04 | Process and outcome data | The drawing is captured over time during each task, each task ends with a final drawing, and all drawings can be exported for expert evaluation without revealing participant or condition. |
+| S05 | Local study data | Participant data, captures, and exports stay in ignored local storage, identified only by pseudonymous codes. |
+
 ## Scope boundaries
 
 The required outcome is a working, documented research system with one real model and manual iterations, plus extensible components and experiment reconstruction. No specific model, camera, UI framework, hosting service, latency target, or compute budget is mandated. Do not infer these from the bibliography.
@@ -58,6 +70,8 @@ The following are optional future extensions (p. 6, §8):
 - Multiple people collaborating in one design process.
 
 The core should support later investigations of sketch detail, model differences, user characteristics, and response latency (p. 4, §4). This does not require collecting participant demographics now.
+
+The five-participant study in S03 is no longer an extension but the primary objective. Comparing groups such as professional artists and inexperienced participants remains an extension, planned as the thesis extension in [ROADMAP.md](ROADMAP.md).
 
 ## Delivery and evaluation method
 

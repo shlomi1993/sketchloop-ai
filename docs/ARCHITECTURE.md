@@ -67,4 +67,4 @@ The first model decision must cover sketch conditioning, visual quality, support
 
 ## Expansion seams
 
-Preserve explicit iteration identity and stage timing now so later streaming work can add scheduling, cancellation, backpressure, and stale-result suppression. Do not build a streaming service before the manual baseline works. Additional evaluators, models, and presentation modes should reuse the same core. Formal multi-user support and participant identity systems are deferred.
+Preserve explicit iteration identity and stage timing now so later streaming work can add scheduling, cancellation, backpressure, and stale-result suppression. Do not build a streaming service before the manual baseline works. Additional evaluators, models, and presentation modes should reuse the same core. Formal multi-user support and participant identity systems are deferred. The user study ([ADR 0021](decisions/0021-guided-sketching-and-user-study.md)) adds a suggestion component beside the generator, behind its own abstract base class, and a study mode that identifies participants only by pseudonymous codes.
