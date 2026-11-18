@@ -19,6 +19,9 @@ from sketchloop.settings import (CaptureSettings, EvaluatorSettings, Preprocessi
 NO_RUN_SKETCH_MESSAGE: Final = 'give a sketch file or --camera, or set capture.source = "camera" in the settings file'
 
 CaptureFactory: TypeAlias = Callable[[CaptureSettings, Path | None], CaptureSource]
+PreprocessorFactory: TypeAlias = Callable[[PreprocessingSettings], Preprocessor]
+EvaluatorFactory: TypeAlias = Callable[[EvaluatorSettings], Evaluator]
+StoreFactory: TypeAlias = Callable[[StorageSettings], ExperimentStore]
 
 
 def make_file_capture(settings: CaptureSettings, sketch_file: Path | None) -> CaptureSource:
@@ -38,39 +41,20 @@ def make_file_capture(settings: CaptureSettings, sketch_file: Path | None) -> Ca
     return FileCapture(sketch_file)
 
 
-def make_camera_capture(settings: CaptureSettings, sketch_file: Path | None) -> CaptureSource:
-    """
-    Create a source that captures from the configured webcam, ignoring any sketch file.
-    """
-    return CameraCapture(settings.camera_index)
-
-
-def make_stroke_preprocessor(settings: PreprocessingSettings) -> Preprocessor:
-    """
-    Create the default stroke preprocessor.
-    """
-    return StrokePreprocessor()
-
-
-def make_no_op_evaluator(settings: EvaluatorSettings) -> Evaluator:
-    """
-    Create the evaluator that gives no scores.
-    """
-    return NoOpEvaluator()
-
-
-def make_folder_store(settings: StorageSettings) -> ExperimentStore:
-    """
-    Create the folder store under the configured runs folder.
-    """
-    return FolderStore(settings.runs_dir)
-
-
 # Components by the name a settings file uses. Tests and library callers may add entries, and nothing is discovered.
-CAPTURE_SOURCES: Final[dict[str, CaptureFactory]] = {"file": make_file_capture, "camera": make_camera_capture}
-PREPROCESSORS: Final[dict[str, Callable[[PreprocessingSettings], Preprocessor]]] = {"strokes": make_stroke_preprocessor}
-EVALUATORS: Final[dict[str, Callable[[EvaluatorSettings], Evaluator]]] = {"none": make_no_op_evaluator}
-STORES: Final[dict[str, Callable[[StorageSettings], ExperimentStore]]] = {"folder": make_folder_store}
+CAPTURE_SOURCES: Final[dict[str, CaptureFactory]] = {
+    "file": make_file_capture,
+    "camera": lambda settings, sketch_file: CameraCapture(settings.camera_index),
+}
+PREPROCESSORS: Final[dict[str, PreprocessorFactory]] = {
+    "strokes": lambda settings: StrokePreprocessor()
+}
+EVALUATORS: Final[dict[str, EvaluatorFactory]] = {
+    "none": lambda settings: NoOpEvaluator()
+}
+STORES: Final[dict[str, StoreFactory]] = {
+    "folder": lambda settings: FolderStore(settings.runs_dir)
+}
 
 
 def make_capture_source(settings: CaptureSettings, sketch_file: Path | None) -> CaptureSource:

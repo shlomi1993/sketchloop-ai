@@ -64,7 +64,7 @@ def launches(monkeypatch: pytest.MonkeyPatch) -> list[tuple[AppController, dict[
     ("rerun", ["--config", "missing.toml"], None, re.escape("Settings file missing.toml not found. Check the --config path.")),
     ("ui", ["--capture-interval", "inf"], None, r"must be greater than 0 seconds, got inf"),
     ("ui", [], "[ui]\ncapture_interval_seconds = inf\n", r"capture_interval_seconds must be greater than 0, got inf\."),
-    ("run", [], "seed = 7\n", re.escape("sketchloop.toml: seed must be inside a section such as [run]."))
+    ("run", [], "seed = 7\n", re.escape("sketchloop.toml: unknown section [seed]. Use generator, "))
 ], ids=["candidates-0", "negative-seed", "ui-candidates-0", "mode-without-diffusers", "precision-without-diffusers",
         "misspelled-precision", "misspelled-backend", "boolean-candidates",
         "unknown-key", "broken-toml", "rotation-with-raw", "memory-store", "missing-config", "infinite-interval-flag",

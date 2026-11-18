@@ -7,36 +7,22 @@ import tomllib
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
-from enum import StrEnum
 from pathlib import Path
-from typing import Final, TypeVar
+from typing import Final, TypeVar, get_args
 
 from sketchloop.domain import GenerationBackend, Rotation, SketchLoopError
 
 
 SETTINGS_FILE_NAME: Final = "sketchloop.toml"
-SECTIONS: Final = ("generator", "capture", "preprocessing", "evaluator", "storage", "run", "ui")
-SettingsRecord = TypeVar("SettingsRecord")  # A settings dataclass, replaced by a copy of the same type
+Record = TypeVar("Record")  # A settings dataclass, replaced by a copy of the same type
 
-
-class SettingKind(StrEnum):
-    """
-    Kind of TOML value a settings key takes.
-    """
-    TEXT = "text"
-    PATH = "path"
-    INTEGER = "integer"
-    NUMBER = "number"
-    BOOLEAN = "boolean"
-
-
-# How a wrong-type message names each kind of value.
-KIND_DESCRIPTIONS: Final[dict[SettingKind, str]] = {
-    SettingKind.TEXT: "text",
-    SettingKind.PATH: "non-empty text",
-    SettingKind.INTEGER: "an integer",
-    SettingKind.NUMBER: "a number",
-    SettingKind.BOOLEAN: "true or false",
+# Smallest accepted value of each integer key that has one.
+MINIMUMS: Final[dict[str, int]] = {
+    "capture.camera_index": 0,
+    "run.candidates": 1,
+    "run.seed": 0,
+    "ui.candidates": 1,
+    "ui.seed": 0,
 }
 
 
@@ -44,41 +30,6 @@ class SettingsError(SketchLoopError, ValueError):
     """
     A settings file or a combination of settings is invalid.
     """
-
-
-@dataclass(frozen=True, slots=True)
-class SettingRule:
-    """
-    The type and allowed values of one key in the settings file.
-    """
-    kind: SettingKind  # Kind of TOML value the key takes
-    minimum: int | None = None  # Smallest accepted integer, None for no limit
-    choices: tuple[int, ...] = ()  # Accepted integers, empty for any
-
-
-# Every key the settings file accepts, by dotted name. Component names are checked against the registries later.
-RULES: Final[dict[str, SettingRule]] = {
-    "generator.backend": SettingRule(SettingKind.TEXT),
-    "generator.diffusers.mode": SettingRule(SettingKind.TEXT),
-    "generator.diffusers.precision": SettingRule(SettingKind.TEXT),
-    "generator.diffusers.models_dir": SettingRule(SettingKind.PATH),
-    "capture.source": SettingRule(SettingKind.TEXT),
-    "capture.camera_index": SettingRule(SettingKind.INTEGER, minimum=0),
-    "preprocessing.name": SettingRule(SettingKind.TEXT),
-    "preprocessing.rotation": SettingRule(SettingKind.INTEGER, choices=tuple(Rotation)),
-    "preprocessing.raw": SettingRule(SettingKind.BOOLEAN),
-    "evaluator.name": SettingRule(SettingKind.TEXT),
-    "storage.store": SettingRule(SettingKind.TEXT),
-    "storage.runs_dir": SettingRule(SettingKind.PATH),
-    "run.candidates": SettingRule(SettingKind.INTEGER, minimum=1),
-    "run.seed": SettingRule(SettingKind.INTEGER, minimum=0),
-    "ui.candidates": SettingRule(SettingKind.INTEGER, minimum=1),
-    "ui.seed": SettingRule(SettingKind.INTEGER, minimum=0),
-    "ui.capture_interval_seconds": SettingRule(SettingKind.NUMBER),
-}
-
-# Tables nested inside a section, such as [generator.diffusers].
-SUBTABLES: Final = ("generator.diffusers",)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -208,161 +159,112 @@ def find_settings_file(explicit: Path | None) -> Path | None:
     return default_file if default_file.is_file() else None
 
 
-def list_table_keys(table: str) -> list[str]:
+def describe_type(value_type: type) -> str:
     """
-    List the keys and subtables a table accepts, in schema order.
+    Name the kind of value a field type takes, for a wrong-type message.
     """
-    names = [key.removeprefix(f"{table}.").split(".")[0] for key in RULES if key.startswith(f"{table}.")]
-    return list(dict.fromkeys(names))
+    names = {bool: "true or false", int: "an integer", float: "a number", Path: "non-empty text", str: "text"}
+    return names[value_type]
 
 
-def check_value(key: str, value: object, label: str) -> None:
+def find_value_type(field_type: object) -> type:
     """
-    Check one value's type and range against its rule.
+    Return the type a field holds, ignoring None in an optional field such as int | None.
+    """
+    return next(value_type for value_type in (get_args(field_type) or (field_type,)) if value_type is not type(None))
+
+
+def check_range(key: str, value: object, label: str) -> None:
+    """
+    Check a value against the limits of its key, for the keys that have them.
+
+    Args:
+        key (str): Dotted key, such as run.candidates.
+        value (object): Value read from the file, already of the right type.
+        label (str): Settings file name used in messages.
+    """
+    if key in MINIMUMS and value < MINIMUMS[key]:
+        raise SettingsError(f"{label}: {key} must be at least {MINIMUMS[key]}, got {value}.")
+
+    if key == "preprocessing.rotation" and value not in tuple(Rotation):
+        raise SettingsError(f"{label}: {key} must be one of {join_choices(tuple(Rotation))}, got {value}.")
+
+    if key == "ui.capture_interval_seconds" and not (value > 0 and math.isfinite(value)):
+        raise SettingsError(f"{label}: {key} must be greater than 0, got {value}.")
+
+
+def convert_value(key: str, value: object, value_type: type, folder: Path, label: str) -> object:
+    """
+    Check one value's type and range, and convert it to the field's type.
 
     Args:
         key (str): Dotted key, such as run.candidates.
         value (object): Value read from the file.
-        label (str): Settings file name used in messages.
-    """
-    rule = RULES[key]
-    is_integer = isinstance(value, int) and not isinstance(value, bool)
-    type_checks = {
-        SettingKind.TEXT: isinstance(value, str),
-        SettingKind.PATH: isinstance(value, str) and bool(value.strip()),
-        SettingKind.INTEGER: is_integer,
-        SettingKind.NUMBER: is_integer or isinstance(value, float),
-        SettingKind.BOOLEAN: isinstance(value, bool),
-    }
-
-    # Refuse the wrong kind of value, since TOML booleans and integers are distinct.
-    if not type_checks[rule.kind]:
-        raise SettingsError(f"{label}: {key} must be {KIND_DESCRIPTIONS[rule.kind]}, got {format_toml_value(value)}.")
-
-    # Refuse a value outside the allowed set or range.
-    if rule.choices and value not in rule.choices:
-        raise SettingsError(f"{label}: {key} must be one of {join_choices(rule.choices)}, got {format_toml_value(value)}.")
-
-    if rule.minimum is not None and value < rule.minimum:
-        raise SettingsError(f"{label}: {key} must be at least {rule.minimum}, got {value}.")
-
-    if rule.kind == SettingKind.NUMBER and not (value > 0 and math.isfinite(value)):
-        raise SettingsError(f"{label}: {key} must be greater than 0, got {value}.")
-
-
-def flatten_table(table: Mapping[str, object], prefix: str, label: str) -> dict[str, object]:
-    """
-    Check a table's keys and values and return them by dotted key, descending into subtables.
-
-    Args:
-        table (Mapping[str, object]): Parsed TOML table.
-        prefix (str): Dotted name of the table, such as generator.
+        value_type (type): Type the field holds.
+        folder (Path): Folder of the settings file, which relative paths are resolved against.
         label (str): Settings file name used in messages.
 
     Returns:
-        dict[str, object]: Checked values by dotted key.
+        object: The value as the field holds it.
     """
+    # Refuse the wrong kind of value, since TOML booleans are not integers and paths must not be empty.
+    is_integer = isinstance(value, int) and not isinstance(value, bool)
+    type_matches = {
+        bool: isinstance(value, bool),
+        int: is_integer,
+        float: is_integer or isinstance(value, float),
+        Path: isinstance(value, str) and bool(value.strip()),
+        str: isinstance(value, str),
+    }
+    if not type_matches[value_type]:
+        raise SettingsError(f"{label}: {key} must be {describe_type(value_type)}, got {format_toml_value(value)}.")
+
+    check_range(key, value, label)
+
+    # Resolve a relative folder against the file's folder, so the file works from any working folder.
+    if value_type is Path:
+        return folder / value
+
+    return float(value) if value_type is float else value
+
+
+def build_record(record_type: type[Record], table: object, prefix: str, folder: Path, label: str) -> Record:
+    """
+    Build a settings record from a TOML table, checking every key against the record's fields.
+
+    Args:
+        record_type (type[Record]): Settings dataclass to build.
+        table (object): Parsed TOML value, which must be a table.
+        prefix (str): Dotted name of the table, such as generator.
+        folder (Path): Folder of the settings file.
+        label (str): Settings file name used in messages.
+
+    Returns:
+        Record: The record, with defaults for every key the table leaves out.
+    """
+    if not isinstance(table, dict):
+        raise SettingsError(f"{label}: {prefix} must be a table such as [{prefix}], got {format_toml_value(table)}.")
+
+    field_types = {field.name: field.type for field in fields(record_type)}
     values: dict[str, object] = {}
     for name, value in table.items():
-        key = f"{prefix}.{name}"
+        key = f"{prefix}.{name}" if prefix else name
 
-        # Descend into a known subtable, which must be a table itself.
-        if key in SUBTABLES:
-            if not isinstance(value, dict):
-                raise SettingsError(f"{label}: {key} must be a table such as [{key}], got {format_toml_value(value)}.")
+        # Refuse a misspelled section or key, listing the ones this table accepts.
+        if name not in field_types and not prefix:
+            raise SettingsError(f"{label}: unknown section [{name}]. Use {join_choices(list(field_types))}.")
 
-            values |= flatten_table(value, key, label)
-            continue
+        if name not in field_types:
+            raise SettingsError(f"{label}: unknown key {key}. Keys in [{prefix}]: {', '.join(field_types)}.")
 
-        # Refuse a misspelled key, listing the ones this table accepts.
-        if key not in RULES:
-            raise SettingsError(f"{label}: unknown key {key}. Keys in [{prefix}]: {', '.join(list_table_keys(prefix))}.")
+        # Build a nested table, such as [generator.diffusers], as its own record.
+        value_type = find_value_type(field_types[name])
+        if is_dataclass(value_type):
+            values[name] = build_record(value_type, value, key, folder, label)
+        else:
+            values[name] = convert_value(key, value, value_type, folder, label)
 
-        check_value(key, value, label)
-        values[key] = value
-
-    return values
-
-
-def read_settings_values(path: Path) -> dict[str, object]:
-    """
-    Read a settings file and return its checked values by dotted key.
-
-    Args:
-        path (Path): Settings file.
-
-    Returns:
-        dict[str, object]: Checked values by dotted key, with paths as written in the file.
-    """
-    label = path.as_posix()
-
-    # Parse the file, naming the TOML error, which includes the line and column.
-    try:
-        with path.open("rb") as file:
-            document = tomllib.load(file)
-    except OSError as error:
-        raise SettingsError(f"Cannot read settings file {label}: {error.strerror}. Check the file and retry.") from error
-    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
-        raise SettingsError(f"{label} is not valid TOML: {error}. Fix the file and retry.") from error
-
-    # Check each section, which must be a known table.
-    values: dict[str, object] = {}
-    for section, table in document.items():
-        # A known key written above every section belongs inside the table that accepts it, such as seed in [run].
-        owner = next((key.rpartition(".")[0] for key in RULES if key.endswith(f".{section}")), None)
-        if not isinstance(table, dict) and owner is not None:
-            raise SettingsError(f"{label}: {section} must be inside a section such as [{owner}].")
-
-        if section not in SECTIONS:
-            raise SettingsError(f"{label}: unknown section [{section}]. Use {join_choices(SECTIONS)}.")
-
-        if not isinstance(table, dict):
-            raise SettingsError(f"{label}: {section} must be a table such as [{section}], got {format_toml_value(table)}.")
-
-        values |= flatten_table(table, section, label)
-
-    return values
-
-
-def replace_setting(record: SettingsRecord, key: str, parts: Sequence[str], value: object) -> SettingsRecord:
-    """
-    Return a copy of a settings record with the value at the dotted path replaced.
-
-    Args:
-        record (SettingsRecord): Settings record at this level.
-        key (str): Full dotted key, used in the error for an unknown key.
-        parts (Sequence[str]): Remaining parts of the key.
-        value (object): New value.
-
-    Returns:
-        SettingsRecord: The updated copy, of the same type as the record.
-    """
-    # An unknown key is a programming error, not a user error.
-    name = parts[0]
-    if not is_dataclass(record) or name not in {field.name for field in fields(record)}:
-        raise KeyError(key)
-
-    if len(parts) == 1:
-        return replace(record, **{name: value})
-
-    return replace(record, **{name: replace_setting(getattr(record, name), key, parts[1:], value)})
-
-
-def override_settings(settings: Settings, overrides: Mapping[str, object]) -> Settings:
-    """
-    Return new settings with values replaced by dotted key, such as "run.candidates".
-
-    Args:
-        settings (Settings): Settings to start from.
-        overrides (Mapping[str, object]): New value by dotted key.
-
-    Returns:
-        Settings: The updated settings.
-    """
-    for key, value in overrides.items():
-        settings = replace_setting(settings, key, key.split("."), value)
-
-    return settings
+    return record_type(**values)
 
 
 def load_settings(path: Path | None) -> Settings:
@@ -378,12 +280,42 @@ def load_settings(path: Path | None) -> Settings:
     if path is None:
         return Settings()
 
-    values = read_settings_values(path)
-    for key, value in values.items():
-        # Resolve relative folders against the file's folder, so the file works from any working folder.
-        if RULES[key].kind == SettingKind.PATH:
-            values[key] = path.parent / value
-        elif RULES[key].kind == SettingKind.NUMBER:
-            values[key] = float(value)
+    label = path.as_posix()
 
-    return override_settings(Settings(), values)
+    # Parse the file, naming the TOML error, which includes the line and column.
+    try:
+        with path.open("rb") as file:
+            document = tomllib.load(file)
+    except OSError as error:
+        raise SettingsError(f"Cannot read settings file {label}: {error.strerror}. Check the file and retry.") from error
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
+        raise SettingsError(f"{label} is not valid TOML: {error}. Fix the file and retry.") from error
+
+    return build_record(Settings, document, "", path.parent, label)
+
+
+def replace_field(record: Record, parts: Sequence[str], value: object) -> Record:
+    """
+    Return a copy of a settings record with the value at the dotted path replaced.
+    """
+    if len(parts) == 1:
+        return replace(record, **{parts[0]: value})
+
+    return replace(record, **{parts[0]: replace_field(getattr(record, parts[0]), parts[1:], value)})
+
+
+def override_settings(settings: Settings, overrides: Mapping[str, object]) -> Settings:
+    """
+    Return new settings with values replaced by dotted key, such as "run.candidates".
+
+    Args:
+        settings (Settings): Settings to start from.
+        overrides (Mapping[str, object]): New value by dotted key.
+
+    Returns:
+        Settings: The updated settings.
+    """
+    for key, value in overrides.items():
+        settings = replace_field(settings, key.split("."), value)
+
+    return settings
