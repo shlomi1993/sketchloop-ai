@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 
 from sketchloop.capture import InvalidSketchError
 from sketchloop.domain import (BackendIdentity, Candidate, ColorMode, ControlValue, EffectiveSettings, ExecutionKind,
@@ -258,7 +258,8 @@ class DiffusersSketchGenerator(Generator):
     """
 
     # Saved in every round record and looked up by rerun, so never rename it.
-    ADAPTER_NAME: Final = "sketchloop.diffusers"
+    ADAPTER_NAME: ClassVar[str] = "sketchloop.diffusers"
+    MODEL_LABEL: ClassVar[str] = "Stable Diffusion 1.5 and ControlNet scribble"
 
     def __init__(self, model_dir: Path = Path("models"), *, mode: GenerationMode | None = None,
                  device: TorchDevice | None = None, precision: TorchPrecision | None = None,
@@ -300,13 +301,28 @@ class DiffusersSketchGenerator(Generator):
         """
         Say which model, device, mode, precision, and step count this backend uses, so slow CPU runs are expected.
         """
-        model = "Stable Diffusion 1.5 and ControlNet scribble"
         steps = MODE_SETTINGS[self.mode].steps
         run_conditions = f"on {self.device.upper()} in {self.mode} mode and {self.precision}"
-        return f"Using the diffusers backend with {model} {run_conditions}, running {steps} steps."
+        return f"Using the diffusers backend with {self.MODEL_LABEL} {run_conditions}, running {steps} steps."
 
     def _list_model_sources(self) -> tuple[ModelSource, ...]:
         return MODEL_SOURCES if self.mode == GenerationMode.FAST else (BASE_MODEL, CONTROLNET_MODEL)
+
+    def _build_pipeline(self, diffusers: Any, dtype: Any) -> Any:
+        # Load the base model with the scribble ControlNet but no safety checker, whose weights are not downloaded.
+        controlnet = diffusers.ControlNetModel.from_pretrained(str(self._model_dir / CONTROLNET_MODEL.folder), dtype=dtype)
+        return diffusers.StableDiffusionControlNetPipeline.from_pretrained(
+            pretrained_model_name_or_path=str(self._model_dir / BASE_MODEL.folder),
+            controlnet=controlnet,
+            dtype=dtype,
+            safety_checker=None,
+            feature_extractor=None,
+            requires_safety_checker=False
+        )
+
+    def _fuse_lcm_lora(self, diffusers: Any, pipeline: Any) -> None:
+        pipeline.load_lora_weights(str(self._model_dir / LCM_LORA_MODEL.folder), weight_name=LCM_LORA_WEIGHTS)
+        pipeline.fuse_lora()
 
     def _load_runner(self) -> PipelineRunner:
         # Report a missing download before the slow library imports.
@@ -328,26 +344,15 @@ class DiffusersSketchGenerator(Generator):
         diffusers.utils.logging.set_verbosity_error()
         transformers.utils.logging.set_verbosity_error()
 
-        # Load the base model with the scribble ControlNet but no safety checker, whose weights are not downloaded.
-        dtype = getattr(torch, self.precision)
-        controlnet_folder = str(self._model_dir / CONTROLNET_MODEL.folder)
+        # Load the pipeline in the chosen precision, then switch to the mode's scheduler.
         try:
-            controlnet = diffusers.ControlNetModel.from_pretrained(controlnet_folder, dtype=dtype)
-            pipeline = diffusers.StableDiffusionControlNetPipeline.from_pretrained(
-                pretrained_model_name_or_path=str(self._model_dir / BASE_MODEL.folder),
-                controlnet=controlnet,
-                dtype=dtype,
-                safety_checker=None,
-                feature_extractor=None,
-                requires_safety_checker=False
-            )
+            pipeline = self._build_pipeline(diffusers, getattr(torch, self.precision))
             scheduler_class = getattr(diffusers, MODE_SETTINGS[self.mode].scheduler)
             pipeline.scheduler = scheduler_class.from_config(pipeline.scheduler.config)
 
             # Fast mode fuses the LCM-LoRA into the model so 4 steps give a usable image.
             if self.mode == GenerationMode.FAST:
-                pipeline.load_lora_weights(str(self._model_dir / LCM_LORA_MODEL.folder), weight_name=LCM_LORA_WEIGHTS)
-                pipeline.fuse_lora()
+                self._fuse_lcm_lora(diffusers, pipeline)
 
             pipeline.to(self.device)
         except Exception as error:
@@ -357,16 +362,19 @@ class DiffusersSketchGenerator(Generator):
         self._runtime = describe_torch_runtime(torch, self.device)
         return DiffusersRunner(pipeline, torch)
 
+    def _build_conditioning_kwargs(self, conditioning: np.ndarray, conditioning_scale: ControlValue) -> dict[str, Any]:
+        # Diffusers reads a NumPy image as a batch of RGB values in [0, 1], shaped (1, height, width, 3).
+        conditioning_batch = np.repeat(conditioning[None, :, :, None], 3, axis=3).astype(np.float32) / 255
+        return {"image": conditioning_batch, "controlnet_conditioning_scale": conditioning_scale}
+
     def _build_pipeline_kwargs(self, request: GenerationRequest, controls: dict[str, ControlValue],
                          sketch_payload: bytes) -> dict[str, Any]:
-        # Diffusers reads a NumPy image as a batch of RGB values in [0, 1], shaped (1, height, width, 3).
         conditioning = scribble_conditioning(sketch_payload)
         height, width = conditioning.shape
-        conditioning_batch = np.repeat(conditioning[None, :, :, None], 3, axis=3).astype(np.float32) / 255
         pipeline_kwargs: dict[str, Any] = {
-            "prompt": request.guidance.prompt, "image": conditioning_batch,
-            "width": width, "height": height, "num_inference_steps": controls["steps"],
-            "guidance_scale": controls["guidance_scale"], "controlnet_conditioning_scale": controls["conditioning_scale"]
+            "prompt": request.guidance.prompt, "width": width, "height": height,
+            "num_inference_steps": controls["steps"], "guidance_scale": controls["guidance_scale"],
+            **self._build_conditioning_kwargs(conditioning, controls["conditioning_scale"])
         }
 
         # Pass a negative prompt only when one was given, since the fast mode does not support it.

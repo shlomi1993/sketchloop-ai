@@ -2,9 +2,9 @@
 # Command-line flags override these values. Remove a line to use the built-in default.
 
 [generator]
-backend = "diffusers"  # fake or diffusers
+backend = "diffusers"  # fake, diffusers, or t2i-adapter
 
-[generator.diffusers]
+[generator.diffusers]  # also used by the t2i-adapter backend
 mode = "fast"  # fast or quality, omit for the device default
 # precision = "float16"  # float16 or float32, omit for float16 on a GPU and float32 on CPU
 models_dir = "models"  # relative to this file, also used by scripts/download_models.py

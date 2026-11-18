@@ -74,7 +74,7 @@ python scripts/download_models.py
 sketchloop ui --backend diffusers
 ```
 
-The download script fetches about 6 GB into the git-ignored `models/` folder and skips files already present. To make the real model the default, copy [examples/sketchloop.toml](examples/sketchloop.toml) to `sketchloop.toml`, which already sets `backend = "diffusers"`. After that, plain `sketchloop` opens the page with the real model.
+The download script fetches about 7 GB into the git-ignored `models/` folder and skips files already present. To make the real model the default, copy [examples/sketchloop.toml](examples/sketchloop.toml) to `sketchloop.toml`, which already sets `backend = "diffusers"`. After that, plain `sketchloop` opens the page with the real model.
 
 ## Using the browser page
 
@@ -88,7 +88,7 @@ The page lists the current session's history, and **New session** starts a fresh
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--backend` | `fake` | `fake` or `diffusers` |
+| `--backend` | `fake` | `fake`, `diffusers` for ControlNet scribble, or `t2i-adapter` for the T2I-Adapter sketch model |
 | `--mode` | `fast` on CPU, `quality` on a GPU | Diffusers sampling mode |
 | `--precision` | `float16` on a GPU, `float32` on CPU | Diffusers precision, and the CPU cannot use float16 |
 | `--candidates` | 1 | Starting number of candidates per round |
@@ -167,7 +167,7 @@ Instead of repeating flags, copy [examples/sketchloop.toml](examples/sketchloop.
 
 ```toml
 [generator]
-backend = "diffusers"  # fake or diffusers
+backend = "diffusers"  # fake, diffusers, or t2i-adapter
 
 [generator.diffusers]
 mode = "fast"          # fast or quality
@@ -235,6 +235,7 @@ The [full call graph](docs/call-graph.html) shows every handler and method. Open
 | --- | --- | --- |
 | [Stable Diffusion 1.5](https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5) | Base image generator | CreativeML OpenRAIL-M |
 | [ControlNet scribble](https://huggingface.co/lllyasviel/control_v11p_sd15_scribble) | Makes the image follow the sketch's lines | CreativeML OpenRAIL-M |
+| [T2I-Adapter sketch](https://huggingface.co/TencentARC/t2iadapter_sketch_sd15v2) | Follows the sketch's lines in the `t2i-adapter` backend, converted once to safetensors by the download script | Apache 2.0 |
 | [LCM-LoRA](https://huggingface.co/latent-consistency/lcm-lora-sdv1-5) | Cuts sampling to 4 steps in `fast` mode | OpenRAIL++ |
 | [Florence-2-base](https://huggingface.co/florence-community/Florence-2-base) | Names the sketched object for prompt suggestions | MIT |
 

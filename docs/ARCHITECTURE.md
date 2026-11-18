@@ -30,7 +30,7 @@ The orchestrator records all stage inputs, effective configuration, outputs, err
 | `capture` | Acquire image plus capture metadata | File/synthetic source for tests; real camera adapter for delivery |
 | `preprocessing` | Named, configurable image transformations | Retain input and transformation provenance; no generation calls |
 | `generation` | Capabilities, request validation, candidate generation | Backend-specific objects stay inside adapters |
-| `backends` | Package holding each backend in its own module (`fake`, `diffusers`), whose `describe()` tells the person what runs | Backends are registered by name in `components` |
+| `backends` | Package holding each backend in its own module (`fake`, `diffusers`, and `t2i_adapter`, which subclasses the diffusers backend), whose `describe()` tells the person what runs | Backends are registered by name in `components` |
 | `components` | Map setting names to generation backends, capture sources, preprocessors, evaluators, and stores | The CLI and UI build components only through it, while library callers inject objects directly |
 | `settings` | Read the optional `sketchloop.toml` or `--config` file and apply flag overrides | Standard library only; validates shape and types, while `components` checks names |
 | `evaluation` | Optional scoring/filtering of candidates | No hidden human-selection decisions; preserve original candidates |

@@ -163,7 +163,7 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
     <h2>2 · Runtime: who calls whom, from the page down to disk</h2>
     <figure>
       <div class="scroll">
-        <svg class="d" viewBox="0 0 1100 880" role="img" aria-label="Call graph. Browser events call handlers in ui.py, which call AppController methods, which call SketchSession. SketchSession.run_round calls, in order, the Preprocessor, Generator, Evaluator and ExperimentStore base classes, subclassed by StrokePreprocessor, FakeGenerator or DiffusersSketchGenerator, NoOpEvaluator, and MemoryStore or FolderStore. FolderStore writes run folders and the diffusers backend reads model weights.">
+        <svg class="d" viewBox="0 0 1100 880" role="img" aria-label="Call graph. Browser events call handlers in ui.py, which call AppController methods, which call SketchSession. SketchSession.run_round calls, in order, the Preprocessor, Generator, Evaluator and ExperimentStore base classes, subclassed by StrokePreprocessor, FakeGenerator or DiffusersSketchGenerator with its T2IAdapterSketchGenerator subclass, NoOpEvaluator, and MemoryStore or FolderStore. FolderStore writes run folders and the diffusers backend reads model weights.">
           <defs>
             <marker id="m-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
             <marker id="m-ahh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahh"/></marker>
@@ -330,8 +330,8 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <rect class="box" x="455" y="706" width="195" height="76" rx="6"/>
           <text class="n" x="552.5" y="725" text-anchor="middle">DiffusersSketchGenerator</text>
           <text class="s" x="552.5" y="742" text-anchor="middle">SD 1.5 + ControlNet scribble</text>
-          <text class="s" x="552.5" y="757" text-anchor="middle">fast mode: LCM-LoRA, 4 steps</text>
-          <text class="s" x="552.5" y="772" text-anchor="middle">loads on the first round</text>
+          <text class="s" x="552.5" y="757" text-anchor="middle">subclass: T2I-Adapter sketch</text>
+          <text class="s" x="552.5" y="772" text-anchor="middle">LCM-LoRA fast mode, lazy load</text>
           <rect class="box" x="670" y="650" width="195" height="44" rx="6"/>
           <text class="n" x="767.5" y="668" text-anchor="middle">NoOpEvaluator</text>
           <text class="s" x="767.5" y="685" text-anchor="middle">no scores yet, CLIP later</text>
@@ -391,8 +391,9 @@ ul.rules { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 8
           <tr><td>session.py</td><td><code>SketchSession</code>: runs and times each stage and the round's total, links rounds, records failures</td><td>app.py, cli/run.py, cli/rerun.py</td></tr>
           <tr><td>capture.py</td><td>Load PNG or JPEG files, encode frames, OpenCV camera capture, each returning a <code>CapturedSketch</code> with its capture time</td><td>app.py, cli/run.py, components.py</td></tr>
           <tr><td>preprocessing.py</td><td><code>Preprocessor</code> base class and the stroke pipeline with recorded steps</td><td>session.py</td></tr>
-          <tr><td>generation.py</td><td><code>Generator</code> base class, capabilities, request validation</td><td>both backends, session.py</td></tr>
+          <tr><td>generation.py</td><td><code>Generator</code> base class, capabilities, request validation</td><td>every backend, session.py</td></tr>
           <tr><td>backends/diffusers.py</td><td>Real model: SD 1.5 + ControlNet scribble, fast and quality modes, float16 or float32</td><td>components.make_generator</td></tr>
+          <tr><td>backends/t2i_adapter.py</td><td>Second real model: subclasses the diffusers backend to swap ControlNet for the T2I-Adapter sketch model, sharing its modes, controls, and settings</td><td>components.make_generator</td></tr>
           <tr><td>backends/fake.py</td><td>Deterministic labeled fake backend</td><td>components.make_generator, tests</td></tr>
           <tr><td>evaluation.py</td><td><code>Evaluator</code> base class and the no-op scorer</td><td>session.py</td></tr>
           <tr><td>experiments/</td><td>One module each for <code>records</code>, <code>provenance</code> (environment and redacted failures), <code>serialization</code>, <code>stores</code> (<code>FolderStore</code>, <code>MemoryStore</code>), <code>loading</code> with checksums, <code>replay</code> (rerun requests and comparison), <code>hardware</code> (CPU, cores, memory), and <code>benchmark</code> (stage statistics)</td><td>session.py, cli/show.py, cli/rerun.py</td></tr>

@@ -1,5 +1,5 @@
 """
-Download the pinned diffusers model weights into the models folder the settings name.
+Download the pinned model weights into the models folder the settings name, converting pickled weights to safetensors.
 """
 
 import argparse
@@ -7,11 +7,13 @@ import argparse
 from pathlib import Path
 
 from sketchloop.backends.diffusers import MODEL_SOURCES, first_line
+from sketchloop.backends.t2i_adapter import T2I_ADAPTER_MODEL
 from sketchloop.settings import SettingsError, find_settings_file, load_settings
 from sketchloop.suggestion import FLORENCE_MODEL
 
 
 BYTES_PER_GIGABYTE = 1e9
+DOWNLOAD_SOURCES = (*MODEL_SOURCES, T2I_ADAPTER_MODEL, FLORENCE_MODEL)
 
 
 def folder_bytes(folder: Path) -> int:
@@ -19,6 +21,31 @@ def folder_bytes(folder: Path) -> int:
     Sum the sizes of a model folder's files, ignoring the download cache.
     """
     return sum(path.stat().st_size for path in folder.rglob("*") if path.is_file() and ".cache" not in path.parts)
+
+
+def convert_pickled_weights(folder: Path) -> None:
+    """
+    Convert each pickled .bin weights file in a model folder to safetensors once, so the backends load only safetensors.
+
+    Args:
+        folder (Path): Downloaded model folder.
+    """
+    # Import torch only here, since --help and the other models do not need it.
+    import torch
+
+    from safetensors.torch import save_file
+
+    # Skip a file already converted, and write through a temporary name so an interrupted run leaves no partial file.
+    for pickled in folder.glob("*.bin"):
+        converted = pickled.with_suffix(".safetensors")
+        if converted.exists():
+            continue
+
+        print(f"Converting {pickled.name} to {converted.name}.", flush=True)
+        state_dict = torch.load(pickled, map_location="cpu", weights_only=True)
+        partial = converted.with_name(f"{converted.name}.tmp")
+        save_file({name: tensor.contiguous() for name, tensor in state_dict.items()}, str(partial))
+        partial.replace(converted)
 
 
 def find_models_dir(config: Path | None) -> Path:
@@ -42,7 +69,7 @@ def find_models_dir(config: Path | None) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     """
-    Download the diffusers and prompt suggestion models at their pinned revisions, skipping files already present.
+    Download the generation and prompt suggestion models at their pinned revisions, skipping files already present.
 
     Args:
         argv (list[str] | None, optional): Command-line arguments. Defaults to the process arguments.
@@ -71,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     # Download each repository, where files whose recorded metadata already matches are skipped.
     total_bytes = 0
     downloaded_bytes = 0
-    for source in (*MODEL_SOURCES, FLORENCE_MODEL):
+    for source in DOWNLOAD_SOURCES:
         folder = models_dir / source.folder
         print(f"Downloading {source.repo_id} to {folder.as_posix()}.", flush=True)
         before_bytes = folder_bytes(folder) if folder.is_dir() else 0
@@ -79,6 +106,13 @@ def main(argv: list[str] | None = None) -> int:
             snapshot_download(source.repo_id, revision=source.revision, local_dir=folder, allow_patterns=source.allow_patterns)
         except Exception as error:
             print(f"Download of {source.repo_id} failed: {first_line(error)} Check the network and rerun.")
+            return 1
+
+        # Keep the pickled original, so the next run skips its download, but give the backend a safetensors copy.
+        try:
+            convert_pickled_weights(folder)
+        except Exception as error:
+            print(f"Converting {source.repo_id} failed: {first_line(error)} Delete {folder.as_posix()} and rerun.")
             return 1
 
         after_bytes = folder_bytes(folder)

@@ -8,6 +8,7 @@ from typing import Final, TypeAlias
 
 from sketchloop.backends.diffusers import DiffusersSketchGenerator, GenerationMode, TorchPrecision
 from sketchloop.backends.fake import FakeGenerator
+from sketchloop.backends.t2i_adapter import T2IAdapterSketchGenerator
 from sketchloop.capture import CameraCapture, CaptureSource, FileCapture
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
 from sketchloop.experiments import ExperimentStore, FolderStore
@@ -27,13 +28,20 @@ EvaluatorFactory: TypeAlias = Callable[[EvaluatorSettings], Evaluator]
 StoreFactory: TypeAlias = Callable[[StorageSettings], ExperimentStore]
 
 
-def make_diffusers_generator(settings: GeneratorSettings) -> Generator:
+def make_diffusers_generator(settings: GeneratorSettings, generator_class: type[DiffusersSketchGenerator]) -> Generator:
     """
-    Create the SD 1.5 and ControlNet scribble backend with the configured mode, precision, and models folder.
+    Create an SD 1.5 backend of the given class with the configured mode, precision, and models folder.
+
+    Args:
+        settings (GeneratorSettings): Generator settings whose diffusers options apply.
+        generator_class (type[DiffusersSketchGenerator]): Backend class to create, such as the ControlNet or adapter one.
+
+    Returns:
+        Generator: The backend, with no model loaded yet.
     """
     options = settings.diffusers
-    return DiffusersSketchGenerator(options.models_dir, mode=GenerationMode(options.mode) if options.mode else None,
-                                    precision=TorchPrecision(options.precision) if options.precision else None)
+    return generator_class(options.models_dir, mode=GenerationMode(options.mode) if options.mode else None,
+                           precision=TorchPrecision(options.precision) if options.precision else None)
 
 
 def make_file_capture(settings: CaptureSettings, sketch_file: Path | None) -> CaptureSource:
@@ -56,7 +64,8 @@ def make_file_capture(settings: CaptureSettings, sketch_file: Path | None) -> Ca
 # Components by the name a settings file uses. Tests and library callers may add entries, and nothing is discovered.
 GENERATORS: Final[dict[str, GeneratorFactory]] = {
     FAKE_BACKEND: lambda settings: FakeGenerator(),
-    "diffusers": make_diffusers_generator,
+    "diffusers": lambda settings: make_diffusers_generator(settings, DiffusersSketchGenerator),
+    "t2i-adapter": lambda settings: make_diffusers_generator(settings, T2IAdapterSketchGenerator),
 }
 CAPTURE_SOURCES: Final[dict[str, CaptureFactory]] = {
     "file": make_file_capture,
@@ -77,6 +86,7 @@ STORES: Final[dict[str, StoreFactory]] = {
 RERUNNABLE_BACKENDS: Final[dict[str, str]] = {
     FakeGenerator.ADAPTER_NAME: FAKE_BACKEND,
     DiffusersSketchGenerator.ADAPTER_NAME: "diffusers",
+    T2IAdapterSketchGenerator.ADAPTER_NAME: "t2i-adapter",
 }
 
 

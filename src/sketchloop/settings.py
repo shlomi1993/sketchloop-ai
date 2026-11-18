@@ -35,7 +35,7 @@ class SettingsError(SketchLoopError, ValueError):
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DiffusersSettings:
     """
-    Options used only by the diffusers backend.
+    Options shared by the diffusers and t2i-adapter backends.
     """
     mode: str | None = None  # fast or quality, None for the device default
     precision: str | None = None  # float16 or float32, None for float16 on a GPU and float32 on CPU
@@ -48,7 +48,7 @@ class GeneratorSettings:
     The generation backend and its options.
     """
     backend: str = "fake"  # Registry name of the generation backend
-    diffusers: DiffusersSettings = DiffusersSettings()  # Options used only by the diffusers backend
+    diffusers: DiffusersSettings = DiffusersSettings()  # Options shared by the diffusers and t2i-adapter backends
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
