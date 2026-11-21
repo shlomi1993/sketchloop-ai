@@ -130,7 +130,7 @@ class ControlNetSuggesterSettings:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class SuggesterSettings:
+class StrokeSuggesterSettings:
     """
     The next-stroke suggester and its options.
     """
@@ -161,7 +161,7 @@ class Settings:
     storage: StorageSettings = StorageSettings()  # Experiment store and its folder
     run: RunSettings = RunSettings()  # Defaults for sketchloop run
     ui: UiSettings = UiSettings()  # Defaults for sketchloop ui
-    suggester: SuggesterSettings = SuggesterSettings()  # Next-stroke suggester and its options
+    stroke_suggester: StrokeSuggesterSettings = StrokeSuggesterSettings()  # Next-stroke suggester and its options
     drawing: DrawingSettings = DrawingSettings()  # Paper canvas and capture interval of guided sketching
 
 

@@ -6,7 +6,13 @@ import cv2
 import numpy as np
 import pytest
 
-from sketchloop.preprocessing import preprocess_minimally, preprocess_sketch
+from sketchloop.capture import InvalidSketchError
+from sketchloop.preprocessing import extract_canvas_strokes, make_paper_canvas, preprocess_minimally, preprocess_sketch
+
+
+# A4 in landscape at about 1 px per 0.42 mm, and the default guided sketching canvas.
+SHEET_SIZE = (707, 500)
+CANVAS_SIZE = (512, 360)
 
 
 def make_noisy_scene() -> np.ndarray:
@@ -153,3 +159,125 @@ def test_minimal_preprocessing_keeps_the_whole_drawing() -> None:
     # The whole page is kept, turned upright, so the long side is now the height.
     assert processed.shape == (512, 341), f"Expected the uncropped page turned and resized, got {processed.shape}"
 
+
+
+def draw_flat_sheet() -> np.ndarray:
+    """
+    Draw a light A4 sheet in landscape with a rectangle in the middle and a short stroke far from it in a corner.
+    """
+    sheet = np.full((SHEET_SIZE[1], SHEET_SIZE[0]), 215, dtype=np.uint8)
+    cv2.rectangle(sheet, (250, 180), (450, 300), 50, 4)
+    cv2.line(sheet, (90, 400), (150, 400), 50, 4)
+    return sheet
+
+
+def photograph_sheet(corners: list[tuple[int, int]]) -> bytes:
+    """
+    Warp the flat sheet onto the given corners of an 800 x 600 dark table photo and encode it as PNG.
+    """
+    width, height = SHEET_SIZE
+    source = np.array([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]], dtype=np.float32)
+    transform = cv2.getPerspectiveTransform(source, np.array(corners, dtype=np.float32))
+    photo = cv2.warpPerspective(draw_flat_sheet(), transform, (800, 600), borderValue=40)
+    return cv2.imencode(".png", photo)[1].tobytes()
+
+
+def decode_stroke_mask(payload: bytes) -> np.ndarray:
+    """
+    Decode a black-on-white strokes PNG to a mask that is True on the strokes.
+    """
+    return cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_GRAYSCALE) < 128
+
+
+def test_paper_canvas_keeps_shifted_captures_in_one_frame() -> None:
+    """
+    Two photos of a skewed sheet, moved a few pixels between them, give canvases of the configured size whose strokes align.
+    """
+    first = make_paper_canvas(photograph_sheet([(150, 110), (660, 80), (690, 480), (120, 500)]), 0, *CANVAS_SIZE)
+    second = make_paper_canvas(photograph_sheet([(153, 107), (657, 84), (693, 477), (118, 503)]), 0, *CANVAS_SIZE)
+
+    # Both canvases are grayscale PNGs of exactly the configured size, whatever the sheet's size in the photo.
+    for canvas in (first, second):
+        pixels = cv2.imdecode(np.frombuffer(canvas.payload, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        assert pixels.shape == (360, 512), f"Expected a 512x360 canvas, got {pixels.shape}"
+        image = canvas.image
+        assert (image.path, image.mode, image.width, image.height) == ("canvas.png", "L", 512, 360), f"Unexpected {image}"
+
+    # The steps name the corner warp and the resize, without a crop, since all four corners were found.
+    step_names = [step.name for step in first.steps]
+    assert step_names == ["grayscale", "rotate", "isolate_paper", "resize_to_canvas"], f"Unexpected steps {step_names}"
+    assert first.steps[2].params["corners_found"], f"The corners must be found, got {dict(first.steps[2].params)}"
+
+    # Every stroke of the second capture lies within 3 px of a stroke of the first.
+    first_strokes = decode_stroke_mask(extract_canvas_strokes(first.payload).payload)
+    second_strokes = decode_stroke_mask(extract_canvas_strokes(second.payload).payload)
+    distance_to_first = cv2.distanceTransform(np.where(first_strokes, 0, 255).astype(np.uint8), cv2.DIST_L2, 5)
+    worst = float(distance_to_first[second_strokes].max())
+    assert second_strokes.any() and worst <= 3, f"Strokes must land within 3 px between captures, got {worst:.1f} px"
+
+
+def test_paper_canvas_without_corners_crops_to_the_paper() -> None:
+    """
+    A sheet running off the frame is cropped to the paper's box, recorded as crop_to_paper, and still has the canvas size.
+    """
+    photo = np.full((600, 800), 40, dtype=np.uint8)
+    photo[80:520, 200:] = 215
+    cv2.rectangle(photo, (400, 200), (600, 350), 50, 4)
+
+    canvas = make_paper_canvas(cv2.imencode(".png", photo)[1].tobytes(), 0, 256, 512)
+    pixels = cv2.imdecode(np.frombuffer(canvas.payload, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+
+    # The missing corners are recorded, and the crop to the paper's box comes before the resize.
+    step_names = [step.name for step in canvas.steps]
+    assert step_names == ["grayscale", "rotate", "isolate_paper", "crop_to_paper", "resize_to_canvas"], f"Got {step_names}"
+    assert not canvas.steps[2].params["corners_found"], "The corners of a sheet cut by the frame must not be found"
+
+    # The crop starts inside the paper, not at the table, and the canvas has the requested size.
+    crop = canvas.steps[3].params
+    assert crop["x"] >= 200 and crop["y"] >= 80, f"The crop must start inside the paper, got {dict(crop)}"
+    assert pixels.shape == (512, 256), f"Expected a 256x512 canvas, got {pixels.shape}"
+
+
+def test_paper_canvas_without_paper_still_has_the_canvas_size() -> None:
+    """
+    A black frame with no sheet gives a canvas of the requested size, recording that no paper was found.
+    """
+    canvas = make_paper_canvas(cv2.imencode(".png", np.zeros((480, 640), dtype=np.uint8))[1].tobytes(), 180, 512, 360)
+
+    # The missing paper is recorded, and the size still matches.
+    assert not canvas.steps[2].params["paper_found"], f"No paper must be recorded, got {dict(canvas.steps[2].params)}"
+    assert (canvas.image.width, canvas.image.height) == (512, 360), f"Unexpected size {canvas.image}"
+
+
+def test_paper_canvas_refuses_undecodable_bytes() -> None:
+    """
+    Bytes that are not an image raise InvalidSketchError for both the canvas and its strokes.
+    """
+    with pytest.raises(InvalidSketchError):
+        make_paper_canvas(b"not an image", 0, *CANVAS_SIZE)
+    with pytest.raises(InvalidSketchError):
+        extract_canvas_strokes(b"not an image")
+
+
+def test_canvas_strokes_keep_strokes_far_from_the_drawing() -> None:
+    """
+    The canvas strokes keep a short stroke far from the main drawing, which the generation preprocessing drops.
+    """
+    photo = photograph_sheet([(150, 110), (660, 80), (690, 480), (120, 500)])
+    strokes = extract_canvas_strokes(make_paper_canvas(photo, 0, *CANVAS_SIZE).payload)
+    mask = decode_stroke_mask(strokes.payload)
+
+    # The strokes image is a grayscale strokes.png of the canvas size, black on mostly white.
+    image = strokes.image
+    assert (image.path, image.mode, image.width, image.height) == ("strokes.png", "L", 512, 360), f"Unexpected {image}"
+    assert 0 < mask.mean() < 0.1, f"Expected thin black strokes on white, got {mask.mean():.1%} dark"
+
+    # The far stroke, near the sheet's lower left corner, survives, and the steps record it.
+    far_corner = mask[int(360 * 0.7):, :int(512 * 0.3)]
+    assert far_corner.any(), "The stroke far from the drawing must be kept"
+    step_names = [step.name for step in strokes.steps]
+    assert step_names == ["mark_strokes", "thicken_strokes"], f"Unexpected steps {step_names}"
+
+    # The generation preprocessing drops that stroke as too far from the main drawing.
+    dropped = preprocess_sketch(photo).steps[3].params["dropped_strokes"]
+    assert dropped >= 1, f"Generation preprocessing must drop the far stroke, dropped {dropped}"

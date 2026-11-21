@@ -10,10 +10,10 @@ import time
 from collections.abc import Callable
 from typing import Final
 
-from sketchloop.capture import InvalidSketchError
 from sketchloop.domain import (BackendIdentity, ColorMode, EffectiveSettings, ExecutionKind, ImageRef, Unavailable,
                                UnsupportedConfigurationError)
 from sketchloop.generation import ControlSpec, control_issues
+from sketchloop.stroke_suggesters.line_parts import decode_canvas
 from sketchloop.stroke_suggestion import (LINE_DRAWING_FILE, StrokeSuggester, StrokeSuggestion, StrokeSuggestionOutput,
                                           StrokeSuggestionRequest, SuggestedPart, name_part_file)
 
@@ -99,31 +99,6 @@ def encode_png(image: np.ndarray, path: str) -> tuple[ImageRef, bytes]:
     image_ref = ImageRef(path=path, width=width, height=height, mode=ColorMode.L, media_type="image/png",
                          sha256=hashlib.sha256(payload).hexdigest())
     return image_ref, payload
-
-
-def decode_canvas(request: StrokeSuggestionRequest, canvas_payload: bytes) -> np.ndarray:
-    """
-    Decode the canvas bytes to grayscale, refusing bytes that are not an image of the request's canvas size.
-
-    Args:
-        request (StrokeSuggestionRequest): Request whose canvas describes the expected size.
-        canvas_payload (bytes): PNG bytes of the canvas.
-
-    Returns:
-        np.ndarray: Grayscale canvas.
-    """
-    # OpenCV refuses empty bytes with its own error, so treat them as undecodable here.
-    gray = cv2.imdecode(np.frombuffer(canvas_payload, dtype=np.uint8), cv2.IMREAD_GRAYSCALE) if canvas_payload else None
-    if gray is None:
-        raise InvalidSketchError("Suggestion canvas cannot be decoded. Capture the paper again and retry.")
-
-    # A canvas of another size would give masks that do not overlay the recorded canvas.
-    actual = f"{gray.shape[1]}x{gray.shape[0]}"
-    expected = f"{request.canvas.width}x{request.canvas.height}"
-    if actual != expected:
-        raise InvalidSketchError(f"Suggestion canvas is {actual}, not the requested {expected}. Capture again and retry.")
-
-    return gray
 
 
 class FakeStrokeSuggester(StrokeSuggester):

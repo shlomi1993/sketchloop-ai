@@ -16,8 +16,10 @@ from sketchloop.evaluation import NoOpEvaluator
 from sketchloop.evaluators.clip import CLIP_B32_MODEL, CLIP_L14_MODEL, ClipEvaluator
 from sketchloop.preprocessing import MinimalPreprocessor, StrokePreprocessor
 from sketchloop.settings import (ControlNetSuggesterSettings, DiffusersSettings, EvaluatorSettings, GeneratorSettings,
-                                 ModelsSettings, PreprocessingSettings, Settings, SettingsError, SuggesterSettings)
+                                 ModelsSettings, PreprocessingSettings, Settings, SettingsError, StrokeSuggesterSettings)
+from sketchloop.stroke_suggesters.controlnet import ControlNetStrokeSuggester
 from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
+from sketchloop.stroke_suggestion import StrokeSuggestionError
 
 
 def make_settings(evaluator_name: str, models_dir: Path) -> Settings:
@@ -99,21 +101,38 @@ def test_find_recorded_evaluator(evaluator: str | None, score_details: dict[str,
 
 def test_stroke_suggester_registry_builds_the_fake() -> None:
     """
-    The default settings build the fake stroke suggester, the only one registered so far.
+    The default settings build the fake stroke suggester, and the registry also holds the ControlNet one.
     """
     suggester = make_stroke_suggester(Settings())
     assert isinstance(suggester, FakeStrokeSuggester), f"Expected the fake stroke suggester, got {type(suggester).__name__}"
-    assert set(STROKE_SUGGESTERS) == {"fake"}, f"Unexpected stroke suggesters {sorted(STROKE_SUGGESTERS)}"
+    assert set(STROKE_SUGGESTERS) == {"fake", "controlnet"}, f"Unexpected stroke suggesters {sorted(STROKE_SUGGESTERS)}"
+
+
+def test_stroke_suggester_registry_builds_the_controlnet_suggester(tmp_path: Path) -> None:
+    """
+    Naming controlnet builds the real suggester with the models folder and precision from the settings, loading nothing.
+    """
+    options = StrokeSuggesterSettings(name="controlnet", controlnet=ControlNetSuggesterSettings(precision="float32"))
+    settings = Settings(models=ModelsSettings(dir=tmp_path), stroke_suggester=options)
+    suggester = make_stroke_suggester(settings)
+
+    # The suggester runs in the configured precision.
+    assert isinstance(suggester, ControlNetStrokeSuggester), f"Expected the ControlNet suggester, got {type(suggester).__name__}"
+    assert suggester.precision == "float32", f"Expected float32, got {suggester.precision}"
+
+    # It looks for the weights in the configured folder, which is empty here.
+    with pytest.raises(StrokeSuggestionError, match=re.escape(f"{tmp_path.as_posix()}/stable-diffusion-v1-5 is missing")):
+        suggester.load(512, 360)
 
 
 @pytest.mark.parametrize(("suggester", "message"), [
-    (SuggesterSettings(name="magic"), 'suggester.name must be one of fake, got "magic"'),
-    (SuggesterSettings(controlnet=ControlNetSuggesterSettings(precision="fp16")),
-     'suggester.controlnet.precision must be one of float16 or float32, got "fp16"')
+    (StrokeSuggesterSettings(name="magic"), 'stroke_suggester.name must be one of fake or controlnet, got "magic"'),
+    (StrokeSuggesterSettings(controlnet=ControlNetSuggesterSettings(precision="fp16")),
+     'stroke_suggester.controlnet.precision must be one of float16 or float32, got "fp16"')
 ], ids=["unknown-name", "unknown-precision"])
-def test_unknown_stroke_suggester_settings_refused(suggester: SuggesterSettings, message: str) -> None:
+def test_unknown_stroke_suggester_settings_refused(suggester: StrokeSuggesterSettings, message: str) -> None:
     """
     An unknown stroke suggester name or precision is refused with the key and every choice.
     """
     with pytest.raises(SettingsError, match=re.escape(message)):
-        check_component_names(Settings(suggester=suggester), "sketchloop.toml")
+        check_component_names(Settings(stroke_suggester=suggester), "sketchloop.toml")

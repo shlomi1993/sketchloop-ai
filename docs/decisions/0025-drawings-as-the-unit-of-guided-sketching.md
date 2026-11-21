@@ -31,7 +31,7 @@ Assumptions:
 - **Capture format:** an interval capture every 2 s keeps its raw frame as JPEG at quality 90, and the captures at each suggestion and at finish keep PNG. Every capture also keeps its paper-frame canvas as PNG.
 - **Separate pipeline:** the real suggester owns its own img2img pipeline instead of sharing the generator's through `from_pipe`. This keeps it independent of the backend and mode, at about 2.3 GB more memory only when generation also runs in the same process.
 - **Fixed canvas:** the paper frame is warped to a fixed canvas size from the settings, 512x360 by default, for A4 in landscape, so captures are comparable and the suggester can warm up once at that size.
-- **Settings:** `[suggester] name` chooses `fake`, the default, or `controlnet`. `[suggester.controlnet] precision` and `[drawing]` with `canvas_width`, `canvas_height`, and `save_interval_seconds` are optional.
+- **Settings:** `[stroke_suggester] name`, renamed from `[suggester]` so it is not confused with prompt suggestions, chooses `fake`, the default, or `controlnet`. `[stroke_suggester.controlnet] precision` and `[drawing]` with `canvas_width`, `canvas_height`, and `save_interval_seconds` are optional.
 
 Alternatives considered are recorded in [the T09 design](../design/t09-guided-sketching.md):
 

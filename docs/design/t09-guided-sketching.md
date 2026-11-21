@@ -167,10 +167,10 @@ Invariants, checked in `__post_init__` with `require`:
 ### Registry and settings (`sketchloop.components`, `sketchloop.settings`)
 
 ```toml
-[suggester]
+[stroke_suggester]
 name = "fake"            # fake or controlnet
 
-[suggester.controlnet]
+[stroke_suggester.controlnet]
 precision = "float16"    # optional, float16 on a GPU and float32 on the CPU by default
 
 [drawing]
@@ -179,7 +179,7 @@ canvas_height = 360      # 512 x 360 is A4 or Letter in landscape, rounded to th
 save_interval_seconds = 2.0
 ```
 
-- `STROKE_SUGGESTERS: Final[dict[str, StrokeSuggesterFactory]]` holds `"fake"` and `"controlnet"`, built with `settings.models.dir` and the precision. `make_stroke_suggester(settings)` creates one, and `check_component_names` checks `suggester.name` and `suggester.controlnet.precision`.
+- `STROKE_SUGGESTERS: Final[dict[str, StrokeSuggesterFactory]]` holds `"fake"` and `"controlnet"`, built with `settings.models.dir` and the precision. `make_stroke_suggester(settings)` creates one, and `check_component_names` checks `stroke_suggester.name` and `stroke_suggester.controlnet.precision`.
 - The default is `"fake"`, like `generator.backend`, so default checks need no weights. The study's settings file names `"controlnet"` explicitly, which also documents the method used.
 - `MINIMUMS` and `check_range` refuse canvas sides that are not multiples of 8 or are outside 256 to 1024, and a save interval of 0.5 s or less, since frames arrive only every `ui.capture_interval_seconds`.
 - `scripts/download_models.py` needs no change, because it already fetches all three models.
@@ -570,7 +570,7 @@ Each slice is one commit, with its tests, and updates [the call graph](../call-g
 | Slice | Item | Who | Files, in order |
 | --- | --- | --- | --- |
 | 1. Suggester interface | 24 | B | `generation.py`: extract `control_issues`. `stroke_suggestion.py`: constants, error, the four records, `StrokeSuggester`. |
-| 2. Fake suggester and settings | 25 | B | `stroke_suggesters/__init__.py`, `stroke_suggesters/fake.py`. `settings.py`: `SuggesterSettings`, `ControlNetSuggesterSettings`, `DrawingSettings`, and their ranges. `components.py`: `STROKE_SUGGESTERS`, `make_stroke_suggester`, and the name checks. `examples/sketchloop.toml`. |
+| 2. Fake suggester and settings | 25 | B | `stroke_suggesters/__init__.py`, `stroke_suggesters/fake.py`. `settings.py`: `StrokeSuggesterSettings`, `ControlNetSuggesterSettings`, `DrawingSettings`, and their ranges. `components.py`: `STROKE_SUGGESTERS`, `make_stroke_suggester`, and the name checks. `examples/sketchloop.toml`. |
 | 3. Paper canvas | 28, 30 | B | `preprocessing.py`: `PaperCanvas`, `make_paper_canvas`, `extract_canvas_strokes`. |
 | 4. Real suggester | 26 | B | `backends/diffusers.py`: `require_model_folders`. `stroke_suggesters/line_parts.py`. `stroke_suggesters/controlnet.py`. Register `"controlnet"`. |
 | 5. Experiment names, drawing records, and suggest | 27, 28 | B | `experiments/records.py`: `check_experiment_name`, the two name errors, and `SessionRecord.name`. `experiments/serialization.py`: the `name` field, and split the backend and effective helpers. `experiments/drawings.py`. `experiments/stores.py`: `claim_session`, `locate_drawing`, `save_drawing`. `drawing.py`: `GuidedDrawing` with `suggest`, the overlay, `compose_preview`, and `finish` without follow. `session.py`: the `name` argument, `ensure_session_record`, `start_drawing`. `app.py`: `start_drawing`, `suggest_strokes`, `preview_guided_sketch`, `finish_drawing`, and the views. `cli/serve.py`: create and warm up the suggester. |

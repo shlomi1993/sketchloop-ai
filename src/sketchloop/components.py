@@ -17,6 +17,7 @@ from sketchloop.generation import Generator
 from sketchloop.preprocessing import MinimalPreprocessor, Preprocessor, StrokePreprocessor
 from sketchloop.settings import (CaptureSettings, PreprocessingSettings, Settings, SettingsError, StorageSettings,
                                  join_choices)
+from sketchloop.stroke_suggesters.controlnet import ControlNetStrokeSuggester
 from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
 from sketchloop.stroke_suggestion import StrokeSuggester
 
@@ -46,6 +47,11 @@ def make_diffusers_generator(settings: Settings, generator_class: type[Diffusers
     options = settings.generator.diffusers
     return generator_class(settings.models.dir, mode=GenerationMode(options.mode) if options.mode else None,
                            precision=TorchPrecision(options.precision) if options.precision else None)
+
+
+def make_controlnet_stroke_suggester(settings: Settings) -> StrokeSuggester:
+    precision = settings.stroke_suggester.controlnet.precision
+    return ControlNetStrokeSuggester(settings.models.dir, precision=TorchPrecision(precision) if precision else None)
 
 
 def make_file_capture(settings: CaptureSettings, sketch_file: Path | None) -> CaptureSource:
@@ -88,7 +94,8 @@ STORES: Final[dict[str, StoreFactory]] = {
     "folder": lambda settings: FolderStore(settings.runs_dir)
 }
 STROKE_SUGGESTERS: Final[dict[str, StrokeSuggesterFactory]] = {
-    "fake": lambda settings: FakeStrokeSuggester()
+    "fake": lambda settings: FakeStrokeSuggester(),
+    "controlnet": make_controlnet_stroke_suggester,
 }
 
 
@@ -173,7 +180,7 @@ def make_stroke_suggester(settings: Settings) -> StrokeSuggester:
     """
     Create the configured next-stroke suggester, which reads the models folder from the settings, without loading any model.
     """
-    return STROKE_SUGGESTERS[settings.suggester.name](settings)
+    return STROKE_SUGGESTERS[settings.stroke_suggester.name](settings)
 
 
 def check_component_names(settings: Settings, label: str) -> None:
@@ -192,8 +199,8 @@ def check_component_names(settings: Settings, label: str) -> None:
         "preprocessing.name": (settings.preprocessing.name, PREPROCESSORS),
         "evaluator.name": (settings.evaluator.name, EVALUATORS),
         "storage.store": (settings.storage.store, STORES),
-        "suggester.name": (settings.suggester.name, STROKE_SUGGESTERS),
-        "suggester.controlnet.precision": (settings.suggester.controlnet.precision, list(TorchPrecision)),
+        "stroke_suggester.name": (settings.stroke_suggester.name, STROKE_SUGGESTERS),
+        "stroke_suggester.controlnet.precision": (settings.stroke_suggester.controlnet.precision, list(TorchPrecision)),
     }
 
     # An unset mode or precision means the device default, so only a set one is checked.

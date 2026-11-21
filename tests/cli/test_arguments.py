@@ -66,7 +66,7 @@ def launches(monkeypatch: pytest.MonkeyPatch) -> list[tuple[AppController, dict[
     ("ui", [], "[ui]\ncapture_interval_seconds = inf\n", r"capture_interval_seconds must be greater than 0, got inf\."),
     ("run", [], "seed = 7\n", re.escape("sketchloop.toml: unknown section [seed]. Use generator, ")),
     ("ui", [], "[drawing]\ncanvas_width = 500\n", re.escape("canvas_width must be a multiple of 8 from 256 to 1024, got 500.")),
-    ("ui", [], '[suggester]\nname = "magic"\n', re.escape('sketchloop.toml: suggester.name must be one of fake, got "magic".'))
+    ("ui", [], '[stroke_suggester]\nname = "magic"\n', re.escape('name must be one of fake or controlnet, got "magic".'))
 ], ids=["candidates-0", "negative-seed", "ui-candidates-0", "mode-without-diffusers", "precision-without-diffusers",
         "misspelled-precision", "misspelled-backend", "boolean-candidates",
         "unknown-key", "broken-toml", "rotation-with-raw", "memory-store", "missing-config", "infinite-interval-flag",

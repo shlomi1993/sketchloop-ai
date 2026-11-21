@@ -41,17 +41,19 @@ def test_guided_sketching_defaults_and_file_values(tmp_path: Path) -> None:
     """
     # Without a file, the fake suggester needs no weights, and the canvas is A4 in landscape on the latent grid.
     defaults = Settings()
-    assert defaults.suggester.name == "fake", f"Expected the fake suggester by default, got {defaults.suggester.name!r}"
-    assert defaults.suggester.controlnet.precision is None, "The precision must default to the device default"
+    suggester = defaults.stroke_suggester
+    assert suggester.name == "fake", f"Expected the fake suggester by default, got {suggester.name!r}"
+    assert suggester.controlnet.precision is None, "The precision must default to the device default"
     drawing = (defaults.drawing.canvas_width, defaults.drawing.canvas_height, defaults.drawing.save_interval_seconds)
     assert drawing == (512, 360, 2.0), f"Expected a 512x360 canvas saved every 2 s, got {drawing}"
 
     # A file sets each key, and an integer interval becomes seconds as a float.
     config = tmp_path / "sketchloop.toml"
-    config.write_text('[suggester]\nname = "fake"\n\n[suggester.controlnet]\nprecision = "float32"\n\n'
+    config.write_text('[stroke_suggester]\nname = "fake"\n\n[stroke_suggester.controlnet]\nprecision = "float32"\n\n'
                       "[drawing]\ncanvas_width = 1024\ncanvas_height = 256\nsave_interval_seconds = 3\n", encoding="utf-8")
     settings = load_settings(config)
-    assert settings.suggester.controlnet.precision == "float32", f"Got precision {settings.suggester.controlnet.precision!r}"
+    precision = settings.stroke_suggester.controlnet.precision
+    assert precision == "float32", f"Got precision {precision!r}"
     drawing = (settings.drawing.canvas_width, settings.drawing.canvas_height, settings.drawing.save_interval_seconds)
     assert drawing == (1024, 256, 3.0), f"Expected the file's drawing values, got {drawing}"
     assert isinstance(settings.drawing.save_interval_seconds, float), "The interval must be held as a float"
@@ -64,7 +66,7 @@ def test_guided_sketching_defaults_and_file_values(tmp_path: Path) -> None:
     ("[drawing]\ncanvas_width = 512.0\n", "drawing.canvas_width must be an integer, got 512.0."),
     ("[drawing]\nsave_interval_seconds = 0.5\n", "drawing.save_interval_seconds must be greater than 0.5, got 0.5."),
     ("[drawing]\nsave_interval_seconds = inf\n", "drawing.save_interval_seconds must be greater than 0.5, got inf."),
-    ("[suggester]\ngoal = \"a car\"\n", "unknown key suggester.goal. Keys in [suggester]: name, controlnet.")
+    ("[stroke_suggester]\ngoal = \"a car\"\n", "unknown key stroke_suggester.goal. Keys in [stroke_suggester]: name, controlnet.")
 ], ids=["width-500", "height-248", "width-1032", "float-width", "interval-0.5", "infinite-interval", "goal-key"])
 def test_guided_sketching_values_refused(tmp_path: Path, text: str, message: str) -> None:
     """

@@ -43,6 +43,10 @@ MIN_TILT_DEGREES: Final = 1.0
 # Outline points this close to the image border are where the frame cuts a sheet, not the sheet's own corners or edges.
 FRAME_EDGE_PIXELS: Final = 3
 
+# Bare file names of the paper-frame canvas and its strokes, placed by the caller.
+CANVAS_FILE: Final = "canvas.png"
+CANVAS_STROKES_FILE: Final = "strokes.png"
+
 # OpenCV rotation codes by clockwise angle in degrees.
 ROTATE_CODES: Final = {
     Rotation.DEG_000: None,
@@ -73,6 +77,13 @@ class PreprocessedSketch:
     image: ImageRef
     payload: bytes
     steps: tuple[PreprocessingStep, ...]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PaperCanvas:
+    image: ImageRef  # Grayscale paper frame at the canvas size, path "canvas.png" until the caller places it
+    payload: bytes  # PNG bytes of the image
+    steps: tuple[PreprocessingStep, ...]  # grayscale, rotate, isolate_paper, crop_to_paper when used, resize_to_canvas
 
 
 def odd_kernel_size(reference_pixels: int, scale: float) -> int:
@@ -448,6 +459,24 @@ def resize_long_side(image: np.ndarray) -> tuple[np.ndarray, dict[str, ControlVa
     return resized, {"width": size[0], "height": size[1], "interpolation": interpolation_name}
 
 
+def encode_grayscale_png(image: np.ndarray, path: str, failure_message: str) -> tuple[ImageRef, bytes]:
+    encoded, buffer = cv2.imencode(".png", image)
+    if not encoded:
+        raise InvalidSketchError(failure_message)
+
+    payload = buffer.tobytes()
+    height, width = image.shape
+    image_ref = ImageRef(
+        path=path,
+        width=width,
+        height=height,
+        mode=ColorMode.L,
+        media_type="image/png",
+        sha256=hashlib.sha256(payload).hexdigest()
+    )
+    return image_ref, payload
+
+
 def encode_processed_sketch(image: np.ndarray) -> tuple[ImageRef, bytes]:
     """
     Encode the processed sketch as PNG and describe it as `sketch.png` in the run folder.
@@ -458,21 +487,7 @@ def encode_processed_sketch(image: np.ndarray) -> tuple[ImageRef, bytes]:
     Returns:
         tuple[ImageRef, bytes]: The image reference and the PNG bytes.
     """
-    encoded, buffer = cv2.imencode(".png", image)
-    if not encoded:
-        raise InvalidSketchError("Preprocessed sketch cannot be encoded as PNG. Retry with --raw.")
-
-    payload = buffer.tobytes()
-    height, width = image.shape
-    image_ref = ImageRef(
-        path="sketch.png",
-        width=width,
-        height=height,
-        mode=ColorMode.L,
-        media_type="image/png",
-        sha256=hashlib.sha256(payload).hexdigest()
-    )
-    return image_ref, payload
+    return encode_grayscale_png(image, "sketch.png", "Preprocessed sketch cannot be encoded as PNG. Retry with --raw.")
 
 
 def preprocess_sketch(payload: bytes, rotation: int = Rotation.DEG_000) -> PreprocessedSketch:
@@ -538,6 +553,85 @@ def preprocess_minimally(payload: bytes, rotation: int = Rotation.DEG_000) -> Pr
     )
     image, processed = encode_processed_sketch(resized)
     return PreprocessedSketch(image=image, payload=processed, steps=steps)
+
+
+def crop_to_paper(paper_only: np.ndarray, paper_mask: np.ndarray) -> tuple[np.ndarray, dict[str, ControlValue]]:
+    left, top, width, height = cv2.boundingRect(paper_mask)
+    params: dict[str, ControlValue] = {"x": left, "y": top, "width": width, "height": height}
+    return paper_only[top:top + height, left:left + width], params
+
+
+def resize_to_canvas(image: np.ndarray, width: int, height: int) -> tuple[np.ndarray, dict[str, ControlValue]]:
+    source_height, source_width = image.shape
+    resized = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
+    params: dict[str, ControlValue] = {
+        "source_width": source_width,
+        "source_height": source_height,
+        "width": width,
+        "height": height,
+        "interpolation": "area",
+    }
+    return resized, params
+
+
+def make_paper_canvas(payload: bytes, rotation: int, width: int, height: int) -> PaperCanvas:
+    if rotation not in ROTATE_CODES:
+        raise ValueError(f"Rotation {rotation} is not supported. Use 0, 90, 180, or 270 degrees clockwise.")
+
+    if width < 1 or height < 1:
+        raise ValueError(f"Canvas size {width}x{height} is not supported. Use positive sides, such as 512x360.")
+
+    # Decode to grayscale and turn the photo upright, as for generation.
+    rotated = rotate_image(decode_grayscale(payload), rotation)
+    steps = [
+        PreprocessingStep(name="grayscale", params={}),
+        PreprocessingStep(name="rotate", params={"degrees_clockwise": rotation}),
+    ]
+
+    # Keep the whole sheet, warped by its corners when all are visible, without dropping any stroke on it.
+    pixel_scale = max(rotated.shape) / REFERENCE_LONG_SIDE_PIXELS
+    paper_only, paper_mask, paper_params = isolate_paper(rotated, pixel_scale)
+    steps.append(PreprocessingStep(name="isolate_paper", params=paper_params))
+
+    # Without corners the sheet is not warped, so cut it out by the paper's box instead.
+    if not paper_params["corners_found"]:
+        paper_only, crop_params = crop_to_paper(paper_only, paper_mask)
+        steps.append(PreprocessingStep(name="crop_to_paper", params=crop_params))
+
+    # Stretch to the fixed canvas, so every capture of a drawing shares one frame.
+    resized, resize_params = resize_to_canvas(paper_only, width, height)
+    steps.append(PreprocessingStep(name="resize_to_canvas", params=resize_params))
+    image, canvas_payload = encode_grayscale_png(resized, CANVAS_FILE, "Paper canvas cannot be encoded as PNG. Capture again.")
+    return PaperCanvas(image=image, payload=canvas_payload, steps=tuple(steps))
+
+
+def extract_canvas_strokes(canvas_payload: bytes) -> PreprocessedSketch:
+    gray = decode_grayscale(canvas_payload)
+    pixel_scale = max(gray.shape) / REFERENCE_LONG_SIDE_PIXELS
+
+    # Mark pixels darker than the local paper anywhere on the canvas, which is white outside the sheet.
+    blur_size = odd_kernel_size(PAPER_BLUR_PIXELS, pixel_scale)
+    darker = mark_darker_pixels(gray, np.full_like(gray, 255), blur_size)
+
+    # Drop specks, but keep every stroke however far from the others, since a new part may start anywhere.
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(darker.astype(np.uint8))
+    min_area = max(1, round(MIN_STROKE_AREA_PIXELS * pixel_scale * pixel_scale))
+    kept = [label for label in range(1, count) if stats[label, cv2.CC_STAT_AREA] >= min_area]
+    drawing = np.where(np.isin(labels, kept), 0, 255).astype(np.uint8)
+    mark_params: dict[str, ControlValue] = {
+        "contrast": LOCAL_STROKE_CONTRAST,
+        "blur_pixels": blur_size,
+        "min_area_pixels": min_area,
+        "kept_strokes": len(kept),
+    }
+
+    # Thicken the strokes as for generation, then encode them as the suggester's input.
+    thickened, thicken_params = thicken_strokes(drawing, pixel_scale)
+    steps = (PreprocessingStep(name="mark_strokes", params=mark_params),
+             PreprocessingStep(name="thicken_strokes", params=thicken_params))
+    message = "Canvas strokes cannot be encoded as PNG. Capture again and retry."
+    image, strokes_payload = encode_grayscale_png(thickened, CANVAS_STROKES_FILE, message)
+    return PreprocessedSketch(image=image, payload=strokes_payload, steps=steps)
 
 
 class Preprocessor(ABC):

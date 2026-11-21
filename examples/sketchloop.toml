@@ -35,10 +35,10 @@ candidates = 4
 candidates = 1
 capture_interval_seconds = 0.5
 
-[suggester]  # next-stroke suggestions for guided sketching, which the page does not use yet
-name = "fake"  # fake, the only suggester so far, which draws test shapes
+[stroke_suggester]  # next-stroke suggestions for guided sketching, which the page does not use yet
+name = "fake"  # fake, which draws test shapes, or controlnet, which draws new parts with SD 1.5 from the models folder
 
-[suggester.controlnet]
+[stroke_suggester.controlnet]
 # precision = "float16"  # float16 or float32, omit for float16 on a GPU and float32 on CPU
 
 [drawing]  # guided sketching

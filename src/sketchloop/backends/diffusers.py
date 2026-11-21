@@ -10,6 +10,7 @@ import time
 import uuid
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -174,6 +175,25 @@ def select_device() -> TorchDevice:
     return TorchDevice.CPU
 
 
+def pick_default_precision(device: TorchDevice) -> TorchPrecision:
+    # Half precision halves the models' memory and is faster on a GPU, but has no fast CPU kernels, so the CPU uses float32.
+    return TorchPrecision.FLOAT32 if device == TorchDevice.CPU else TorchPrecision.FLOAT16
+
+
+def require_model_folders(models_dir: Path, sources: Sequence[ModelSource]) -> None:
+    for source in sources:
+        folder = models_dir / source.folder
+        if not folder.is_dir():
+            message = f"Model folder {folder.as_posix()} is missing. Run python scripts/download_models.py from the folder with your settings file and retry."  # noqa: E501
+            raise GenerationBackendError(message)
+
+
+def fuse_lcm_lora(pipeline: Any, models_dir: Path) -> None:
+    # Fusing the LCM-LoRA into the model lets 4 to 5 steps give a usable image.
+    pipeline.load_lora_weights(str(models_dir / LCM_LORA_MODEL.folder), weight_name=LCM_LORA_WEIGHTS)
+    pipeline.fuse_lora()
+
+
 def describe_torch_runtime(torch_module: Any, device: TorchDevice) -> dict[str, ControlValue]:
     """
     Read the torch thread count, and the GPU name on CUDA, which shape latency and are recorded as effective settings.
@@ -270,9 +290,8 @@ class DiffusersSketchGenerator(Generator):
         default_mode = GenerationMode.FAST if self.device == TorchDevice.CPU else GenerationMode.QUALITY
         self.mode = GenerationMode(mode) if mode else default_mode
 
-        # Half precision halves the models' memory and is faster on a GPU, but has no fast CPU kernels, so the CPU uses float32.
-        default_precision = TorchPrecision.FLOAT32 if self.device == TorchDevice.CPU else TorchPrecision.FLOAT16
-        self.precision = TorchPrecision(precision) if precision else default_precision
+        # Half precision needs a GPU, so the CPU runs in float32.
+        self.precision = TorchPrecision(precision) if precision else pick_default_precision(self.device)
         if self.precision == TorchPrecision.FLOAT16 and self.device == TorchDevice.CPU:
             message = "float16 needs a GPU, but this backend runs on the CPU. Pass --precision float32 or set generator.diffusers.precision."  # noqa: E501
             raise GenerationBackendError(message)
@@ -322,16 +341,11 @@ class DiffusersSketchGenerator(Generator):
         )
 
     def _fuse_lcm_lora(self, diffusers: Any, pipeline: Any) -> None:
-        pipeline.load_lora_weights(str(self._model_dir / LCM_LORA_MODEL.folder), weight_name=LCM_LORA_WEIGHTS)
-        pipeline.fuse_lora()
+        fuse_lcm_lora(pipeline, self._model_dir)
 
     def _load_runner(self) -> PipelineRunner:
         # Report a missing download before the slow library imports.
-        for source in self._list_model_sources():
-            folder = self._model_dir / source.folder
-            if not folder.is_dir():
-                message = f"Model folder {folder.as_posix()} is missing. Run python scripts/download_models.py from the folder with your settings file and retry."  # noqa: E501
-                raise GenerationBackendError(message)
+        require_model_folders(self._model_dir, self._list_model_sources())
 
         # Import the heavy libraries only when a real model is needed.
         try:
