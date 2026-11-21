@@ -48,7 +48,7 @@ After the first supervisor meeting ([notes](meetings/2026-11-supervisor-meeting-
 
 | ID | Requirement | Observable acceptance |
 | --- | --- | --- |
-| S01 | Guided sketching | On request, the system shows visual suggestions for continuing the drawing toward the stated goal, such as wheels for a car, overlaid on the live sketch. It never replaces the physical sketch or presents a finished design as the result. |
+| S01 | Guided sketching | On request, the system shows visual suggestions for continuing the drawing, guided only by the sketch and the prompt the participant wrote, such as wheels for a car, overlaid on the live sketch. The system is never told the task. It never replaces the physical sketch or presents a finished design as the result. |
 | S02 | Implicit acceptance | Each suggestion is recorded as followed, not followed, or undetermined, inferred from the strokes drawn after it, with the method, score, and threshold kept so the inference can be recomputed. It is recorded separately from explicit selections. |
 | S03 | Study conditions | A study session records a pseudonymous participant code, the design task, and the condition, with or without AI. Without AI, the same capture and records run with suggestions turned off. |
 | S04 | Process and outcome data | The drawing is captured over time during each task, each task ends with a final drawing, and all drawings can be exported for expert evaluation without revealing participant or condition. |
