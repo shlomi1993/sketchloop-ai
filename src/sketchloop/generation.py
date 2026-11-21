@@ -5,7 +5,7 @@ Generator interface, its capabilities, and the validation of requested controls.
 import hashlib
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
@@ -163,6 +163,39 @@ def _control_problem(spec: ControlSpec, value: ControlValue) -> tuple[IssueCode,
     return None
 
 
+def control_issues(controls: Mapping[str, ControlValue], specs: Sequence[ControlSpec],
+                   field_prefix: str) -> tuple[ValidationIssue, ...]:
+    """
+    List every requested control that is unknown or breaks its spec, shared by generators and stroke suggesters.
+
+    Args:
+        controls (Mapping[str, ControlValue]): Requested controls by name.
+        specs (Sequence[ControlSpec]): Controls the component supports.
+        field_prefix (str): Dotted path of the controls in the request, such as guidance.controls, for each issue's field.
+
+    Returns:
+        tuple[ValidationIssue, ...]: Issues in control name order, empty when every control is valid.
+    """
+    # Check each control against its spec, in sorted order so the issue list is stable.
+    issues = []
+    specs_by_name = {spec.name: spec for spec in specs}
+    for name in sorted(controls):
+        field = f"{field_prefix}.{name}"
+
+        # Name the supported controls so the person can correct a typo.
+        if name not in specs_by_name:
+            message = f"Unknown control. Supported: {', '.join(sorted(specs_by_name)) or 'none'}."
+            issues.append(ValidationIssue(field=field, code=IssueCode.UNKNOWN_CONTROL, message=message))
+            continue
+
+        # Record a type, choice, or range problem for a known control.
+        problem = _control_problem(specs_by_name[name], controls[name])
+        if problem is not None:
+            issues.append(ValidationIssue(field=field, code=problem[0], message=problem[1]))
+
+    return tuple(issues)
+
+
 def request_issues(request: GenerationRequest, capabilities: GeneratorCapabilities) -> tuple[ValidationIssue, ...]:
     """
     List every way a request exceeds the backend's capabilities.
@@ -188,23 +221,8 @@ def request_issues(request: GenerationRequest, capabilities: GeneratorCapabiliti
         message = "Negative prompts are unsupported. Omit it."
         issues.append(ValidationIssue(field="guidance.negative_prompt", code=IssueCode.UNSUPPORTED_FEATURE, message=message))
 
-    # Check each control against its spec, in sorted order so the issue list is stable.
-    specs = {spec.name: spec for spec in capabilities.controls}
-    for name in sorted(request.guidance.controls):
-        field = f"guidance.controls.{name}"
-
-        # Name the supported controls so the person can correct a typo.
-        if name not in specs:
-            message = f"Unknown control. Supported: {', '.join(sorted(specs)) or 'none'}."
-            issues.append(ValidationIssue(field=field, code=IssueCode.UNKNOWN_CONTROL, message=message))
-            continue
-
-        # Record a type, choice, or range problem for a known control.
-        problem = _control_problem(specs[name], request.guidance.controls[name])
-        if problem is not None:
-            issues.append(ValidationIssue(field=field, code=problem[0], message=problem[1]))
-
-    return tuple(issues)
+    # Check the controls last, so their issues follow the request-level ones.
+    return (*issues, *control_issues(request.guidance.controls, capabilities.controls, "guidance.controls"))
 
 
 def validate_request(request: GenerationRequest, capabilities: GeneratorCapabilities) -> None:

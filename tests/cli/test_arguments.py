@@ -64,11 +64,13 @@ def launches(monkeypatch: pytest.MonkeyPatch) -> list[tuple[AppController, dict[
     ("rerun", ["--config", "missing.toml"], None, re.escape("Settings file missing.toml not found. Check the --config path.")),
     ("ui", ["--capture-interval", "inf"], None, r"must be greater than 0 seconds, got inf"),
     ("ui", [], "[ui]\ncapture_interval_seconds = inf\n", r"capture_interval_seconds must be greater than 0, got inf\."),
-    ("run", [], "seed = 7\n", re.escape("sketchloop.toml: unknown section [seed]. Use generator, "))
+    ("run", [], "seed = 7\n", re.escape("sketchloop.toml: unknown section [seed]. Use generator, ")),
+    ("ui", [], "[drawing]\ncanvas_width = 500\n", re.escape("canvas_width must be a multiple of 8 from 256 to 1024, got 500.")),
+    ("ui", [], '[suggester]\nname = "magic"\n', re.escape('sketchloop.toml: suggester.name must be one of fake, got "magic".'))
 ], ids=["candidates-0", "negative-seed", "ui-candidates-0", "mode-without-diffusers", "precision-without-diffusers",
         "misspelled-precision", "misspelled-backend", "boolean-candidates",
         "unknown-key", "broken-toml", "rotation-with-raw", "memory-store", "missing-config", "infinite-interval-flag",
-        "infinite-interval-file", "top-level-key"])
+        "infinite-interval-file", "top-level-key", "canvas-width-500", "unknown-stroke-suggester"])
 def test_cli_rejects_invalid_options(tmp_path: Path, capsys: pytest.CaptureFixture[str], command: str, option: list[str],
                                      settings_text: str | None, error_pattern: str) -> None:
     """

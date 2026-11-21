@@ -137,6 +137,18 @@ def require_duration(value: object, label: str) -> None:
     require(is_number and math.isfinite(value) and value >= 0, f"{label} must be finite seconds >= 0, got {value!r}.")
 
 
+def freeze_controls(controls: Mapping[str, ControlValue]) -> Mapping[str, ControlValue]:
+    """
+    Check requested controls and return a read-only copy, so later changes to the caller's dict cannot alter a record.
+    """
+    # Keep control names portable and values serializable, since NaN and infinity break JSON records.
+    for name, value in controls.items():
+        require(isinstance(name, str) and _CONTROL_NAME.fullmatch(name), f"Control {name!r} must be snake_case.")
+        require(not isinstance(value, float) or math.isfinite(value), f"Control {name} must be finite.")
+
+    return MappingProxyType(dict(controls))
+
+
 def first_line(error: BaseException) -> str:
     """
     Return the first line of an exception's message, or its class name when the message is empty.
@@ -202,13 +214,7 @@ class Guidance:
     controls: Mapping[str, ControlValue] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        # Keep control names portable and values serializable, since NaN and infinity break JSON records.
-        for name, value in self.controls.items():
-            require(isinstance(name, str) and _CONTROL_NAME.fullmatch(name), f"Control {name!r} must be snake_case.")
-            require(not isinstance(value, float) or math.isfinite(value), f"Control {name} must be finite.")
-
-        # Copy into a read-only view so later changes to the caller's dict cannot alter the record.
-        object.__setattr__(self, "controls", MappingProxyType(dict(self.controls)))
+        object.__setattr__(self, "controls", freeze_controls(self.controls))
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

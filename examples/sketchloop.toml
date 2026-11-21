@@ -34,3 +34,14 @@ candidates = 4
 [ui]
 candidates = 1
 capture_interval_seconds = 0.5
+
+[suggester]  # next-stroke suggestions for guided sketching, which the page does not use yet
+name = "fake"  # fake, the only suggester so far, which draws test shapes
+
+[suggester.controlnet]
+# precision = "float16"  # float16 or float32, omit for float16 on a GPU and float32 on CPU
+
+[drawing]  # guided sketching
+canvas_width = 512  # paper frame width in pixels, a multiple of 8 from 256 to 1024
+canvas_height = 360  # 512 x 360 is A4 or Letter in landscape, rounded to the latent grid
+save_interval_seconds = 2.0  # seconds between saved captures while a drawing is open, more than 0.5

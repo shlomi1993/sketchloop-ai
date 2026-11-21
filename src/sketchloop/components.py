@@ -1,5 +1,5 @@
 """
-Factories that build the capture, preprocessing, evaluation, and storage components the settings name.
+Factories that build the capture, preprocessing, evaluation, storage, and stroke suggestion components the settings name.
 """
 
 from collections.abc import Callable, Mapping
@@ -17,6 +17,8 @@ from sketchloop.generation import Generator
 from sketchloop.preprocessing import MinimalPreprocessor, Preprocessor, StrokePreprocessor
 from sketchloop.settings import (CaptureSettings, PreprocessingSettings, Settings, SettingsError, StorageSettings,
                                  join_choices)
+from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
+from sketchloop.stroke_suggestion import StrokeSuggester
 
 
 FAKE_BACKEND: Final = "fake"
@@ -27,6 +29,7 @@ CaptureFactory: TypeAlias = Callable[[CaptureSettings, Path | None], CaptureSour
 PreprocessorFactory: TypeAlias = Callable[[PreprocessingSettings], Preprocessor]
 EvaluatorFactory: TypeAlias = Callable[[Settings], Evaluator]
 StoreFactory: TypeAlias = Callable[[StorageSettings], ExperimentStore]
+StrokeSuggesterFactory: TypeAlias = Callable[[Settings], StrokeSuggester]
 
 
 def make_diffusers_generator(settings: Settings, generator_class: type[DiffusersSketchGenerator]) -> Generator:
@@ -83,6 +86,9 @@ EVALUATORS: Final[dict[str, EvaluatorFactory]] = {
 }
 STORES: Final[dict[str, StoreFactory]] = {
     "folder": lambda settings: FolderStore(settings.runs_dir)
+}
+STROKE_SUGGESTERS: Final[dict[str, StrokeSuggesterFactory]] = {
+    "fake": lambda settings: FakeStrokeSuggester()
 }
 
 
@@ -163,6 +169,13 @@ def make_store(settings: StorageSettings) -> ExperimentStore:
     return STORES[settings.store](settings)
 
 
+def make_stroke_suggester(settings: Settings) -> StrokeSuggester:
+    """
+    Create the configured next-stroke suggester, which reads the models folder from the settings, without loading any model.
+    """
+    return STROKE_SUGGESTERS[settings.suggester.name](settings)
+
+
 def check_component_names(settings: Settings, label: str) -> None:
     """
     Refuse a backend, mode, precision, or component name that no registry knows, naming the first bad key.
@@ -179,6 +192,8 @@ def check_component_names(settings: Settings, label: str) -> None:
         "preprocessing.name": (settings.preprocessing.name, PREPROCESSORS),
         "evaluator.name": (settings.evaluator.name, EVALUATORS),
         "storage.store": (settings.storage.store, STORES),
+        "suggester.name": (settings.suggester.name, STROKE_SUGGESTERS),
+        "suggester.controlnet.precision": (settings.suggester.controlnet.precision, list(TorchPrecision)),
     }
 
     # An unset mode or precision means the device default, so only a set one is checked.

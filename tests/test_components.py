@@ -3,18 +3,21 @@ Tests of the evaluator registry, which builds evaluators from the whole settings
 """
 
 import pytest
+import re
 
 from pathlib import Path
 
 from sketchloop.backends.diffusers import DiffusersSketchGenerator, ModelSource
 from sketchloop.backends.t2i_adapter import T2IAdapterSketchGenerator
-from sketchloop.components import (EVALUATOR_MODELS, EVALUATORS, check_component_names, find_recorded_evaluator, make_evaluator,
-                                   make_generator, make_preprocessor)
+from sketchloop.components import (EVALUATOR_MODELS, EVALUATORS, STROKE_SUGGESTERS, check_component_names,
+                                   find_recorded_evaluator, make_evaluator, make_generator, make_preprocessor,
+                                   make_stroke_suggester)
 from sketchloop.evaluation import NoOpEvaluator
 from sketchloop.evaluators.clip import CLIP_B32_MODEL, CLIP_L14_MODEL, ClipEvaluator
 from sketchloop.preprocessing import MinimalPreprocessor, StrokePreprocessor
-from sketchloop.settings import (DiffusersSettings, EvaluatorSettings, GeneratorSettings, ModelsSettings, PreprocessingSettings,
-                                 Settings, SettingsError)
+from sketchloop.settings import (ControlNetSuggesterSettings, DiffusersSettings, EvaluatorSettings, GeneratorSettings,
+                                 ModelsSettings, PreprocessingSettings, Settings, SettingsError, SuggesterSettings)
+from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
 
 
 def make_settings(evaluator_name: str, models_dir: Path) -> Settings:
@@ -92,3 +95,25 @@ def test_find_recorded_evaluator(evaluator: str | None, score_details: dict[str,
     """
     found = find_recorded_evaluator(evaluator, score_details)
     assert found == expected, f"Expected {expected} for {evaluator} with {score_details}, got {found}"
+
+
+def test_stroke_suggester_registry_builds_the_fake() -> None:
+    """
+    The default settings build the fake stroke suggester, the only one registered so far.
+    """
+    suggester = make_stroke_suggester(Settings())
+    assert isinstance(suggester, FakeStrokeSuggester), f"Expected the fake stroke suggester, got {type(suggester).__name__}"
+    assert set(STROKE_SUGGESTERS) == {"fake"}, f"Unexpected stroke suggesters {sorted(STROKE_SUGGESTERS)}"
+
+
+@pytest.mark.parametrize(("suggester", "message"), [
+    (SuggesterSettings(name="magic"), 'suggester.name must be one of fake, got "magic"'),
+    (SuggesterSettings(controlnet=ControlNetSuggesterSettings(precision="fp16")),
+     'suggester.controlnet.precision must be one of float16 or float32, got "fp16"')
+], ids=["unknown-name", "unknown-precision"])
+def test_unknown_stroke_suggester_settings_refused(suggester: SuggesterSettings, message: str) -> None:
+    """
+    An unknown stroke suggester name or precision is refused with the key and every choice.
+    """
+    with pytest.raises(SettingsError, match=re.escape(message)):
+        check_component_names(Settings(suggester=suggester), "sketchloop.toml")

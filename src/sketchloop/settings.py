@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Final, TypeVar, get_args
 
 from sketchloop.domain import Rotation, SketchLoopError
+from sketchloop.stroke_suggestion import CANVAS_GRID_PIXELS
 
 
 SETTINGS_FILE_NAME: Final = "sketchloop.toml"
@@ -24,6 +25,13 @@ MINIMUMS: Final[dict[str, int]] = {
     "ui.candidates": 1,
     "ui.seed": 0,
 }
+
+# Paper canvas sides of guided sketching, which must fit the model's 8-pixel latent grid.
+CANVAS_SIDE_KEYS: Final = ("drawing.canvas_width", "drawing.canvas_height")
+CANVAS_SIDE_RANGE_PIXELS: Final = (256, 1024)
+
+# Captures are saved less often than webcam frames arrive, which is every 0.5 s by default.
+MIN_SAVE_INTERVAL_SECONDS: Final = 0.5
 
 
 class SettingsError(SketchLoopError, ValueError):
@@ -114,6 +122,33 @@ class UiSettings:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ControlNetSuggesterSettings:
+    """
+    Options of the ControlNet next-stroke suggester.
+    """
+    precision: str | None = None  # float16 or float32, None for float16 on a GPU and float32 on CPU
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SuggesterSettings:
+    """
+    The next-stroke suggester and its options.
+    """
+    name: str = "fake"  # Registry name of the next-stroke suggester
+    controlnet: ControlNetSuggesterSettings = ControlNetSuggesterSettings()  # Options of the ControlNet suggester
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DrawingSettings:
+    """
+    The paper canvas and capture interval of guided sketching.
+    """
+    canvas_width: int = 512  # Paper frame width in pixels, a multiple of 8
+    canvas_height: int = 360  # Paper frame height in pixels, so 512x360 is A4 or Letter in landscape on the latent grid
+    save_interval_seconds: float = 2.0  # Seconds between saved captures while a drawing is open
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Settings:
     """
     Every component choice and default, from built-in values, a settings file, and command-line flags.
@@ -126,6 +161,8 @@ class Settings:
     storage: StorageSettings = StorageSettings()  # Experiment store and its folder
     run: RunSettings = RunSettings()  # Defaults for sketchloop run
     ui: UiSettings = UiSettings()  # Defaults for sketchloop ui
+    suggester: SuggesterSettings = SuggesterSettings()  # Next-stroke suggester and its options
+    drawing: DrawingSettings = DrawingSettings()  # Paper canvas and capture interval of guided sketching
 
 
 def join_choices(choices: Sequence[object]) -> str:
@@ -199,6 +236,14 @@ def check_range(key: str, value: object, label: str) -> None:
 
     if key == "ui.capture_interval_seconds" and not (value > 0 and math.isfinite(value)):
         raise SettingsError(f"{label}: {key} must be greater than 0, got {value}.")
+
+    smallest, largest = CANVAS_SIDE_RANGE_PIXELS
+    grid = CANVAS_GRID_PIXELS
+    if key in CANVAS_SIDE_KEYS and not (smallest <= value <= largest and value % grid == 0):
+        raise SettingsError(f"{label}: {key} must be a multiple of {grid} from {smallest} to {largest}, got {value}.")
+
+    if key == "drawing.save_interval_seconds" and not (value > MIN_SAVE_INTERVAL_SECONDS and math.isfinite(value)):
+        raise SettingsError(f"{label}: {key} must be greater than {MIN_SAVE_INTERVAL_SECONDS}, got {value}.")
 
 
 def convert_value(key: str, value: object, value_type: type, folder: Path, label: str) -> object:

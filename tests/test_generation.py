@@ -7,7 +7,7 @@ import pytest
 
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.domain import GenerationRequest, Guidance, ImageRef, UnsupportedConfigurationError
-from sketchloop.generation import ControlSpec, GeneratorCapabilities
+from sketchloop.generation import ControlSpec, GeneratorCapabilities, control_issues, request_issues
 
 
 SKETCH = ImageRef(path="sketches/s1.png", width=8, height=8, mode="L", media_type="image/png", sha256="a" * 64)
@@ -45,3 +45,28 @@ def test_every_unsupported_setting_is_reported_together() -> None:
     ]
     actual = [(issue.field, issue.code) for issue in raised.value.issues]
     assert actual == expected, f"Every issue must be reported in order, got {actual}"
+
+
+def test_control_issues_match_request_issues_under_any_prefix() -> None:
+    """
+    The extracted control check gives the request check's control issues, named under the caller's field prefix.
+    """
+    # Break every control rule once, so each kind of issue appears.
+    specs = (
+        ControlSpec(name="steps", kind="int", minimum=1, maximum=50),
+        ControlSpec(name="sampler", kind="choice", choices=("euler", "ddim"))
+    )
+    controls = {"steps": 0, "sampler": "x", "eta": 1}
+    capabilities = GeneratorCapabilities(controls=specs, max_candidates=1, supports_negative_prompt=True, supports_seed=True)
+    request = GenerationRequest(sketch=SKETCH, guidance=Guidance(prompt="chair", controls=controls))
+    from_request = request_issues(request, capabilities)
+    from_controls = control_issues(controls, specs, "controls")
+
+    # Both list the same codes and messages in name order, and only the field prefix differs.
+    expected = [("eta", "unknown_control"), ("sampler", "invalid_choice"), ("steps", "out_of_range")]
+    request_fields = [(issue.field, issue.code) for issue in from_request]
+    control_fields = [(issue.field, issue.code) for issue in from_controls]
+    assert request_fields == [(f"guidance.controls.{name}", code) for name, code in expected], f"Changed: {request_fields}"
+    assert control_fields == [(f"controls.{name}", code) for name, code in expected], f"Wrong prefix: {control_fields}"
+    assert [issue.message for issue in from_controls] == [issue.message for issue in from_request], "Messages must be shared"
+    assert control_issues({"steps": 4}, specs, "controls") == (), "Valid controls must give no issues"

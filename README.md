@@ -187,6 +187,7 @@ runs_dir = "runs"
 - **Paths:** a relative `runs_dir` or `[models] dir` is relative to the file's folder. Run `scripts/download_models.py` with the same file, so it downloads where the backend looks.
 - **Feedback:** a command that uses a file first prints `Settings:` with its path, and a bad value exits with one line naming the key.
 - **Rerun:** `rerun` takes only the store and models folder from the file, and everything else from the recorded round. It scores with the evaluator the round recorded, and uses the file's evaluator only when the recorded one cannot be recreated, saying so.
+- **Guided sketching:** `[suggester]` names the next-stroke suggester, so far only `fake`, which draws test shapes, and `[drawing]` sets the paper canvas size, 512x360 by default, and the seconds between saved captures, 2 by default. The page does not use them yet, and a canvas side must be a multiple of 8 from 256 to 1024.
 - **Evaluator:** `none`, the default, gives no scores. `clip-b32` (CLIP ViT-B/32, about 0.6 GB) and `clip-l14` (CLIP ViT-L/14, about 1.7 GB) score each candidate by the cosine similarity between its image and the prompt, from -1 to 1. They load from the models folder before the first round's scoring, which adds a few seconds to that round's model load time. The score says how well the image matches the words, not how good the design is, and each round records the CLIP model and revision that produced it.
 
 ## Using it as a library
