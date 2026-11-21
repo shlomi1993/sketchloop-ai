@@ -11,6 +11,7 @@ from sketchloop.stroke_suggesters.line_parts import (LinePartParams, count_skele
 
 
 CANVAS_SHAPE = (360, 512)
+RULE_ROWS = (20, 80, 140, 260, 320)
 
 
 def make_blank() -> np.ndarray:
@@ -48,6 +49,66 @@ def test_extract_new_lines_skips_lines_near_existing_strokes() -> None:
     assert new_lines[245:335, 205:295].any(), "The circle away from the strokes must be a new line"
     assert not new_lines[20:60, 400:500].any(), "Light gray texture must not count as a line"
     assert set(np.unique(new_lines)) <= {0, 255}, "The new-line mask must hold only 0 and 255"
+
+
+def test_extract_new_lines_drops_ruling_and_keeps_parts() -> None:
+    """
+    Ruled lines across the whole drawing are removed, while new parts between them stay whole.
+    """
+    line_drawing = make_blank()
+    for rule_y in RULE_ROWS:
+        cv2.line(line_drawing, (0, rule_y), (511, rule_y), 60, 2)
+    cv2.rectangle(line_drawing, (150, 100), (350, 200), 0, 3)
+    cv2.circle(line_drawing, (70, 110), 20, 0, 3)
+    cv2.polylines(line_drawing, [np.array([[420, 230], [440, 250], [460, 230], [480, 250]])], False, 0, 3)
+
+    parts = group_parts(extract_new_lines(line_drawing, draw_existing_strokes(), LinePartParams()), LinePartParams(), 4)
+    boxes = [cv2.boundingRect(part) for part in parts]
+
+    # Only the circle and the zigzag remain, each whole.
+    assert len(parts) == 2, f"Expected the circle and the zigzag, got boxes {boxes}"
+    assert abs(boxes[0][0] - 49) <= 2 and abs(boxes[0][2] - 43) <= 2, f"The circle must be whole, got {boxes[0]}"
+    assert boxes[1][0] <= 420 and boxes[1][0] + boxes[1][2] >= 480, f"The zigzag must be whole, got {boxes[1]}"
+
+    # No part keeps any piece of a ruled line.
+    covered = np.bitwise_or.reduce(np.stack(parts), axis=0)
+    for rule_y in RULE_ROWS:
+        assert not covered[rule_y - 2:rule_y + 3].any(), f"The ruled line at y={rule_y} must be dropped"
+
+
+def test_extract_new_lines_drops_horizon_crossing_the_drawing() -> None:
+    """
+    A horizon line crossing the existing drawing is dropped on both sides of it, not cut into short new pieces.
+    """
+    line_drawing = make_blank()
+    cv2.rectangle(line_drawing, (150, 100), (350, 200), 0, 3)
+    cv2.line(line_drawing, (0, 150), (511, 152), 0, 2)
+
+    new_lines = extract_new_lines(line_drawing, draw_existing_strokes(), LinePartParams())
+
+    # Neither side of the horizon is a new line.
+    assert not new_lines[140:165].any(), f"The horizon must be dropped, kept {cv2.countNonZero(new_lines[140:165])} pixels"
+
+
+def test_extract_new_lines_keeps_legs_attached_to_the_drawing() -> None:
+    """
+    A leg continuing an existing post and a leg hanging from the seat survive, although the first is long and straight.
+    """
+    existing = np.zeros(CANVAS_SHAPE, dtype=np.uint8)
+    cv2.line(existing, (200, 30), (200, 230), 255, 3)
+    cv2.line(existing, (200, 230), (330, 230), 255, 3)
+    line_drawing = make_blank()
+    cv2.line(line_drawing, (200, 30), (200, 340), 0, 3)
+    cv2.line(line_drawing, (200, 230), (330, 230), 0, 3)
+    cv2.line(line_drawing, (330, 230), (330, 340), 0, 3)
+
+    parts = group_parts(extract_new_lines(line_drawing, existing, LinePartParams()), LinePartParams(), 4)
+    boxes = sorted(cv2.boundingRect(part) for part in parts)
+
+    # Both legs are parts that reach down to their ends.
+    assert len(parts) == 2, f"Expected the two legs, got boxes {boxes}"
+    assert abs(boxes[0][0] - 199) <= 2 and boxes[0][1] + boxes[0][3] >= 340, f"The post's leg must survive, got {boxes[0]}"
+    assert abs(boxes[1][0] - 329) <= 2 and boxes[1][1] + boxes[1][3] >= 340, f"The seat's leg must survive, got {boxes[1]}"
 
 
 def test_group_parts_orders_parts_and_drops_small_ones() -> None:
@@ -143,4 +204,5 @@ def test_extraction_settings_are_prefixed() -> None:
 
     # Each field appears once with its default.
     assert settings["extract_line_contrast"] == 40 and settings["extract_min_part_pixels"] == 150, f"Got {settings}"
+    assert settings["extract_long_line_share"] == 0.4, f"The long-line filter must be recorded, got {settings}"
     assert all(name.startswith("extract_") for name in settings), f"Every name must start with extract_, got {list(settings)}"

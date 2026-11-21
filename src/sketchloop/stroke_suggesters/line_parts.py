@@ -19,6 +19,12 @@ class LinePartParams:
     min_part_pixels: int = 150  # Parts with fewer pixels are dropped
     max_straight_width_ratio: float = 0.08  # A part no wider than this share of its length is nearly straight
     min_straight_span_share: float = 0.6  # A nearly straight part spanning this share of the canvas width or height is dropped
+    long_line_share: float = 0.4  # A straight segment at least this share of the canvas's longer side is a long line
+    long_line_vote_share: float = 0.5  # A long line needs line pixels along at least this share of that minimum length
+    long_line_gap_share: float = 0.04  # Gaps up to this share of the canvas's longer side do not break a long line
+    long_line_grow_pixels: int = 3  # Diameter the lines grow by before the search, so a line slanting a pixel stays whole
+    long_line_max_near_share: float = 0.5  # A long line with more of its length near existing strokes continues them and stays
+    long_line_band_pixels: int = 9  # Width of the band removed along each long line
 
 
 def list_extraction_settings(params: LinePartParams) -> dict[str, ControlValue]:
@@ -54,6 +60,27 @@ def decode_canvas(request: StrokeSuggestionRequest, canvas_payload: bytes) -> np
     return gray
 
 
+def mark_long_lines(lines: np.ndarray, near_existing: np.ndarray, params: LinePartParams) -> np.ndarray:
+    # Search the slightly grown lines for straight segments that are long relative to the canvas.
+    longer_side = max(lines.shape)
+    min_length = round(params.long_line_share * longer_side)
+    grown = cv2.dilate(lines, make_ellipse(params.long_line_grow_pixels))
+    found = cv2.HoughLinesP(grown, 1, np.pi / 180, threshold=round(params.long_line_vote_share * min_length),
+                            minLineLength=min_length, maxLineGap=round(params.long_line_gap_share * longer_side))
+    segments = [] if found is None else found.reshape(-1, 4).tolist()
+
+    # Mark a band along each segment mostly away from the existing strokes, since one mostly along them continues them.
+    band = np.zeros_like(lines)
+    for start_x, start_y, end_x, end_y in segments:
+        segment = np.zeros_like(lines)
+        cv2.line(segment, (start_x, start_y), (end_x, end_y), 255, 1)
+        on_segment = segment > 0
+        if np.count_nonzero(near_existing & on_segment) <= params.long_line_max_near_share * np.count_nonzero(on_segment):
+            cv2.line(band, (start_x, start_y), (end_x, end_y), 255, params.long_line_band_pixels)
+
+    return band > 0
+
+
 def extract_new_lines(line_drawing_gray: np.ndarray, canvas_strokes: np.ndarray, params: LinePartParams) -> np.ndarray:
     # Lines are pixels clearly darker than the local paper, or dark outright.
     median = cv2.medianBlur(line_drawing_gray, params.median_pixels)
@@ -61,7 +88,10 @@ def extract_new_lines(line_drawing_gray: np.ndarray, canvas_strokes: np.ndarray,
 
     # Lines on or near the existing strokes are the model redrawing them, so only the rest are new.
     near_existing = cv2.dilate(canvas_strokes, make_ellipse(params.existing_stroke_kernel_pixels)) > 0
-    return np.where(is_line & ~near_existing, 255, 0).astype(np.uint8)
+
+    # Long straight lines across the whole drawing are ruled paper, floors, or horizons, so they are not new either.
+    long_lines = mark_long_lines(np.where(is_line, 255, 0).astype(np.uint8), near_existing, params)
+    return np.where(is_line & ~near_existing & ~long_lines, 255, 0).astype(np.uint8)
 
 
 def drop_specks(lines: np.ndarray, min_pixels: int) -> np.ndarray:
