@@ -9,7 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from sketchloop.backends.fake import FakeGenerator
-from sketchloop.capture import load_sketch_file
+from sketchloop.capture import CapturedSketch, load_sketch_file
 from sketchloop.domain import (Guidance, SketchSource, Unavailable, UnsupportedConfigurationError, record_no_selection,
                                select_candidates)
 from sketchloop.evaluation import Evaluator
@@ -17,6 +17,7 @@ from sketchloop.experiments import (MISSING_FRAME_AGE_REASON, MISSING_HARDWARE_R
                                     MISSING_TOTAL_REASON, BenchmarkPlan, ExperimentRecordError, FolderStore, Hardware,
                                     load_session)
 from sketchloop.session import SketchSession
+from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
 
 
 # Run every test from tmp_path, so a sketchloop.toml in the repository cannot change CLI settings.
@@ -104,7 +105,7 @@ def test_damaged_candidate_listed(tmp_path: Path, damage: str, problem: str) -> 
 
 
 @pytest.mark.parametrize(("file_name", "edit", "message"), [
-    ("round-1/round.json", lambda data: data["input"]["raw_sketch"].update(path="../x.png"), "outside its round folder"),
+    ("round-1/round.json", lambda data: data["input"]["raw_sketch"].update(path="../x.png"), "outside its folder"),
     ("session.json", lambda data: data.update(schema_version=2), "schema version 2"),
     ("round-2/round.json", lambda data: data.update(parent_id="0" * 32), "does not link to round-1"),
     ("round-1/round.json", lambda data: data.update(started_at="2026-10-09T11:25:02"), "timezone-aware"),
@@ -214,3 +215,75 @@ def test_hardware_with_unavailable_fact_round_trips(tmp_path: Path) -> None:
     # The readable facts load as values and the unreadable one as unavailable with its reason.
     expected = Hardware(cpu="Synthetic CPU", logical_cores=4, memory_bytes=Unavailable("synthetic reason"))
     assert hardware == expected, f"Expected {expected}, got {hardware}"
+
+
+def test_session_without_drawings_or_name_loads(tmp_path: Path) -> None:
+    """
+    A session saved before T09, without drawing folders or a name in session.json, loads with no drawings and no name.
+    """
+    session = run_two_rounds(tmp_path)
+    session_file = session.folder / "session.json"
+    data = json.loads(session_file.read_text(encoding="utf-8"))
+    del data["name"]
+    session_file.write_text(json.dumps(data), encoding="utf-8")
+    saved = load_session(session.folder)
+
+    # The older session has no drawings and no experiment name.
+    assert saved.drawings == () and saved.session.name is None, f"Expected no drawings or name, got {saved}"
+
+
+def run_named_drawing(runs_dir: Path, captured: CapturedSketch) -> SketchSession:
+    """
+    Start a named session, suggest once with the fake, and finish the drawing.
+    """
+    session = SketchSession(FakeGenerator(), FolderStore(runs_dir), name="p1_car")
+    drawing = session.start_drawing(FakeStrokeSuggester(), canvas_width=512, canvas_height=360, save_interval_seconds=2.0)
+    drawing.suggest(captured, source=SketchSource.UPLOAD, rotation=0, prompt="a car")
+    drawing.finish(captured, source=SketchSource.UPLOAD)
+    return session
+
+
+def test_drawing_loads_and_reports_changed_mask(tmp_path: Path, sheet_capture: CapturedSketch) -> None:
+    """
+    A saved drawing loads equal to the record, and a changed mask or a drawing folder without drawing.json is a problem.
+    """
+    session = run_named_drawing(tmp_path, sheet_capture)
+    record = session.drawings[0].record
+    saved = load_session(session.folder)
+    (session.folder / "drawing-1" / "suggestions" / "suggestion-1" / "part-1.png").write_bytes(b"changed")
+    (session.folder / "drawing-2").mkdir()
+    damaged = load_session(session.folder)
+
+    # The drawing loads unchanged with every file matching.
+    assert saved.drawings == (record,) and saved.problems == (), f"Expected the drawing unchanged, got {saved.problems}"
+    assert saved.checked_files == len(record.captures) * 2 + 5, f"Unexpected checked file count {saved.checked_files}"
+
+    # A changed mask and an interrupted drawing are listed as problems, not errors.
+    expected = ("drawing-1/suggestions/suggestion-1/part-1.png does not match its recorded checksum.",
+                "drawing-2 has no drawing.json, so the drawing was interrupted.")
+    assert damaged.problems == expected, f"Unexpected problems {damaged.problems}"
+
+
+@pytest.mark.parametrize(("edit", "message"), [
+    (lambda data: data["captures"][0]["raw"].update(path="../x.png"), "outside its folder"),
+    (lambda data: data["captures"][1].update(number=3), "Capture numbers must run from 1 without gaps"),
+    (lambda data: data["suggestions"][0].update(baseline_capture=2), "baseline must be a suggestion capture"),
+    (lambda data: data["suggestions"][0]["request"].update(max_parts=1), "more than the 1 requested"),
+    (lambda data: data.update(final_capture=1), "must have trigger finish"),
+    (lambda data: data.update(end=None), "end time exactly when it has an end"),
+])
+def test_invalid_drawing_rejected(tmp_path: Path, sheet_capture: CapturedSketch, edit: Callable[[dict], None],
+                                  message: str) -> None:
+    """
+    A drawing.json with a path leaving its folder, a capture gap, a wrong baseline, too many parts, or a bad end fails to load.
+    """
+    session = run_named_drawing(tmp_path, sheet_capture)
+    drawing_file = session.folder / "drawing-1" / "drawing.json"
+    data = json.loads(drawing_file.read_text(encoding="utf-8"))
+    edit(data)
+    drawing_file.write_text(json.dumps(data), encoding="utf-8")
+
+    # Loading names the file and the broken rule.
+    with pytest.raises(ExperimentRecordError, match=message) as caught:
+        load_session(session.folder)
+    assert str(caught.value).startswith("drawing-1/drawing.json"), f"The error must name the file, got {caught.value}"

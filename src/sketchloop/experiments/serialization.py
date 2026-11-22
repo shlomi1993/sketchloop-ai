@@ -40,7 +40,7 @@ def parse_time(text: object) -> datetime:
 
 def image_from_dict(data: Mapping[str, object]) -> ImageRef:
     """
-    Rebuild an image reference, refusing paths that leave the round folder.
+    Rebuild an image reference, refusing paths that leave the folder of its record.
 
     Args:
         data (Mapping[str, object]): Serialized image reference.
@@ -51,7 +51,7 @@ def image_from_dict(data: Mapping[str, object]) -> ImageRef:
     # Name traversal explicitly, since it may be an attempt to read files outside the session.
     path = data["path"]
     if isinstance(path, str) and (path.startswith(("/", "\\")) or ".." in re.split(r"[/\\]", path)):
-        raise ExperimentRecordError(f"references {path} outside its round folder. Refusing to load it.")
+        raise ExperimentRecordError(f"references {path} outside its folder. Refusing to load it.")
 
     return ImageRef(**data)
 
@@ -84,6 +84,46 @@ def request_from_dict(data: Mapping[str, object]) -> GenerationRequest:
                              n_candidates=data["n_candidates"], seed=data["seed"])
 
 
+def backend_to_dict(backend: BackendIdentity) -> dict[str, object]:
+    """
+    Serialize the identity of the adapter and model that produced a result.
+    """
+    return {
+        "adapter": backend.adapter,
+        "adapter_version": backend.adapter_version,
+        "execution": backend.execution,
+        "model_id": encode_value(backend.model_id),
+    }
+
+
+def backend_from_dict(data: Mapping[str, object]) -> BackendIdentity:
+    """
+    Rebuild an adapter and model identity through its validating constructor.
+    """
+    return BackendIdentity(adapter=data["adapter"], adapter_version=data["adapter_version"], execution=data["execution"],
+                           model_id=decode_value(data["model_id"]))
+
+
+def effective_to_dict(effective: EffectiveSettings) -> dict[str, object]:
+    """
+    Serialize the prompt, negative prompt, and controls a component reports it used.
+    """
+    return {
+        "prompt": encode_value(effective.prompt),
+        "negative_prompt": encode_value(effective.negative_prompt),
+        "controls": {name: encode_value(value) for name, value in effective.controls.items()},
+    }
+
+
+def effective_from_dict(data: Mapping[str, object]) -> EffectiveSettings:
+    """
+    Rebuild effective settings, turning each unavailable value back into Unavailable.
+    """
+    controls = {name: decode_value(value) for name, value in data["controls"].items()}
+    return EffectiveSettings(prompt=decode_value(data["prompt"]), negative_prompt=decode_value(data["negative_prompt"]),
+                             controls=controls)
+
+
 def result_to_dict(result: GenerationResult) -> dict[str, object]:
     """
     Serialize a generation result: backend identity, effective settings, and candidates.
@@ -94,8 +134,6 @@ def result_to_dict(result: GenerationResult) -> dict[str, object]:
     Returns:
         dict[str, object]: JSON-ready result.
     """
-    backend = result.backend
-    effective = result.effective
     candidates = [
         {
             "id": candidate.id,
@@ -105,20 +143,8 @@ def result_to_dict(result: GenerationResult) -> dict[str, object]:
         }
         for candidate in result.candidates
     ]
-    return {
-        "backend": {
-            "adapter": backend.adapter,
-            "adapter_version": backend.adapter_version,
-            "execution": backend.execution,
-            "model_id": encode_value(backend.model_id),
-        },
-        "effective": {
-            "prompt": encode_value(effective.prompt),
-            "negative_prompt": encode_value(effective.negative_prompt),
-            "controls": {name: encode_value(value) for name, value in effective.controls.items()},
-        },
-        "candidates": candidates,
-    }
+    backend, effective = backend_to_dict(result.backend), effective_to_dict(result.effective)
+    return {"backend": backend, "effective": effective, "candidates": candidates}
 
 
 def result_from_dict(data: Mapping[str, object]) -> GenerationResult:
@@ -131,15 +157,10 @@ def result_from_dict(data: Mapping[str, object]) -> GenerationResult:
     Returns:
         GenerationResult: The validated result.
     """
-    backend_data, effective_data = data["backend"], data["effective"]
-    backend = BackendIdentity(adapter=backend_data["adapter"], adapter_version=backend_data["adapter_version"],
-                              execution=backend_data["execution"], model_id=decode_value(backend_data["model_id"]))
-    controls = {name: decode_value(value) for name, value in effective_data["controls"].items()}
-    effective = EffectiveSettings(prompt=decode_value(effective_data["prompt"]),
-                                  negative_prompt=decode_value(effective_data["negative_prompt"]), controls=controls)
     candidates = tuple(Candidate(id=item["id"], index=item["index"], seed=decode_value(item["seed"]),
                                  image=image_from_dict(item["image"])) for item in data["candidates"])
-    return GenerationResult(candidates=candidates, backend=backend, effective=effective)
+    return GenerationResult(candidates=candidates, backend=backend_from_dict(data["backend"]),
+                            effective=effective_from_dict(data["effective"]))
 
 
 def round_to_dict(record: RoundRecord) -> dict[str, object]:
@@ -283,6 +304,7 @@ def session_to_dict(record: SessionRecord) -> dict[str, object]:
     return {
         "schema_version": record.schema_version,
         "session_id": record.session_id,
+        "name": record.name,
         "created_at": record.created_at.isoformat(),
         "environment": {
             "python": environment.py_version,
@@ -309,7 +331,8 @@ def session_from_dict(data: Mapping[str, object]) -> SessionRecord:
     check_schema_version(data)
     environment_data, link_data, benchmark_data = data["environment"], data["rerun_of"], data.get("benchmark")
 
-    # Sessions written before hardware or generator setup were tracked lack them, which is unknown rather than a default.
+    # Sessions written before hardware or generator setup were tracked lack them, which is unknown rather than a default,
+    # and sessions written before experiment names lack a name, which loads as None.
     packages = {name: decode_value(version) for name, version in environment_data["packages"].items()}
     hardware = hardware_from_dict(environment_data.get("hardware", {"unavailable": MISSING_HARDWARE_REASON}))
     environment = Environment(py_version=environment_data["python"], platform=environment_data["platform"], packages=packages,
@@ -324,4 +347,4 @@ def session_from_dict(data: Mapping[str, object]) -> SessionRecord:
     benchmark = BenchmarkPlan(**benchmark_data) if benchmark_data is not None else None
     return SessionRecord(schema_version=data["schema_version"], session_id=data["session_id"],
                          created_at=parse_time(data["created_at"]), environment=environment,
-                         generator_setup_seconds=setup_seconds, rerun_of=link, benchmark=benchmark)
+                         generator_setup_seconds=setup_seconds, rerun_of=link, benchmark=benchmark, name=data.get("name"))

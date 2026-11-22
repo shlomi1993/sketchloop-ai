@@ -12,14 +12,15 @@ from functools import partial
 from pathlib import Path
 
 from sketchloop.domain import (SCHEMA_VERSION, GenerationRequest, Guidance, ImageRef, InvalidSelectionError, Iteration,
-                               Rotation, SelectionEvent, SketchSource, Unavailable, require, require_duration)
+                               Rotation, SelectionEvent, SketchLoopError, SketchSource, Unavailable, require, require_duration)
+from sketchloop.drawing import GuidedDrawing
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
-from sketchloop.experiments import (FRAME_AGE_NOT_MEASURED_REASON, NOT_STREAMED_REASON, SETUP_NOT_MEASURED_REASON,
-                                    UNKNOWN_SOURCE_REASON, BenchmarkPlan, ExperimentStore, RerunLink, RoundRecord, RoundStage,
-                                    RoundStatus, SessionRecord, StoreError, collect_environment, describe_failure,
-                                    require_known_source)
+from sketchloop.experiments import (SETUP_NOT_MEASURED_REASON, BenchmarkPlan, ExperimentStore, RerunLink, RoundRecord, RoundStage,
+                                    RoundStatus, SessionRecord, StoreError, check_experiment_name, collect_environment,
+                                    describe_failure, require_known_source, resolve_frame_age)
 from sketchloop.generation import GenerationOutput, Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor, StrokePreprocessor
+from sketchloop.stroke_suggestion import StrokeSuggester
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -35,28 +36,6 @@ class RoundOutcome:
     timings_seconds: Mapping[str, float]  # Duration by stage, with first model loads as model_load
     total_seconds: float  # Capture plus the round's wall time until its files were saved
     scores: Mapping[str, float]  # Evaluator scores by candidate ID, empty with the no-op evaluator
-
-
-def resolve_frame_age(source: SketchSource | Unavailable, frame_age_seconds: float | None) -> float | Unavailable:
-    """
-    Decide the frame age a round records, refusing an age for a source that is not a streamed webcam frame.
-
-    Args:
-        source (SketchSource | Unavailable): Where the raw sketch came from.
-        frame_age_seconds (float | None): Seconds from the frame's arrival to the round, or None when not measured.
-
-    Returns:
-        float | Unavailable: The age for a webcam round, otherwise why it is unavailable.
-    """
-    if source != SketchSource.WEBCAM:
-        require(frame_age_seconds is None, f"Only a webcam round has a frame age, got source {source!r}.")
-        return Unavailable(UNKNOWN_SOURCE_REASON if isinstance(source, Unavailable) else NOT_STREAMED_REASON)
-
-    if frame_age_seconds is None:
-        return Unavailable(FRAME_AGE_NOT_MEASURED_REASON)
-
-    require_duration(frame_age_seconds, "Frame age")
-    return frame_age_seconds
 
 
 def measure_total_seconds(round_started: float, capture_seconds: float | None) -> float:
@@ -75,22 +54,28 @@ def make_session_folder_name() -> str:
 
 class SketchSession:
     """
-    Runs successive manual rounds with one generator, linking each round to the previous one.
+    Runs successive manual rounds and guided drawings with one generator, linking each round to the previous one.
     """
 
     def __init__(self, generator: Generator, store: ExperimentStore, evaluator: Evaluator | None = None, *,
                  preprocessor: Preprocessor | None = None, rerun_of: RerunLink | None = None,
                  benchmark: BenchmarkPlan | None = None,
-                 generator_setup_seconds: float | Unavailable = Unavailable(SETUP_NOT_MEASURED_REASON)) -> None:
+                 generator_setup_seconds: float | Unavailable = Unavailable(SETUP_NOT_MEASURED_REASON),
+                 name: str | None = None) -> None:
         # Refuse a bad setup time now, since every round would otherwise fail to save the session record.
         if not isinstance(generator_setup_seconds, Unavailable):
             require_duration(generator_setup_seconds, "Generator setup time")
+
+        # A named experiment's folder is its name, claimed before anything is saved, and other sessions are named by time.
+        self.name = check_experiment_name(name) if name is not None else None
+        self.session_id = self.name or make_session_folder_name()
+        if self.name is not None:
+            store.claim_session(self.session_id)
 
         self.generator = generator
         self.store = store
         self.evaluator = evaluator or NoOpEvaluator()
         self.preprocessor = preprocessor or StrokePreprocessor()
-        self.session_id = make_session_folder_name()
         self.folder = store.locate_session(self.session_id)
         self.rerun_of = rerun_of
         self.benchmark = benchmark
@@ -99,17 +84,18 @@ class SketchSession:
         self.selections: dict[str, SelectionEvent] = {}
         self.session_record: SessionRecord | None = None
         self.records: list[RoundRecord] = []
+        self.drawings: list[GuidedDrawing] = []
         self._started_rounds = 0
         self._evaluator_loaded = False
 
-    def _write_session_record(self) -> None:
-        # Save the session record once, before the first round's files.
+    def ensure_session_record(self) -> None:
+        # Save the session record once, before the first round's or drawing's files.
         if self.session_record is not None:
             return
 
         record = SessionRecord(schema_version=SCHEMA_VERSION, session_id=self.session_id, created_at=datetime.now(timezone.utc),
                                environment=collect_environment(), generator_setup_seconds=self.generator_setup_seconds,
-                               rerun_of=self.rerun_of, benchmark=self.benchmark)
+                               rerun_of=self.rerun_of, benchmark=self.benchmark, name=self.name)
 
         # Remember the record only once it is saved, so a failed save is retried by the next round.
         self.store.save_session(record)
@@ -196,7 +182,7 @@ class SketchSession:
             timings[RoundStage.CAPTURE] = capture_seconds
 
         # Number the round and fix the fields its record has whether it completes or fails.
-        self._write_session_record()
+        self.ensure_session_record()
         self._started_rounds += 1
         number = self._started_rounds
         draft = partial(RoundRecord, schema_version=SCHEMA_VERSION, number=number, started_at=datetime.now(timezone.utc),
@@ -276,3 +262,16 @@ class SketchSession:
         self.store.save_round(self.session_id, selected_record, {})
         self.records[position] = selected_record
         self.selections[latest_id] = selection
+
+    def start_drawing(self, suggester: StrokeSuggester | None, *, canvas_width: int, canvas_height: int,
+                      save_interval_seconds: float) -> GuidedDrawing:
+        # Allow one open drawing at a time, so captures and suggestions always belong to a single drawing.
+        if self.drawings and self.drawings[-1].is_open:
+            raise SketchLoopError(f"Drawing {self.drawings[-1].record.number} is still open. Finish it before starting another.")
+
+        # Save the session record first, then number the drawing after the earlier ones.
+        self.ensure_session_record()
+        drawing = GuidedDrawing(self.store, self.session_id, len(self.drawings) + 1, suggester, canvas_width=canvas_width,
+                                canvas_height=canvas_height, save_interval_seconds=save_interval_seconds)
+        self.drawings.append(drawing)
+        return drawing

@@ -1,7 +1,9 @@
 """
-Shared pytest fixtures and test doubles for evaluators, generators, and clocks.
+Shared pytest fixtures and test doubles for evaluators, generators, clocks, and guided drawing frames.
 """
 
+import cv2
+import numpy as np
 import pytest
 import time
 
@@ -10,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from sketchloop.backends.fake import FakeGenerator
+from sketchloop.capture import CapturedSketch, encode_frame
 from sketchloop.domain import Candidate, GenerationRequest
 from sketchloop.evaluation import Evaluator
 from sketchloop.generation import GenerationOutput
@@ -51,6 +54,24 @@ class FirstLoadGenerator(FakeGenerator):
         load_seconds = None if self.loaded else 5.0
         self.loaded = True
         return replace(output, load_seconds=load_seconds)
+
+
+def draw_sheet_frame() -> np.ndarray:
+    """
+    Draw a synthetic 640x480 webcam frame of a light landscape sheet on a dark table, with one rectangle drawn on it.
+    """
+    frame = np.full((480, 640, 3), 60, dtype=np.uint8)
+    cv2.rectangle(frame, (60, 50), (580, 430), (215, 215, 215), -1)
+    cv2.rectangle(frame, (220, 150), (400, 290), (30, 30, 30), 4)
+    return frame
+
+
+def capture_frame(frame: np.ndarray) -> CapturedSketch:
+    """
+    Encode a frame as the PNG raw sketch the browser controller would capture, with a fixed 0.01 s capture time.
+    """
+    image, payload = encode_frame(frame)
+    return CapturedSketch(image=image, payload=payload, capture_seconds=0.01)
 
 
 class CountingClock:
@@ -109,3 +130,27 @@ def first_load_generator() -> FirstLoadGenerator:
     Provide a fake generator that reports a 5 s model load on its first call only.
     """
     return FirstLoadGenerator()
+
+
+@pytest.fixture
+def sheet_frame() -> np.ndarray:
+    """
+    Provide a synthetic webcam frame of a sheet on a table with one rectangle drawn on it.
+    """
+    return draw_sheet_frame()
+
+
+@pytest.fixture
+def sheet_capture(sheet_frame: np.ndarray) -> CapturedSketch:
+    """
+    Provide the sheet frame with a rectangle as a captured PNG raw sketch.
+    """
+    return capture_frame(sheet_frame)
+
+
+@pytest.fixture
+def blank_capture() -> CapturedSketch:
+    """
+    Provide an evenly white frame, whose paper canvas has no strokes, as a captured PNG raw sketch.
+    """
+    return capture_frame(np.full((480, 640, 3), 255, dtype=np.uint8))

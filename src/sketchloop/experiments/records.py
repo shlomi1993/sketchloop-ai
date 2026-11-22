@@ -3,6 +3,7 @@ Session and round record types, with the checks that keep each record valid.
 """
 
 import math
+import re
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -10,12 +11,16 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from sketchloop.domain import (
     GenerationRequest, ImageRef, Iteration, SelectionEvent, SketchLoopError, SketchSource, Unavailable, require,
     require_duration)
 from sketchloop.preprocessing import PreprocessingStep
+
+# Drawing records build on these records, so the loaded session names their type only for type checkers.
+if TYPE_CHECKING:
+    from sketchloop.experiments.drawings import DrawingRecord
 
 
 SESSION_FILE: Final = "session.json"
@@ -30,6 +35,12 @@ NOT_STREAMED_REASON: Final = "not a streamed webcam frame"
 UNKNOWN_SOURCE_REASON: Final = "the sketch source is unknown"
 FRAME_AGE_NOT_MEASURED_REASON: Final = "not measured by the caller"
 MISSING_FRAME_AGE_REASON: Final = "recorded before frame age was tracked"
+
+# Experiment names are portable folder names: ASCII letters, digits, "_", and "-", never a Windows device name.
+EXPERIMENT_NAME_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+WINDOWS_DEVICE_NAMES: Final = frozenset({"con", "prn", "aux", "nul", *(f"com{digit}" for digit in range(1, 10)),
+                                         *(f"lpt{digit}" for digit in range(1, 10))})
+EXPERIMENT_NAME_RULE: Final = 'Experiment name must be 1 to 64 letters, digits, "_" or "-", starting with a letter or digit. Use a code such as participant1_car.'  # noqa: E501
 
 
 class RoundStage(StrEnum):
@@ -62,6 +73,58 @@ class StoreError(SketchLoopError):
     """
     A store could not save a session record, a round record, or a file.
     """
+
+
+class ExperimentNameError(SketchLoopError, ValueError):
+    """
+    An experiment name breaks the naming rules.
+    """
+
+
+class ExperimentNameTakenError(StoreError):
+    """
+    A folder of the experiment's name already exists in the runs folder.
+    """
+
+
+def is_experiment_name(name: object) -> bool:
+    """
+    Tell whether a name follows the experiment naming rules exactly, without surrounding spaces.
+    """
+    return isinstance(name, str) and bool(EXPERIMENT_NAME_PATTERN.fullmatch(name)) and name.lower() not in WINDOWS_DEVICE_NAMES
+
+
+def check_experiment_name(name: str) -> str:
+    """
+    Return the experiment name with surrounding spaces stripped, or raise ExperimentNameError naming the rule.
+    """
+    stripped = name.strip() if isinstance(name, str) else name
+    if not is_experiment_name(stripped):
+        raise ExperimentNameError(EXPERIMENT_NAME_RULE)
+
+    return stripped
+
+
+def resolve_frame_age(source: SketchSource | Unavailable, frame_age_seconds: float | None) -> float | Unavailable:
+    """
+    Decide the frame age a record keeps, refusing an age for a source that is not a streamed webcam frame.
+
+    Args:
+        source (SketchSource | Unavailable): Where the raw sketch came from.
+        frame_age_seconds (float | None): Seconds from the frame's arrival to its use, or None when not measured.
+
+    Returns:
+        float | Unavailable: The age for a webcam frame, otherwise why it is unavailable.
+    """
+    if source != SketchSource.WEBCAM:
+        require(frame_age_seconds is None, f"Only a webcam round has a frame age, got source {source!r}.")
+        return Unavailable(UNKNOWN_SOURCE_REASON if isinstance(source, Unavailable) else NOT_STREAMED_REASON)
+
+    if frame_age_seconds is None:
+        return Unavailable(FRAME_AGE_NOT_MEASURED_REASON)
+
+    require_duration(frame_age_seconds, "Frame age")
+    return frame_age_seconds
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -136,9 +199,12 @@ class SessionRecord:
     generator_setup_seconds: float | Unavailable  # Time to create the session's first generator, before round 1
     rerun_of: RerunLink | None  # Original round for a rerun session, otherwise None
     benchmark: BenchmarkPlan | None  # Warm-up and measured round counts for a benchmark session, otherwise None
+    name: str | None = None  # Experiment name the experimenter entered, also the folder name, None for a time-based folder
 
     def __post_init__(self) -> None:
         require(self.created_at.utcoffset() is not None, "Session created_at must be timezone-aware.")
+        valid_name = self.name is None or (is_experiment_name(self.name) and self.name == self.session_id)
+        require(valid_name, f"Experiment name {self.name!r} must follow the naming rules and equal the session ID.")
         if not isinstance(self.generator_setup_seconds, Unavailable):
             require_duration(self.generator_setup_seconds, "Generator setup time")
 
@@ -235,8 +301,9 @@ class SavedSession:
     folder: Path  # Session folder
     session: SessionRecord  # Contents of session.json
     rounds: tuple[RoundRecord, ...]  # Rounds with a round.json, in order
-    problems: tuple[str, ...]  # Missing or changed files and interrupted rounds
+    problems: tuple[str, ...]  # Missing or changed files and interrupted rounds or drawings
     checked_files: int  # Number of files whose checksum matched
+    drawings: tuple["DrawingRecord", ...] = ()  # Drawings with a drawing.json, in order, none in sessions saved before T09
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

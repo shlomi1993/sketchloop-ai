@@ -9,14 +9,32 @@ import numpy as np
 import pytest
 import re
 
+from dataclasses import replace
 from pathlib import Path
 
-from sketchloop.app import NO_SKETCH_MESSAGE, AppController
+from sketchloop.app import NO_DRAWING_MESSAGE, NO_NEW_STROKES_MESSAGE, NO_SKETCH_MESSAGE, AppController
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import InvalidSketchError
 from sketchloop.domain import InvalidSelectionError, SketchLoopError, Unavailable, UnsupportedConfigurationError
-from sketchloop.experiments import SETUP_REUSED_REASON, FolderStore, load_session
+from sketchloop.experiments import SETUP_REUSED_REASON, ExperimentNameError, ExperimentNameTakenError, FolderStore, load_session
+from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
+from sketchloop.stroke_suggestion import StrokeSuggestionOutput, StrokeSuggestionRequest
 from sketchloop.suggestion import STYLE_TEMPLATES, FlorenceSuggester
+
+
+class EmptySuggester(FakeStrokeSuggester):
+    """
+    Test-only fake suggester that finds nothing new to suggest.
+    """
+
+    def suggest(self, request: StrokeSuggestionRequest, canvas_payload: bytes) -> StrokeSuggestionOutput:
+        """
+        Return the fake's suggestion without parts, keeping only the line drawing.
+        """
+        output = super().suggest(request, canvas_payload)
+        line_drawing = output.suggestion.line_drawing
+        return StrokeSuggestionOutput(suggestion=replace(output.suggestion, parts=()),
+                                      payloads={line_drawing.path: output.payloads[line_drawing.path]})
 
 
 def write_sketch_png(path: Path, channels: int) -> Path:
@@ -253,3 +271,97 @@ def test_app_suggests_the_next_style_for_the_same_drawing(tmp_path: Path, sketch
     # The styles follow the template order for the named object.
     assert first == f"a chair, {STYLE_TEMPLATES[0].split(', ', 1)[1]}", f"Unexpected first suggestion {first!r}"
     assert second == f"a chair, {STYLE_TEMPLATES[1].split(', ', 1)[1]}", f"Expected the second style, got {second!r}"
+
+
+def test_app_guided_drawing_in_named_folder(tmp_path: Path, sheet_frame: np.ndarray) -> None:
+    """
+    Starting a drawing names the session folder, an empty prompt is suggested for, and a round lands in the same folder.
+    """
+    controller = AppController(FakeGenerator(), FolderStore(tmp_path / "runs"), generator_setup_seconds=3.0)
+    started = controller.start_drawing("participant1_car")
+    view = controller.suggest_strokes(sheet_frame, "webcam", "", rotation=0, frame_age_seconds=0.1)
+    preview = cv2.imdecode(np.frombuffer(controller.preview_guided_sketch(sheet_frame, 0), np.uint8), cv2.IMREAD_COLOR)
+    controller.run_round(sheet_frame, "webcam", "a car", n_candidates=1)
+    finished = controller.finish_drawing(sheet_frame, "webcam", rotation=0)
+    folder = tmp_path / "runs" / "participant1_car"
+    saved = load_session(folder)
+
+    # The experiment's folder is its name and holds the drawing and the round, with the unrecorded setup time carried over.
+    assert controller.session.folder == folder and saved.session.name == "participant1_car", f"Unexpected folder {folder}"
+    assert len(saved.drawings) == 1 and len(saved.rounds) == 1 and saved.problems == (), f"Unexpected session {saved}"
+    setup_seconds = saved.session.generator_setup_seconds
+    assert setup_seconds == 3.0, f"The unrecorded setup time must be carried over, got {setup_seconds}"
+
+    # The views report the drawing and a fake suggestion with its colors, recorded with the prompt exactly as typed.
+    assert started.is_open and started.experiment == "participant1_car", f"Unexpected start view {started}"
+    assert view.part_count == 2 and view.is_fake and view.status.startswith("Suggestion 1: 2 parts in"), f"Bad view {view}"
+    assert saved.drawings[0].suggestions[0].request.prompt == "", "The empty prompt must be recorded unchanged"
+    assert not finished.is_open and finished.suggestion_lines == ("Suggestion 1: 2 parts",), f"Bad finish view {finished}"
+    assert controller.latest_drawing() == finished, "latest_drawing must restore the finished view"
+
+    # The guided preview has the canvas size.
+    assert preview.shape[:2] == (360, 512), f"Expected a 512x360 preview, got {preview.shape}"
+
+
+def test_app_drawing_operations_need_an_open_drawing(controller: AppController, sheet_frame: np.ndarray) -> None:
+    """
+    Without an open drawing, suggest and finish are refused, and the guided preview and latest drawing are None.
+    """
+    with pytest.raises(SketchLoopError, match=NO_DRAWING_MESSAGE):
+        controller.suggest_strokes(sheet_frame, "webcam", "a car", rotation=0)
+    with pytest.raises(SketchLoopError, match=NO_DRAWING_MESSAGE):
+        controller.finish_drawing(sheet_frame, "webcam", rotation=0)
+
+    # The page keeps its ordinary preview, there is no drawing to restore, and the header names the fake suggester.
+    assert controller.preview_guided_sketch(sheet_frame, 0) is None, "No drawing means no guided preview"
+    assert "fake stroke suggester" in controller.describe_stroke_suggester(), "The default suggester is the labeled fake"
+    assert controller.latest_drawing() is None, "No drawing to restore yet"
+
+    # With a drawing open, a missing frame is refused before anything is read.
+    controller.start_drawing("p1")
+    with pytest.raises(InvalidSketchError):
+        controller.suggest_strokes(None, "webcam", "a car", rotation=0)
+    assert controller.preview_guided_sketch(None, 0) is None, "No frame means no guided preview"
+
+
+@pytest.mark.parametrize(("name", "error"), [("p1", ExperimentNameTakenError), ("P1", ExperimentNameTakenError),
+                                             ("../p1", ExperimentNameError)])
+def test_app_bad_name_keeps_current_drawing(tmp_path: Path, controller: AppController, name: str, error: type[Exception]) -> None:
+    """
+    A taken or invalid name is refused, and the current session and its open drawing stay as they were.
+    """
+    controller.start_drawing("p1")
+    session = controller.session
+    with pytest.raises(error):
+        controller.start_drawing(name)
+
+    # The session is unchanged, its drawing is still open, and no other folder was created.
+    assert controller.session is session and controller.latest_drawing().is_open, "The current drawing must stay open"
+    assert [path.name for path in (tmp_path / "runs").iterdir()] == ["p1"], "A refused name must create nothing"
+
+
+def test_app_new_session_ends_open_drawing(controller: AppController) -> None:
+    """
+    Starting a new session ends the open drawing as new_session, without a final capture.
+    """
+    controller.start_drawing("p1")
+    drawing_file = controller.session.folder / "drawing-1" / "drawing.json"
+    controller.start_new_session()
+    data = json.loads(drawing_file.read_text(encoding="utf-8"))
+
+    # The drawing ended for the new session, and the new session has no drawing.
+    assert (data["end"], data["final_capture"]) == ("new_session", None), f"Unexpected end {data['end']}"
+    assert controller.latest_drawing() is None, "The new session has no drawing yet"
+
+
+def test_app_reports_no_new_strokes(tmp_path: Path, sheet_frame: np.ndarray) -> None:
+    """
+    A suggestion without parts gives a plain one-line message and is still recorded.
+    """
+    controller = AppController(FakeGenerator(), FolderStore(tmp_path / "runs"), stroke_suggester=EmptySuggester())
+    controller.start_drawing("p1")
+    view = controller.suggest_strokes(sheet_frame, "upload", "a car", rotation=0)
+
+    # The page gets the message, and the drawing holds the attempt.
+    assert view.status == NO_NEW_STROKES_MESSAGE and view.part_count == 0, f"Unexpected view {view}"
+    assert controller.latest_drawing().suggestion_lines == ("Suggestion 1: no new strokes",), "The attempt must be recorded"

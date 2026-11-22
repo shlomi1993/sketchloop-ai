@@ -14,17 +14,25 @@ from sketchloop.capture import CapturedSketch, InvalidSketchError, encode_frame,
 from sketchloop.domain import (
     ControlValue, Guidance, InvalidSelectionError, Iteration, Rotation, SelectionEvent, SketchLoopError, SketchSource,
     Unavailable, record_no_selection, select_candidates)
+from sketchloop.drawing import GuidedDrawing
 from sketchloop.evaluation import Evaluator
-from sketchloop.experiments import (SETUP_NOT_MEASURED_REASON, SETUP_REUSED_REASON, ExperimentStore, RoundRecord, RoundStage,
-                                    RoundStatus)
+from sketchloop.experiments import (SETUP_NOT_MEASURED_REASON, SETUP_REUSED_REASON, DrawingEnd, ExperimentStore, RoundRecord,
+                                    RoundStage, RoundStatus, SuggestionRecord, SuggestionStage, check_experiment_name)
 from sketchloop.generation import ControlKind, ControlSpec, Generator
-from sketchloop.preprocessing import Preprocessor
+from sketchloop.preprocessing import Preprocessor, make_paper_canvas
 from sketchloop.session import RoundOutcome, SketchSession
+from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
+from sketchloop.stroke_suggestion import StrokeSuggester
 from sketchloop.suggestion import PromptSuggester, TemplateSuggester, compute_sketch_signature, has_sketch_changed
 
 
 NO_SKETCH_MESSAGE: Final = "No sketch yet. Take a webcam picture or upload a PNG or JPEG, then generate."
 NO_FILES_MESSAGE: Final = "The browser interface shows saved image files, so it needs a store that keeps files in a folder."
+NO_DRAWING_MESSAGE: Final = "No drawing is open. Enter an experiment name and start a drawing first."
+NO_FRAME_MESSAGE: Final = "No sketch yet. Start the webcam or upload a PNG or JPEG, then try again."
+NO_NEW_STROKES_MESSAGE: Final = "No new strokes to suggest. Keep drawing or press again for another try."
+DEFAULT_CANVAS_SIZE: Final = (512, 360)  # Paper frame width and height, A4 or Letter in landscape on the latent grid
+DEFAULT_SAVE_INTERVAL_SECONDS: Final = 2.0
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -61,6 +69,88 @@ class HistoryRow:
     status: RoundStatus  # complete or failed
     prompt: str | None  # Requested prompt, None when preprocessing failed before a request existed
     outcome: str  # "selected 1, 3", "selected none", "not selected", or "failed during <stage>: <message>"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SuggestionView:
+    """
+    A shown next-stroke suggestion as the page reports it.
+    """
+    drawing: int  # Drawing number in the current session
+    number: int  # Suggestion number in the drawing
+    part_count: int  # Parts drawn in the overlay, 0 when nothing new was suggested
+    colors: tuple[str, ...]  # Overlay color of each part, by index
+    is_fake: bool  # Whether the fake suggester drew the parts
+    generation_seconds: float | None  # Seconds the suggester spent generating, None when it reported none
+    status: str  # One line such as "Suggestion 2: 3 parts in 3.1 s" or the no-new-strokes message
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DrawingView:
+    """
+    A drawing as the page reports it: its experiment, state, counts, and one line per suggestion.
+    """
+    number: int  # Drawing number in the current session
+    experiment: str | None  # Experiment name of the session, None for a time-named session
+    is_open: bool  # Whether the drawing still takes captures and suggestions
+    capture_count: int  # Captures saved so far
+    suggestion_count: int  # Suggestions so far, shown or failed
+    suggestion_lines: tuple[str, ...]  # One line per suggestion, such as "Suggestion 1: 2 parts"
+
+
+def count_parts(count: int) -> str:
+    """
+    Say a part count in words, such as "1 part" or "3 parts".
+    """
+    return f"{count} part" if count == 1 else f"{count} parts"
+
+
+def build_suggestion_view(drawing_number: int, suggestion: SuggestionRecord) -> SuggestionView:
+    """
+    Turn a shown suggestion into the view the page reports, with a plain message when nothing new was suggested.
+
+    Args:
+        drawing_number (int): Number of the drawing the suggestion belongs to.
+        suggestion (SuggestionRecord): The shown suggestion.
+
+    Returns:
+        SuggestionView: The suggestion as the page reports it.
+    """
+    result = suggestion.result
+    seconds = suggestion.timings_seconds.get(SuggestionStage.GENERATION)
+    timing = f" in {seconds:.1f} s" if seconds is not None else ""
+    parts = len(result.parts)
+    status = f"Suggestion {suggestion.number}: {count_parts(parts)}{timing}" if parts else NO_NEW_STROKES_MESSAGE
+    return SuggestionView(drawing=drawing_number, number=suggestion.number, part_count=parts, colors=suggestion.part_colors,
+                          is_fake=result.suggester.is_fake, generation_seconds=seconds, status=status)
+
+
+def describe_suggestion(suggestion: SuggestionRecord) -> str:
+    """
+    Summarize a suggestion in one line: its part count, no new strokes, or its failure.
+    """
+    if suggestion.failure is not None:
+        return f"Suggestion {suggestion.number}: failed during {suggestion.failure.stage}: {suggestion.failure.message}"
+
+    parts = len(suggestion.result.parts)
+    return f"Suggestion {suggestion.number}: {count_parts(parts) if parts else 'no new strokes'}"
+
+
+def build_drawing_view(drawing: GuidedDrawing, experiment: str | None) -> DrawingView:
+    """
+    Turn a drawing into the view the page reports.
+
+    Args:
+        drawing (GuidedDrawing): The drawing.
+        experiment (str | None): Experiment name of its session, or None.
+
+    Returns:
+        DrawingView: The drawing as the page reports it.
+    """
+    record = drawing.record
+    return DrawingView(number=record.number, experiment=experiment, is_open=drawing.is_open, capture_count=len(record.captures),
+                       suggestion_count=len(record.suggestions),
+                       suggestion_lines=tuple(describe_suggestion(suggestion) for suggestion in record.suggestions))
 
 
 def describe_selection(iteration: Iteration, selection: SelectionEvent) -> str:
@@ -147,7 +237,9 @@ class AppController:
     """
     def __init__(self, generator: Generator, store: ExperimentStore, evaluator: Evaluator | None = None, *,
                  preprocessor: Preprocessor | None = None, suggester: PromptSuggester | None = None,
-                 generator_setup_seconds: float | Unavailable = Unavailable(SETUP_NOT_MEASURED_REASON)) -> None:
+                 generator_setup_seconds: float | Unavailable = Unavailable(SETUP_NOT_MEASURED_REASON),
+                 stroke_suggester: StrokeSuggester | None = None, canvas_size: tuple[int, int] = DEFAULT_CANVAS_SIZE,
+                 save_interval_seconds: float = DEFAULT_SAVE_INTERVAL_SECONDS) -> None:
         # The page shows candidates from their saved files, so refuse a store that keeps none.
         if store.root is None:
             raise SketchLoopError(NO_FILES_MESSAGE)
@@ -157,6 +249,9 @@ class AppController:
         self.evaluator = evaluator
         self.preprocessor = preprocessor
         self.suggester = suggester or TemplateSuggester()
+        self.stroke_suggester = stroke_suggester or FakeStrokeSuggester()
+        self.canvas_size = canvas_size
+        self.save_interval_seconds = save_interval_seconds
         self._suggestions: tuple[str, ...] = ()
         self._suggestion_index = 0
         self._suggested_signature: np.ndarray | None = None
@@ -326,10 +421,156 @@ class AppController:
         """
         return tuple(build_history_row(record) for record in self.session.records)
 
+    def describe_stroke_suggester(self) -> str:
+        """
+        Return the stroke suggester's one-sentence description for the page header.
+        """
+        return self.stroke_suggester.describe()
+
+    def _find_open_drawing(self) -> GuidedDrawing | None:
+        # Only the session's latest drawing can be open.
+        drawings = self.session.drawings
+        return drawings[-1] if drawings and drawings[-1].is_open else None
+
+    def _end_open_drawing(self) -> None:
+        # End an open drawing without a final capture, since the session it belongs to is being replaced.
+        drawing = self._find_open_drawing()
+        if drawing is not None:
+            drawing.finish(None, end=DrawingEnd.NEW_SESSION)
+
+    def _check_drawing_inputs(self, sketch: Path | np.ndarray | None, source: SketchSource, rotation: int,
+                              frame_age_seconds: float | None) -> GuidedDrawing:
+        # Refuse a missing drawing or frame, a rotation preprocessing cannot apply, and a misplaced age, before reading anything.
+        drawing = self._find_open_drawing()
+        if drawing is None:
+            raise SketchLoopError(NO_DRAWING_MESSAGE)
+
+        if sketch is None:
+            raise InvalidSketchError(NO_FRAME_MESSAGE)
+
+        if rotation not in list(Rotation):
+            raise SketchLoopError(f"Rotation must be one of 0, 90, 180, or 270, got {rotation}.")
+
+        if frame_age_seconds is not None and source != SketchSource.WEBCAM:
+            raise SketchLoopError(f"Only a streamed webcam frame has a frame age, got source {source}. Pass no frame age.")
+
+        return drawing
+
+    def start_drawing(self, name: str) -> DrawingView:
+        """
+        Start a named experiment as a new session folder and open its first drawing.
+
+        Args:
+            name (str): Experiment name, such as participant1_car, which also names the session folder.
+
+        Returns:
+            DrawingView: The open drawing as the page shows it.
+        """
+        # Claim the name in a new session first, so an invalid or taken name leaves the current session and drawing as they are.
+        name = check_experiment_name(name)
+        # A session that saved nothing has not recorded the generator's setup yet, so the named session records it instead.
+        unsaved = self.session.session_record is None
+        setup_seconds = self.session.generator_setup_seconds if unsaved else Unavailable(SETUP_REUSED_REASON)
+        session = SketchSession(self.generator, self.store, self.evaluator, preprocessor=self.preprocessor,
+                                generator_setup_seconds=setup_seconds, name=name)
+
+        # End the open drawing, then start drawing 1 of the named session with the configured suggester.
+        self._end_open_drawing()
+        self.session = session
+        width, height = self.canvas_size
+        drawing = session.start_drawing(self.stroke_suggester, canvas_width=width, canvas_height=height,
+                                        save_interval_seconds=self.save_interval_seconds)
+        return build_drawing_view(drawing, session.name)
+
+    def suggest_strokes(self, sketch: Path | np.ndarray | None, source: SketchSource, prompt: str, *, rotation: int,
+                        seed: int | None = None, frame_age_seconds: float | None = None) -> SuggestionView:
+        """
+        Suggest how to continue the open drawing from the current sketch and the prompt as typed.
+
+        Args:
+            sketch (Path | np.ndarray | None): Webcam frame or uploaded file.
+            source (SketchSource): Where the sketch came from.
+            prompt (str): The prompt box text exactly as typed, possibly empty.
+            rotation (int): Degrees to turn the sketch clockwise.
+            seed (int | None, optional): Seed for the suggestion, or None for random. Defaults to None.
+            frame_age_seconds (float | None, optional): Age of a streamed webcam frame. Defaults to None.
+
+        Returns:
+            SuggestionView: The suggestion's status line, part count, and number.
+        """
+        # Check the inputs before reading any file, then suggest with the prompt box text exactly as typed, empty included.
+        drawing = self._check_drawing_inputs(sketch, source, rotation, frame_age_seconds)
+        captured = capture_browser_sketch(sketch)
+        suggestion = drawing.suggest(captured, source=source, rotation=rotation, prompt=prompt, seed=seed,
+                                     frame_age_seconds=frame_age_seconds)
+        return build_suggestion_view(drawing.record.number, suggestion)
+
+    def preview_guided_sketch(self, sketch: Path | np.ndarray | None, rotation: int) -> bytes | None:
+        """
+        Compose the live sketch in the paper frame with the open suggestion's overlay.
+
+        Args:
+            sketch (Path | np.ndarray | None): Webcam frame or uploaded file.
+            rotation (int): Degrees to turn the sketch clockwise.
+
+        Returns:
+            bytes | None: PNG of the preview, or None when there is no open drawing, no frame, or no paper found.
+        """
+        # Without an open drawing or a frame, the page keeps its ordinary preview.
+        drawing = self._find_open_drawing()
+        if drawing is None or sketch is None:
+            return None
+
+        # Warp the frame to the paper canvas by its corners only, without alignment, since this runs every capture interval.
+        try:
+            _, payload = encode_frame(sketch) if isinstance(sketch, np.ndarray) else load_sketch_file(sketch)
+            canvas = make_paper_canvas(payload, rotation, drawing.record.canvas_width, drawing.record.canvas_height)
+            return drawing.compose_preview(canvas)
+        except (SketchLoopError, OSError, ValueError):
+            return None
+
+    def finish_drawing(self, sketch: Path | np.ndarray | None, source: SketchSource, *, rotation: int,
+                       frame_age_seconds: float | None = None) -> DrawingView:
+        """
+        Finish the open drawing, keeping the current sketch as its final capture when there is one.
+
+        Args:
+            sketch (Path | np.ndarray | None): Webcam frame or uploaded file, or None to finish without a capture.
+            source (SketchSource): Where the sketch came from.
+            rotation (int): Degrees to turn the sketch clockwise.
+            frame_age_seconds (float | None, optional): Age of a streamed webcam frame. Defaults to None.
+
+        Returns:
+            DrawingView: The finished drawing as the page shows it.
+        """
+        # Finish with a final capture when a frame exists, and without one otherwise.
+        drawing = self._find_open_drawing()
+        if drawing is None:
+            raise SketchLoopError(NO_DRAWING_MESSAGE)
+
+        if sketch is not None:
+            self._check_drawing_inputs(sketch, source, rotation, frame_age_seconds)
+            drawing.finish(capture_browser_sketch(sketch), source=source, rotation=rotation, frame_age_seconds=frame_age_seconds)
+        else:
+            drawing.finish(None)
+
+        return build_drawing_view(drawing, self.session.name)
+
+    def latest_drawing(self) -> DrawingView | None:
+        """
+        Return the current session's latest drawing, open or finished, or None when it has none.
+        """
+        # Return the session's latest drawing, open or finished, so a reload shows it again.
+        drawings = self.session.drawings
+        return build_drawing_view(drawings[-1], self.session.name) if drawings else None
+
     def start_new_session(self) -> None:
         """
         Start a fresh session folder with the same loaded generator, store, evaluator, and preprocessor.
         """
+        # End an open drawing first, since the session it belongs to is being replaced.
+        self._end_open_drawing()
+
         # The generator is reused, so this session paid no setup, and repeating the first value would count it twice.
         self.session = SketchSession(self.generator, self.store, self.evaluator, preprocessor=self.preprocessor,
                                      generator_setup_seconds=Unavailable(SETUP_REUSED_REASON))

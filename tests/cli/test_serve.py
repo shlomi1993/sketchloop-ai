@@ -13,6 +13,7 @@ import sketchloop
 from sketchloop.app import AppController
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.cli import main
+from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
 from sketchloop.suggestion import FLORENCE_MODEL
 
 
@@ -105,3 +106,21 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     # --backend fake beats the file without a mode conflict, so no diffusers backend is created.
     assert len(diffusers_calls) == 1, f"--backend fake must win over the file's diffusers, got {len(diffusers_calls)} calls"
+
+
+def test_cli_ui_passes_stroke_suggester_and_drawing_settings(tmp_path: Path,
+                                                             launches: list[tuple[AppController, dict[str, object]]]) -> None:
+    """
+    sketchloop ui gives the controller the configured stroke suggester, canvas size, and capture interval.
+    """
+    config = tmp_path / "drawing.toml"
+    config.write_text("\n".join(['[stroke_suggester]', 'name = "fake"', '[drawing]', 'canvas_width = 640', 'canvas_height = 480',
+                                 'save_interval_seconds = 3.0', '']),
+                      encoding="utf-8")
+    exit_code = main(["ui", "--config", str(config)])
+    controller = launches[0][0]
+
+    # The controller holds the fake suggester and the drawing settings from the file.
+    assert exit_code == 0 and isinstance(controller.stroke_suggester, FakeStrokeSuggester), f"Bad suggester {controller}"
+    drawing = (controller.canvas_size, controller.save_interval_seconds)
+    assert drawing == ((640, 480), 3.0), f"Expected the file's canvas and interval, got {drawing}"

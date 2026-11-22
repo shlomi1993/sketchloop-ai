@@ -11,11 +11,13 @@ from pathlib import Path
 from typing import Final, TypeVar
 
 from sketchloop.domain import ImageRef
+from sketchloop.experiments.drawings import DRAWING_FILE, DrawingRecord, drawing_from_dict, list_drawing_images
 from sketchloop.experiments.records import ROUND_FILE, SESSION_FILE, ExperimentRecordError, RoundRecord, SavedSession
 from sketchloop.experiments.serialization import round_from_dict, session_from_dict
 
 
 ROUND_FOLDER_PATTERN: Final = re.compile(r"round-([1-9][0-9]*)")
+DRAWING_FOLDER_PATTERN: Final = re.compile(r"drawing-([1-9][0-9]*)")
 
 
 RecordT = TypeVar("RecordT")
@@ -66,29 +68,38 @@ def convert_record(label: str, data: Mapping[str, object], convert: Callable[[Ma
         raise ExperimentRecordError(f"{label}: a field is invalid: {error}") from None
 
 
-def list_round_folders(folder: Path) -> list[tuple[int, Path]]:
+def list_numbered_folders(folder: Path, pattern: re.Pattern[str], kind: str) -> list[tuple[int, Path]]:
     """
-    List round-<n> folders by number, refusing gaps in the numbering.
+    List the numbered folders a pattern matches, by number, refusing gaps in the numbering.
 
     Args:
         folder (Path): Session folder.
+        pattern (re.Pattern[str]): Folder name pattern whose first group is the number.
+        kind (str): Folder kind for the error message, such as Round.
 
     Returns:
-        list[tuple[int, Path]]: Round numbers and folders, in order.
+        list[tuple[int, Path]]: Numbers and folders, in order.
     """
-    rounds = []
+    numbered = []
     for path in folder.iterdir():
-        match = ROUND_FOLDER_PATTERN.fullmatch(path.name)
+        match = pattern.fullmatch(path.name)
         if match and path.is_dir():
-            rounds.append((int(match.group(1)), path))
+            numbered.append((int(match.group(1)), path))
 
-    # Require round-1 to round-N, since a missing folder means the records were edited or mixed.
-    rounds.sort()
-    numbers = [number for number, _ in rounds]
+    # Require 1 to N, since a missing folder means the records were edited or mixed.
+    numbered.sort()
+    numbers = [number for number, _ in numbered]
     if numbers != list(range(1, len(numbers) + 1)):
-        raise ExperimentRecordError(f"Round folders {numbers} have a gap. The records were edited or mixed.")
+        raise ExperimentRecordError(f"{kind} folders {numbers} have a gap. The records were edited or mixed.")
 
-    return rounds
+    return numbered
+
+
+def list_round_folders(folder: Path) -> list[tuple[int, Path]]:
+    """
+    List round-<n> folders by number, refusing gaps in the numbering.
+    """
+    return list_numbered_folders(folder, ROUND_FOLDER_PATTERN, "Round")
 
 
 def list_round_images(record: RoundRecord) -> list[ImageRef]:
@@ -100,27 +111,28 @@ def list_round_images(record: RoundRecord) -> list[ImageRef]:
     return list({image.path: image for image in images}.values())
 
 
-def verify_round_files(record: RoundRecord, round_folder: Path) -> tuple[list[str], int]:
+def verify_image_files(images: list[ImageRef], folder: Path, record_file: str) -> tuple[list[str], int]:
     """
-    Compare each recorded image file with its checksum.
+    Compare each recorded image file in a round or drawing folder with its checksum.
 
     Args:
-        record (RoundRecord): Round whose files to check.
-        round_folder (Path): Folder holding the round's files.
+        images (list[ImageRef]): Images the record names, relative to the folder.
+        folder (Path): Folder holding the files.
+        record_file (str): Name of the record file, for messages.
 
     Returns:
         tuple[list[str], int]: Problems found, and the number of files that matched.
     """
     problems, matched = [], 0
-    resolved_folder = round_folder.resolve()
-    for image in list_round_images(record):
-        # Refuse a link that resolves outside the round folder, such as a planted symlink.
-        target = round_folder / image.path
+    resolved_folder = folder.resolve()
+    for image in images:
+        # Refuse a link that resolves outside the folder, such as a planted symlink.
+        target = folder / image.path
         if not target.resolve().is_relative_to(resolved_folder):
-            raise ExperimentRecordError(f"{round_folder.name}/{ROUND_FILE} references {image.path} outside its round folder. Refusing to load it.")  # noqa: E501
+            raise ExperimentRecordError(f"{folder.name}/{record_file} references {image.path} outside its folder. Refusing to load it.")  # noqa: E501
 
         # List a missing or changed file as a problem, so the rest of the record can still be shown.
-        label = f"{round_folder.name}/{image.path}"
+        label = f"{folder.name}/{image.path}"
         if not target.is_file():
             problems.append(f"{label} is missing.")
         elif hashlib.sha256(target.read_bytes()).hexdigest() != image.sha256:
@@ -129,6 +141,13 @@ def verify_round_files(record: RoundRecord, round_folder: Path) -> tuple[list[st
             matched += 1
 
     return problems, matched
+
+
+def verify_round_files(record: RoundRecord, round_folder: Path) -> tuple[list[str], int]:
+    """
+    Compare each image file a round recorded with its checksum, returning the problems and the number that matched.
+    """
+    return verify_image_files(list_round_images(record), round_folder, ROUND_FILE)
 
 
 def load_rounds(folder: Path) -> tuple[list[RoundRecord], list[str], int]:
@@ -167,6 +186,37 @@ def load_rounds(folder: Path) -> tuple[list[RoundRecord], list[str], int]:
     return rounds, problems, matched
 
 
+def load_drawings(folder: Path) -> tuple[list[DrawingRecord], list[str], int]:
+    """
+    Load and check every drawing of a session folder.
+
+    Args:
+        folder (Path): Session folder.
+
+    Returns:
+        tuple[list[DrawingRecord], list[str], int]: The drawings, the artifact problems, and the number of matching files.
+    """
+    drawings, problems, matched = [], [], 0
+    for number, drawing_folder in list_numbered_folders(folder, DRAWING_FOLDER_PATTERN, "Drawing"):
+        # A drawing folder without drawing.json was interrupted before its first record was written.
+        label = f"{drawing_folder.name}/{DRAWING_FILE}"
+        if not (drawing_folder / DRAWING_FILE).is_file():
+            problems.append(f"{drawing_folder.name} has no {DRAWING_FILE}, so the drawing was interrupted.")
+            continue
+
+        # Check the number, then every recorded file.
+        record = convert_record(label, read_json(drawing_folder / DRAWING_FILE, label), drawing_from_dict)
+        if record.number != number:
+            raise ExperimentRecordError(f"{label}: drawing is invalid: {record.number} does not match its folder.")
+
+        drawing_problems, drawing_matched = verify_image_files(list_drawing_images(record), drawing_folder, DRAWING_FILE)
+        problems += drawing_problems
+        matched += drawing_matched
+        drawings.append(record)
+
+    return drawings, problems, matched
+
+
 def load_session(folder: Path) -> SavedSession:
     """
     Load a session folder's records, failing on structural faults and listing artifact problems.
@@ -175,11 +225,14 @@ def load_session(folder: Path) -> SavedSession:
         folder (Path): Session folder created by sketchloop run.
 
     Returns:
-        SavedSession: The session, its rounds, and any problems found.
+        SavedSession: The session, its rounds and drawings, and any problems found.
     """
     if not (folder / SESSION_FILE).is_file():
         raise ExperimentRecordError(f"No {SESSION_FILE} in {folder.as_posix()}. Give a session folder created by sketchloop run.")
 
+    # Load the rounds, then any drawings, which sessions saved before T09 do not have.
     session = convert_record(SESSION_FILE, read_json(folder / SESSION_FILE, SESSION_FILE), session_from_dict)
-    rounds, problems, matched = load_rounds(folder)
-    return SavedSession(folder=folder, session=session, rounds=tuple(rounds), problems=tuple(problems), checked_files=matched)
+    rounds, round_problems, round_matched = load_rounds(folder)
+    drawings, drawing_problems, drawing_matched = load_drawings(folder)
+    return SavedSession(folder=folder, session=session, rounds=tuple(rounds), problems=tuple(round_problems + drawing_problems),
+                        checked_files=round_matched + drawing_matched, drawings=tuple(drawings))

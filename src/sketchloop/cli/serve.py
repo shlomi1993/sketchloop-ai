@@ -5,14 +5,16 @@ The ui subcommand, which creates the backend once and serves the browser page on
 import argparse
 import os
 import threading
+import time
 
 from rich.console import Console
 
 from sketchloop.app import AppController
 from sketchloop.cli.common import make_configured_generator
-from sketchloop.components import FAKE_BACKEND, make_evaluator, make_preprocessor, make_store
+from sketchloop.components import FAKE_BACKEND, make_evaluator, make_preprocessor, make_store, make_stroke_suggester
 from sketchloop.domain import SketchLoopError
 from sketchloop.settings import Settings
+from sketchloop.stroke_suggestion import StrokeSuggester
 from sketchloop.suggestion import FlorenceSuggester, PromptSuggester, TemplateSuggester
 
 
@@ -24,6 +26,20 @@ def warm_up_suggester(suggester: PromptSuggester, console: Console) -> None:
         suggester.warm_up()
     except SketchLoopError as error:
         console.print(f"Prompt suggestions are unavailable: {error}", style="yellow", markup=False, soft_wrap=True)
+
+
+def warm_up_stroke_suggester(suggester: StrokeSuggester, width: int, height: int, console: Console) -> None:
+    """
+    Load and warm up the next-stroke suggester at the canvas size in the background, printing how long it took or why it failed.
+    """
+    started = time.perf_counter()
+    try:
+        suggester.load(width, height)
+    except SketchLoopError as error:
+        console.print(f"Next-stroke suggestions are unavailable: {error}", style="yellow", markup=False, soft_wrap=True)
+        return
+
+    console.print(f"Next-stroke suggestions are ready after {time.perf_counter() - started:.1f} s.", markup=False)
 
 
 def make_controller(settings: Settings, console: Console) -> AppController:
@@ -44,9 +60,17 @@ def make_controller(settings: Settings, console: Console) -> AppController:
     is_real = settings.generator.backend != FAKE_BACKEND
     suggester = FlorenceSuggester(settings.models.dir) if is_real else TemplateSuggester()
     threading.Thread(target=warm_up_suggester, args=(suggester, console), daemon=True).start()
+
+    # Warm up the configured next-stroke suggester at the canvas size, so the first press does not wait for the model.
+    drawing = settings.drawing
+    stroke_suggester = make_stroke_suggester(settings)
+    warm_up_arguments = (stroke_suggester, drawing.canvas_width, drawing.canvas_height, console)
+    threading.Thread(target=warm_up_stroke_suggester, args=warm_up_arguments, daemon=True).start()
     controller = AppController(generator, store, make_evaluator(settings),
                                preprocessor=make_preprocessor(settings.preprocessing), suggester=suggester,
-                               generator_setup_seconds=setup_seconds)
+                               generator_setup_seconds=setup_seconds, stroke_suggester=stroke_suggester,
+                               canvas_size=(drawing.canvas_width, drawing.canvas_height),
+                               save_interval_seconds=drawing.save_interval_seconds)
     limit, candidates = controller.max_candidates, settings.ui.candidates
     if candidates > limit:
         raise SketchLoopError(f"{candidates} candidates exceed the limit of {limit}. Lower --candidates or ui.candidates.")

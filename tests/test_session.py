@@ -24,10 +24,12 @@ from sketchloop.domain import (Candidate, GenerationRequest, Guidance, InvalidRe
                                Unavailable, UnsupportedConfigurationError, record_no_selection, select_candidates)
 from sketchloop.evaluation import Evaluator
 from sketchloop.experiments import (FRAME_AGE_NOT_MEASURED_REASON, NOT_STREAMED_REASON, SETUP_NOT_MEASURED_REASON,
-                                    UNKNOWN_SOURCE_REASON, MemoryStore, RoundRecord, SessionRecord, StoreError)
+                                    UNKNOWN_SOURCE_REASON, ExperimentNameError, ExperimentNameTakenError, FolderStore,
+                                    MemoryStore, RoundRecord, SessionRecord, StoreError, load_session)
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor
 from sketchloop.session import SketchSession
+from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
 
 
 def list_imported_names(module_path: Path) -> set[str]:
@@ -53,6 +55,7 @@ ORCHESTRATION_FORBIDDEN: Final = ("FolderStore", "MemoryStore", "write_json_atom
 
 @pytest.mark.parametrize(("module", "forbidden"), [
     ("session", (*ORCHESTRATION_FORBIDDEN, "write_files", "load_sketch_file", "capture_from_camera", "cv2")),
+    ("drawing", ORCHESTRATION_FORBIDDEN),
     ("app", ORCHESTRATION_FORBIDDEN),
     ("cli", ())
 ])
@@ -379,3 +382,54 @@ def test_session_refuses_load_longer_than_call(first_load_generator: Generator) 
         session.run_round(captured.image, captured.payload, Guidance(prompt="chair"), source="file")
     failure = session.records[0].failure
     assert failure.stage == "generation", f"An impossible load must fail in generation, got {failure}"
+
+
+def test_named_session_claims_its_folder_and_records_name(tmp_path: Path) -> None:
+    """
+    A named session claims runs/<name>/ at once, records the name, and a round and a drawing land in that folder.
+    """
+    store = FolderStore(tmp_path / "runs")
+    session = SketchSession(FakeGenerator(), store, name=" participant1_car ")
+    claimed = session.folder.is_dir()
+    captured = StillCamera().capture()
+    session.run_round(captured.image, captured.payload, Guidance(prompt="chair"), source="file")
+    session.start_drawing(FakeStrokeSuggester(), canvas_width=512, canvas_height=360, save_interval_seconds=2.0)
+    saved = load_session(session.folder)
+
+    # The folder is the stripped name, claimed before anything was saved, and holds the round and the drawing.
+    assert session.folder == tmp_path / "runs" / "participant1_car" and claimed, f"Unexpected folder {session.folder}"
+    assert saved.session.name == "participant1_car", f"session.json must hold the name, got {saved.session.name!r}"
+    assert len(saved.rounds) == 1 and len(saved.drawings) == 1, f"Expected one round and one drawing, got {saved}"
+
+    # The same name in another letter case is taken.
+    with pytest.raises(ExperimentNameTakenError):
+        SketchSession(FakeGenerator(), store, name="PARTICIPANT1_CAR")
+
+
+@pytest.mark.parametrize("name", ["../x", "a/b", "C:x", "COM1", "x" * 65])
+def test_named_session_refuses_bad_name_before_creating_anything(tmp_path: Path, name: str) -> None:
+    """
+    A name breaking the rules raises ExperimentNameError and creates no folder.
+    """
+    with pytest.raises(ExperimentNameError):
+        SketchSession(FakeGenerator(), FolderStore(tmp_path / "runs"), name=name)
+
+    # Nothing was created, not even the runs folder.
+    assert not (tmp_path / "runs").exists(), "A refused name must create nothing"
+
+
+def test_session_allows_one_open_drawing() -> None:
+    """
+    A second drawing is refused while the first is open and numbered 2 once the first has finished.
+    """
+    session = SketchSession(FakeGenerator(), MemoryStore())
+    first = session.start_drawing(FakeStrokeSuggester(), canvas_width=512, canvas_height=360, save_interval_seconds=2.0)
+    with pytest.raises(SketchLoopError, match="Drawing 1 is still open"):
+        session.start_drawing(None, canvas_width=512, canvas_height=360, save_interval_seconds=2.0)
+    first.finish(None)
+    second = session.start_drawing(None, canvas_width=512, canvas_height=360, save_interval_seconds=2.0)
+
+    # The session record was saved before the first drawing, and drawings are numbered in order.
+    assert session.session_record is not None, "The session record must be saved before a drawing"
+    assert [drawing.record.number for drawing in session.drawings] == [1, 2], "Drawings must be numbered from 1"
+    assert not second.record.suggestions_enabled, "A drawing without a suggester has suggestions off"

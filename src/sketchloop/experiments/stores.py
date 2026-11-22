@@ -11,7 +11,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from sketchloop.domain import first_line
-from sketchloop.experiments.records import ROUND_FILE, SESSION_FILE, RoundRecord, SessionRecord, StoreError
+from sketchloop.experiments.drawings import DRAWING_FILE, DrawingRecord, drawing_to_dict
+from sketchloop.experiments.records import (ROUND_FILE, SESSION_FILE, ExperimentNameTakenError, RoundRecord, SessionRecord,
+                                            StoreError)
 from sketchloop.experiments.serialization import round_to_dict, session_to_dict
 
 
@@ -53,9 +55,16 @@ def write_files(folder: Path, files: Mapping[str, bytes]) -> None:
         target_file.write_bytes(payload)
 
 
+def describe_taken_name(session_id: str) -> str:
+    """
+    Say that an experiment name is taken and ask for another, in one line.
+    """
+    return f"An experiment named {session_id} already exists in the runs folder. Choose another name."
+
+
 class ExperimentStore(ABC):
     """
-    Write side of experiment storage: where sessions live, and saving session and round records with their files.
+    Write side of experiment storage: where sessions live, and saving session, round, and drawing records with their files.
     """
 
     @property
@@ -77,6 +86,20 @@ class ExperimentStore(ABC):
     def locate_round(self, session_id: str, number: int) -> Path | None:
         """
         Return the round's folder, or None when files are not kept on disk.
+        """
+        ...
+
+    @abstractmethod
+    def locate_drawing(self, session_id: str, number: int) -> Path | None:
+        """
+        Return the drawing's folder, or None when files are not kept on disk.
+        """
+        ...
+
+    @abstractmethod
+    def claim_session(self, session_id: str) -> None:
+        """
+        Reserve a named session before anything of it is saved, raising ExperimentNameTakenError when the name is in use.
         """
         ...
 
@@ -111,6 +134,18 @@ class ExperimentStore(ABC):
         """
         ...
 
+    @abstractmethod
+    def save_drawing(self, session_id: str, record: DrawingRecord, files: Mapping[str, bytes]) -> None:
+        """
+        Save the files, then the record, replacing an earlier record of the same drawing number.
+
+        Args:
+            session_id (str): Session the drawing belongs to.
+            record (DrawingRecord): Drawing record to save.
+            files (Mapping[str, bytes]): Payload by POSIX path relative to the drawing folder, empty to replace only the record.
+        """
+        ...
+
 
 class FolderStore(ExperimentStore):
     """
@@ -139,6 +174,12 @@ class FolderStore(ExperimentStore):
         """
         return self.runs_dir / session_id / f"round-{number}"
 
+    def locate_drawing(self, session_id: str, number: int) -> Path | None:
+        """
+        Return the drawing's folder inside its session folder.
+        """
+        return self.runs_dir / session_id / f"drawing-{number}"
+
     @contextmanager
     def _report_failure(self, target: Path) -> Iterator[None]:
         # Name the file relative to the runs folder, which keeps user names out of the message.
@@ -152,6 +193,29 @@ class FolderStore(ExperimentStore):
         except (TypeError, ValueError) as error:
             label = target.relative_to(self.runs_dir).as_posix()
             raise StoreError(f"Cannot save {label}: {first_line(error)}. Check the record values, then retry.") from error
+
+    def claim_session(self, session_id: str) -> None:
+        """
+        Create the named session's folder, refusing a name equal, ignoring case, to any entry of the runs folder.
+
+        Args:
+            session_id (str): Experiment name that becomes the session folder's name.
+        """
+        # Compare ignoring case, so the check behaves the same on case-insensitive macOS and Windows as on Linux.
+        folder = self.runs_dir / session_id
+        with self._report_failure(folder):
+            self.runs_dir.mkdir(parents=True, exist_ok=True)
+            taken = any(entry.name.lower() == session_id.lower() for entry in self.runs_dir.iterdir())
+
+            # Create the folder exclusively, which also catches another process claiming the name after the check.
+            try:
+                if not taken:
+                    folder.mkdir()
+            except FileExistsError:
+                taken = True
+
+        if taken:
+            raise ExperimentNameTakenError(describe_taken_name(session_id))
 
     def save_session(self, record: SessionRecord) -> None:
         """
@@ -195,6 +259,25 @@ class FolderStore(ExperimentStore):
             round_folder.mkdir(parents=True, exist_ok=True)
             write_json_atomic(round_folder / ROUND_FILE, round_to_dict(record))
 
+    def save_drawing(self, session_id: str, record: DrawingRecord, files: Mapping[str, bytes]) -> None:
+        """
+        Write the drawing's files one at a time, then atomically write drawing.json, so the record never names an unsaved file.
+
+        Args:
+            session_id (str): Session the drawing belongs to.
+            record (DrawingRecord): Drawing record to save.
+            files (Mapping[str, bytes]): Payload by POSIX path relative to the drawing folder, empty to replace only the record.
+        """
+        # Write the files first, each named in its own error, and the record last.
+        drawing_folder = self.runs_dir / session_id / f"drawing-{record.number}"
+        for path, payload in files.items():
+            with self._report_failure(drawing_folder / path):
+                write_files(drawing_folder, {path: payload})
+
+        with self._report_failure(drawing_folder / DRAWING_FILE):
+            drawing_folder.mkdir(parents=True, exist_ok=True)
+            write_json_atomic(drawing_folder / DRAWING_FILE, drawing_to_dict(record))
+
 
 class MemoryStore(ExperimentStore):
     """
@@ -205,6 +288,9 @@ class MemoryStore(ExperimentStore):
         self.sessions: dict[str, SessionRecord] = {}
         self.rounds: dict[tuple[str, int], RoundRecord] = {}
         self.files: dict[tuple[str, int, str], bytes] = {}
+        self.claimed: set[str] = set()
+        self.drawings: dict[tuple[str, int], DrawingRecord] = {}
+        self.drawing_files: dict[tuple[str, int, str], bytes] = {}
 
     @property
     def root(self) -> Path | None:
@@ -224,6 +310,21 @@ class MemoryStore(ExperimentStore):
         Return None, since rounds have no folder.
         """
         return None
+
+    def locate_drawing(self, session_id: str, number: int) -> Path | None:
+        """
+        Return None, since drawings have no folder.
+        """
+        return None
+
+    def claim_session(self, session_id: str) -> None:
+        """
+        Reserve the name, refusing one equal, ignoring case, to a kept or claimed session.
+        """
+        if session_id.lower() in {name.lower() for name in self.claimed | set(self.sessions)}:
+            raise ExperimentNameTakenError(describe_taken_name(session_id))
+
+        self.claimed.add(session_id)
 
     def _check_encodable(self, label: str, encode: Callable[[], Mapping[str, object]]) -> None:
         # Encode as the folder store would, discarding the text, so a record it could not write fails here too.
@@ -265,3 +366,16 @@ class MemoryStore(ExperimentStore):
         self.save_files(session_id, record.number, files)
         self._check_encodable(f"{session_id}/round-{record.number}/{ROUND_FILE}", lambda: round_to_dict(record))
         self.rounds[(session_id, record.number)] = record
+
+    def save_drawing(self, session_id: str, record: DrawingRecord, files: Mapping[str, bytes]) -> None:
+        """
+        Keep the drawing's files, then its record, replacing an earlier record of the same drawing number.
+
+        Args:
+            session_id (str): Session the drawing belongs to.
+            record (DrawingRecord): Drawing record to keep.
+            files (Mapping[str, bytes]): Payload by POSIX path relative to the drawing folder, empty to replace only the record.
+        """
+        self.drawing_files |= {(session_id, record.number, path): payload for path, payload in files.items()}
+        self._check_encodable(f"{session_id}/drawing-{record.number}/{DRAWING_FILE}", lambda: drawing_to_dict(record))
+        self.drawings[(session_id, record.number)] = record
