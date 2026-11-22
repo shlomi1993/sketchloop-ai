@@ -5,28 +5,32 @@ Framework-free controller and view records that the browser page calls to run an
 import numpy as np
 import threading
 import time
+import uuid
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
 
 from sketchloop.capture import CapturedSketch, InvalidSketchError, encode_frame, encode_frame_jpeg, load_sketch_file
 from sketchloop.domain import (
     ControlValue, Guidance, ImageRef, InvalidSelectionError, Iteration, Rotation, SelectionEvent, SketchLoopError, SketchSource,
-    Unavailable, record_no_selection, select_candidates)
+    Unavailable, first_line, record_no_selection, select_candidates)
 from sketchloop.drawing import INTERVAL_JPEG_QUALITY, GuidedDrawing
 from sketchloop.evaluation import Evaluator
-from sketchloop.experiments import (SETUP_NOT_MEASURED_REASON, SETUP_REUSED_REASON, CaptureRecord, DrawingEnd, ExperimentStore,
-                                    RoundRecord, RoundStage, RoundStatus, SuggestionRecord, SuggestionStage,
-                                    check_experiment_name)
+from sketchloop.experiments import (SETUP_NOT_MEASURED_REASON, SETUP_REUSED_REASON, CaptureRecord, DrawingEnd, DrawingStudy,
+                                    ExperimentStore, PromptSuggestionFailure, PromptSuggestionRecord, PromptSuggestionStatus,
+                                    RoundRecord, RoundStage, RoundStatus, StudyCondition, SuggestionRecord, SuggestionStage,
+                                    check_experiment_name, redact_paths)
 from sketchloop.follow import AlignedStrokeFollowDetector, CaptureScores, FollowDetector
 from sketchloop.generation import ControlKind, ControlSpec, Generator
 from sketchloop.preprocessing import Preprocessor, make_paper_canvas
 from sketchloop.session import RoundOutcome, SketchSession
 from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
 from sketchloop.stroke_suggestion import StrokeSuggester
-from sketchloop.suggestion import PromptSuggester, TemplateSuggester, compute_sketch_signature, has_sketch_changed
+from sketchloop.suggestion import (PromptSuggester, SuggestionError, TemplateSuggester, compute_sketch_signature,
+                                   has_sketch_changed)
 
 
 NO_SKETCH_MESSAGE: Final = "No sketch yet. Take a webcam picture or upload a PNG or JPEG, then generate."
@@ -34,6 +38,9 @@ NO_FILES_MESSAGE: Final = "The browser interface shows saved image files, so it 
 NO_DRAWING_MESSAGE: Final = "No drawing is open. Enter an experiment name and start a drawing first."
 NO_FRAME_MESSAGE: Final = "No sketch yet. Start the webcam or upload a PNG or JPEG, then try again."
 NO_NEW_STROKES_MESSAGE: Final = "No new strokes to suggest. Keep drawing or press again for another try."
+SUGGESTIONS_OFF_MESSAGE: Final = "Suggestions are off in this drawing."
+FAKE_STROKES_WARNING: Final = "Next-stroke suggestions come from the fake stroke suggester, which draws test shapes. Use it only for dry runs."  # noqa: E501
+TEMPLATE_PROMPTS_WARNING: Final = 'Prompt suggestions come from the fixed style templates, which do not look at the drawing. Set [prompt_suggester] name = "florence" for a study.'  # noqa: E501
 DEFAULT_CANVAS_SIZE: Final = (512, 360)  # Paper frame width and height, A4 or Letter in landscape on the latent grid
 DEFAULT_SAVE_INTERVAL_SECONDS: Final = 2.0
 CAPTURE_DUE_SHARE: Final = 0.8  # An interval capture is due once this share of the interval passed, so timer jitter skips none
@@ -111,6 +118,18 @@ class DrawingView:
     capture_count: int  # Captures saved so far
     suggestion_count: int  # Suggestions so far, shown or failed
     suggestion_lines: tuple[str, ...]  # One line per suggestion, such as "Suggestion 1: 2 parts"
+    condition: StudyCondition | None = None  # Study condition, None outside study mode
+    suggestions_enabled: bool = True  # Whether the page offers AI help, next-stroke and prompt suggestions, in this drawing
+    started_at: datetime | None = None  # Local start time for the experimenter's status line, None only in page tests
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PromptSuggestionView:
+    """
+    A recorded prompt suggestion as the page writes it into its prompt box.
+    """
+    suggestion_id: str  # ID the page keeps with its prompt box and sends back with each use
+    text: str  # Suggested prompt to write into the box
 
 
 def count_parts(count: int) -> str:
@@ -166,7 +185,9 @@ def build_drawing_view(drawing: GuidedDrawing, experiment: str | None) -> Drawin
     record = drawing.record
     return DrawingView(number=record.number, experiment=experiment, is_open=drawing.is_open, capture_count=len(record.captures),
                        suggestion_count=len(record.suggestions),
-                       suggestion_lines=tuple(describe_suggestion(suggestion) for suggestion in record.suggestions))
+                       suggestion_lines=tuple(describe_suggestion(suggestion) for suggestion in record.suggestions),
+                       condition=record.study.condition if record.study else None,
+                       suggestions_enabled=record.suggestions_enabled, started_at=record.started_at.astimezone())
 
 
 def describe_selection(iteration: Iteration, selection: SelectionEvent) -> str:
@@ -356,9 +377,47 @@ class AppController:
         except (SketchLoopError, OSError):
             return None
 
-    def suggest_prompt(self, sketch: Path | np.ndarray | None, rotation: int, use_raw: bool) -> str:
+    def _find_open_drawing(self) -> GuidedDrawing | None:
+        # Only the session's latest drawing can be open.
+        drawings = self.session.drawings
+        return drawings[-1] if drawings and drawings[-1].is_open else None
+
+    def _check_prompt_suggestions_allowed(self) -> None:
+        # The open drawing decides whether AI help is offered, and outside a drawing it always is.
+        drawing = self._find_open_drawing()
+        if drawing is not None and not drawing.record.suggestions_enabled:
+            raise SketchLoopError(SUGGESTIONS_OFF_MESSAGE)
+
+    def _record_failed_prompt_suggestion(self, requested_at: datetime, seconds: float,
+                                         error: Exception) -> PromptSuggestionFailure:
+        # Record the failed press with the error's class and first line, paths redacted, in the drawing or for the next round.
+        failure = PromptSuggestionFailure(error=type(error).__name__, message=redact_paths(first_line(error)))
+        record = PromptSuggestionRecord(number=1, id=uuid.uuid4().hex, status=PromptSuggestionStatus.FAILED,
+                                        requested_at=requested_at, shown_at=None, suggester=self.suggester.identity, text=None,
+                                        list_position=None, ran_suggester=True, suggester_seconds=seconds, after_capture=None,
+                                        failure=failure)
+        self.session.record_prompt_suggestion(record)
+        return failure
+
+    def _run_prompt_suggester(self, payload: bytes, requested_at: datetime) -> tuple[tuple[str, ...], float]:
+        # Run and time the suggester, recording a failure before passing it on as one line.
+        started = time.perf_counter()
+        try:
+            suggestions = tuple(self.suggester.suggest(payload))
+            if not suggestions:
+                raise SuggestionError("The prompt suggester returned no prompts. Retry, or type a prompt.")
+        except SketchLoopError as error:
+            self._record_failed_prompt_suggestion(requested_at, time.perf_counter() - started, error)
+            raise
+        except Exception as error:
+            failure = self._record_failed_prompt_suggestion(requested_at, time.perf_counter() - started, error)
+            raise SuggestionError(f"Prompt suggestion failed: {failure.message.rstrip('.')}. Retry, or type a prompt.") from error
+
+        return suggestions, time.perf_counter() - started
+
+    def request_prompt_suggestion(self, sketch: Path | np.ndarray | None, rotation: int, use_raw: bool) -> PromptSuggestionView:
         """
-        Suggest one style prompt for the sketch the next round would use, the next style each time for the same drawing.
+        Suggest one style prompt for the current sketch, the next style each time for the same drawing, and record it.
 
         Args:
             sketch (Path | np.ndarray | None): Sketch file, camera frame in OpenCV channel order, or None when missing.
@@ -366,27 +425,60 @@ class AppController:
             use_raw (bool): Suggest from the raw sketch, which skips preprocessing.
 
         Returns:
-            str: The suggested prompt.
+            PromptSuggestionView: The suggested prompt and the ID the page sends back with the prompt it is written into.
         """
-        # Compare raw frames, since the crop and contrast steps make camera noise look like a changed drawing.
+        # Refuse in a drawing without AI help, then compare raw frames, since preprocessing makes camera noise look like a change.
+        self._check_prompt_suggestions_allowed()
+        requested_at = datetime.now(timezone.utc)
         raw_payload = self.preview_sketch(sketch, rotation, True)
         if raw_payload is None:
             raise InvalidSketchError(NO_SKETCH_MESSAGE)
 
         # Caption a changed drawing as the generator would see it, falling back to the raw sketch when preprocessing finds none.
         signature = compute_sketch_signature(raw_payload)
-        if has_sketch_changed(self._suggested_signature, signature):
+        ran_suggester = has_sketch_changed(self._suggested_signature, signature) or not self._suggestions
+        if ran_suggester:
             payload = raw_payload if use_raw else self.preview_sketch(sketch, rotation, False) or raw_payload
-            self._suggestions = self.suggester.suggest(payload)
-            self._suggested_signature, self._suggestion_index = signature, 0
+            suggestions, seconds = self._run_prompt_suggester(payload, requested_at)
+            position = 0
         else:
-            self._suggestion_index = (self._suggestion_index + 1) % len(self._suggestions)
+            suggestions, seconds = self._suggestions, None
+            position = (self._suggestion_index + 1) % len(suggestions)
 
-        return self._suggestions[self._suggestion_index]
+        # Record the press, then keep the list, so a failed save leaves the next press where this one started.
+        shown = PromptSuggestionRecord(number=1, id=uuid.uuid4().hex, status=PromptSuggestionStatus.SHOWN,
+                                       requested_at=requested_at, shown_at=datetime.now(timezone.utc),
+                                       suggester=self.suggester.identity, text=suggestions[position], list_position=position,
+                                       ran_suggester=ran_suggester, suggester_seconds=seconds, after_capture=None, failure=None)
+        recorded = self.session.record_prompt_suggestion(shown)
+        self._suggestions, self._suggestion_index, self._suggested_signature = suggestions, position, signature
+        return PromptSuggestionView(suggestion_id=recorded.id, text=suggestions[position])
+
+    def suggest_prompt(self, sketch: Path | np.ndarray | None, rotation: int, use_raw: bool) -> str:
+        """
+        Suggest and record one style prompt and return only its text, for a page that does not send the ID back yet.
+        """
+        return self.request_prompt_suggestion(sketch, rotation, use_raw).text
+
+    def describe_prompt_suggester(self) -> str:
+        """
+        Name the prompt suggester in one sentence for the experimenter, by its model or why it has none.
+        """
+        model = self.suggester.identity.model_id
+        return f"Prompt suggestions: {model.reason if isinstance(model, Unavailable) else model}."
+
+    def list_stand_in_warnings(self) -> tuple[str, ...]:
+        """
+        Warn about each suggester that stands in for a real one, so a study does not run with them by mistake.
+        """
+        warnings = (FAKE_STROKES_WARNING if isinstance(self.stroke_suggester, FakeStrokeSuggester) else None,
+                    TEMPLATE_PROMPTS_WARNING if isinstance(self.suggester, TemplateSuggester) else None)
+        return tuple(warning for warning in warnings if warning is not None)
 
     def run_round(self, sketch: Path | np.ndarray | None, source: SketchSource, prompt: str, *, n_candidates: int,
                   seed: int | None = None, rotation: int = Rotation.DEG_000, use_raw: bool = False,
-                  frame_age_seconds: float | None = None, controls: Mapping[str, ControlValue] | None = None) -> RoundView:
+                  frame_age_seconds: float | None = None, controls: Mapping[str, ControlValue] | None = None,
+                  prompt_suggestion_id: str | None = None) -> RoundView:
         """
         Check the inputs, then run a round from a sketch file or a camera frame and return its view.
 
@@ -402,6 +494,8 @@ class AppController:
                 the webcam source. Defaults to None.
             controls (Mapping[str, ControlValue] | None, optional): Requested backend controls, such as steps, or None
                 for the backend defaults. Defaults to None.
+            prompt_suggestion_id (str | None, optional): ID of the prompt suggestion the page wrote into its prompt box, or
+                None. Defaults to None.
 
         Returns:
             RoundView: The completed round.
@@ -414,7 +508,8 @@ class AppController:
         guidance = Guidance(prompt=prompt, controls=controls or {})
         outcome = self.session.run_round(captured.image, captured.payload, guidance, source=source,
                                          rotation=rotation, use_raw=use_raw, n_candidates=n_candidates, seed=seed,
-                                         capture_seconds=captured.capture_seconds, frame_age_seconds=frame_age_seconds)
+                                         capture_seconds=captured.capture_seconds, frame_age_seconds=frame_age_seconds,
+                                         prompt_suggestion_id=prompt_suggestion_id)
         return build_round_view(outcome, self.session.selections)
 
     def record_selection(self, iteration_id: str | None, candidate_ids: Sequence[str]) -> RoundView:
@@ -463,11 +558,6 @@ class AppController:
         """
         return self.stroke_suggester.describe()
 
-    def _find_open_drawing(self) -> GuidedDrawing | None:
-        # Only the session's latest drawing can be open.
-        drawings = self.session.drawings
-        return drawings[-1] if drawings and drawings[-1].is_open else None
-
     def _end_open_drawing(self) -> None:
         # End an open drawing without a final capture, since the session it belongs to is being replaced.
         drawing = self._find_open_drawing()
@@ -492,34 +582,43 @@ class AppController:
 
         return drawing
 
-    def start_drawing(self, name: str) -> DrawingView:
+    def start_drawing(self, name: str, condition: StudyCondition | None = None) -> DrawingView:
         """
-        Start a named experiment as a new session folder and open its first drawing.
+        Start a named experiment as a new session folder and open its first drawing, as a study drawing when given a condition.
 
         Args:
             name (str): Experiment name, such as participant1_car, which also names the session folder.
+            condition (StudyCondition | None, optional): Study condition, where without AI the drawing offers no suggestions, or
+                None outside study mode. Defaults to None.
 
         Returns:
             DrawingView: The open drawing as the page shows it.
         """
-        # Claim the name in a new session first, so an invalid or taken name leaves the current session and drawing as they are.
+        # Check the name and condition, then claim the name in a new session, so a refusal leaves the current drawing open.
         name = check_experiment_name(name)
+        study = DrawingStudy(condition=condition) if condition is not None else None
         # A session that saved nothing has not recorded the generator's setup yet, so the named session records it instead.
         unsaved = self.session.session_record is None
         setup_seconds = self.session.generator_setup_seconds if unsaved else Unavailable(SETUP_REUSED_REASON)
         session = SketchSession(self.generator, self.store, self.evaluator, preprocessor=self.preprocessor,
                                 generator_setup_seconds=setup_seconds, name=name)
 
-        # End the open drawing, then start drawing 1 of the named session with the configured suggester.
+        # End the open drawing, then start drawing 1 of the named session, with no stroke suggester without AI.
         self._end_open_drawing()
         self.session = session
         width, height = self.canvas_size
-        drawing = session.start_drawing(self.stroke_suggester, canvas_width=width, canvas_height=height,
-                                        save_interval_seconds=self.save_interval_seconds, follow_detector=self.follow_detector)
+        offers_ai = study is None or study.condition == StudyCondition.AI
+        drawing = session.start_drawing(self.stroke_suggester if offers_ai else None, canvas_width=width, canvas_height=height,
+                                        save_interval_seconds=self.save_interval_seconds, follow_detector=self.follow_detector,
+                                        study=study)
+
+        # Forget the cached prompt list, so the first prompt suggestion of the experiment runs the suggester.
+        self._suggestions, self._suggestion_index, self._suggested_signature = (), 0, None
         return build_drawing_view(drawing, session.name)
 
     def suggest_strokes(self, sketch: Path | np.ndarray | None, source: SketchSource, prompt: str, *, rotation: int,
-                        seed: int | None = None, frame_age_seconds: float | None = None) -> SuggestionView:
+                        seed: int | None = None, frame_age_seconds: float | None = None,
+                        prompt_suggestion_id: str | None = None) -> SuggestionView:
         """
         Suggest how to continue the open drawing from the current sketch and the prompt as typed.
 
@@ -530,6 +629,8 @@ class AppController:
             rotation (int): Degrees to turn the sketch clockwise.
             seed (int | None, optional): Seed for the suggestion, or None for random. Defaults to None.
             frame_age_seconds (float | None, optional): Age of a streamed webcam frame. Defaults to None.
+            prompt_suggestion_id (str | None, optional): ID of the prompt suggestion the page wrote into its prompt box, or
+                None. Defaults to None.
 
         Returns:
             SuggestionView: The suggestion's status line, part count, and number.
@@ -538,7 +639,7 @@ class AppController:
         drawing = self._check_drawing_inputs(sketch, source, rotation, frame_age_seconds)
         captured = capture_browser_sketch(sketch)
         suggestion = drawing.suggest(captured, source=source, rotation=rotation, prompt=prompt, seed=seed,
-                                     frame_age_seconds=frame_age_seconds)
+                                     frame_age_seconds=frame_age_seconds, prompt_suggestion_id=prompt_suggestion_id)
         return build_suggestion_view(drawing.record.number, suggestion)
 
     def record_drawing_capture(self, sketch: Path | np.ndarray | None, source: SketchSource, *, rotation: int,
@@ -603,15 +704,20 @@ class AppController:
             return None
 
     def finish_drawing(self, sketch: Path | np.ndarray | None, source: SketchSource, *, rotation: int,
-                       frame_age_seconds: float | None = None) -> DrawingView:
+                       frame_age_seconds: float | None = None, prompt: str | None = None,
+                       prompt_suggestion_id: str | None = None) -> DrawingView:
         """
-        Finish the open drawing, keeping the current sketch as its final capture when there is one.
+        Finish the open drawing, keeping the current sketch as its final capture when there is one, and the final prompt.
 
         Args:
             sketch (Path | np.ndarray | None): Webcam frame or uploaded file, or None to finish without a capture.
             source (SketchSource): Where the sketch came from.
             rotation (int): Degrees to turn the sketch clockwise.
             frame_age_seconds (float | None, optional): Age of a streamed webcam frame. Defaults to None.
+            prompt (str | None, optional): Prompt box text at finish, empty included, or None when the page sent none.
+                Defaults to None.
+            prompt_suggestion_id (str | None, optional): ID of the prompt suggestion the page wrote into its prompt box, or
+                None. Defaults to None.
 
         Returns:
             DrawingView: The finished drawing as the page shows it.
@@ -623,9 +729,10 @@ class AppController:
 
         if sketch is not None:
             self._check_drawing_inputs(sketch, source, rotation, frame_age_seconds)
-            drawing.finish(capture_browser_sketch(sketch), source=source, rotation=rotation, frame_age_seconds=frame_age_seconds)
+            drawing.finish(capture_browser_sketch(sketch), source=source, rotation=rotation, frame_age_seconds=frame_age_seconds,
+                           prompt=prompt, prompt_suggestion_id=prompt_suggestion_id)
         else:
-            drawing.finish(None)
+            drawing.finish(None, prompt=prompt, prompt_suggestion_id=prompt_suggestion_id)
 
         return build_drawing_view(drawing, self.session.name)
 

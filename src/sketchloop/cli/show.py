@@ -5,6 +5,7 @@ The show subcommand, which prints a saved session's records and lists missing or
 import argparse
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from rich.console import Console
 from rich.table import Table
 from typing import Final
@@ -12,9 +13,10 @@ from typing import Final
 from sketchloop.app import describe_selection
 from sketchloop.cli.common import format_machine, format_timings
 from sketchloop.domain import Unavailable
-from sketchloop.experiments import (SESSION_FILE, BenchmarkSummary, DrawingRecord, ExperimentRecordError, RerunComparison,
-                                    RoundRecord, SavedSession, SuggestionRecord, SuggestionStage, compare_rounds,
-                                    decide_suggestion, format_value, load_session, summarize_benchmark)
+from sketchloop.experiments import (SESSION_FILE, BenchmarkSummary, DrawingRecord, ExperimentRecordError, PromptOrigin,
+                                    PromptSuggestionRecord, RerunComparison, RoundRecord, SavedSession, StudyCondition,
+                                    SuggestionRecord, SuggestionStage, compare_rounds, decide_suggestion, format_value,
+                                    load_session, summarize_benchmark)
 from sketchloop.follow import PROVISIONAL_RULE, FollowDecision, FollowResult, FollowRule
 
 
@@ -23,6 +25,7 @@ OLDER_TIMINGS_NOTE: Final = "Recorded by an older sketchloop: generation may inc
 P95_RELIABLE_ROUNDS: Final = 20
 COMPUTED_NOTE: Final = "computed by show, not recorded"
 FAKE_SUGGESTER_WARNING: Final = "FAKE SUGGESTER: these parts are test shapes, not suggestions from a real model."
+CONDITION_WORDS: Final[dict[str, str]] = {StudyCondition.AI: "with AI", StudyCondition.NO_AI: "without AI"}
 
 
 def format_controls(controls: Mapping[str, object]) -> str:
@@ -37,6 +40,68 @@ def format_seconds(seconds: float | Unavailable) -> str:
     Format a duration such as "3.21 s", or why it is unavailable.
     """
     return format_value(seconds) if isinstance(seconds, Unavailable) else f"{seconds:.2f} s"
+
+
+def format_offset(seconds: float) -> str:
+    """
+    Format seconds from a drawing's start as "+mm:ss".
+    """
+    minutes, rest = divmod(round(seconds), 60)
+    return f"+{minutes:02d}:{rest:02d}"
+
+
+def quote_prompt(prompt: str) -> str:
+    """
+    Quote a prompt exactly as typed, or say "(empty)" for a blank one.
+    """
+    return f'"{prompt}"' if prompt.strip() else "(empty)"
+
+
+def describe_prompt_origin(origin: PromptOrigin | Unavailable, suggestions: Sequence[PromptSuggestionRecord]) -> str:
+    """
+    Say how a prompt came about, such as "typed" or "suggested 2" by the prompt suggestion's number, or why it is unknown.
+    """
+    if isinstance(origin, Unavailable):
+        return format_value(origin)
+
+    # A typed prompt names no suggestion, and a named one is given by its number in this record or else by its ID.
+    if origin.prompt_suggestion is None:
+        return str(origin.kind)
+
+    number = next((item.number for item in suggestions if item.id == origin.prompt_suggestion), None)
+    return f"{origin.kind} {number}" if number is not None else f"{origin.kind}, prompt suggestion {origin.prompt_suggestion}"
+
+
+def print_prompt_suggestions(suggestions: tuple[PromptSuggestionRecord, ...] | None, started_at: datetime | None,
+                             console: Console) -> None:
+    """
+    Print the suggester and one line per prompt suggestion, or that an older record has none recorded.
+
+    Args:
+        suggestions (tuple[PromptSuggestionRecord, ...] | None): Recorded prompt suggestions, or None in an older record.
+        started_at (datetime | None): Drawing start to print offsets from, or None to print times.
+        console (Console): Console used for output.
+    """
+    if suggestions is None:
+        console.print("Prompt suggestions: not recorded")
+        return
+
+    # Name each suggester once, then each press with its text and list position, or its failure.
+    identities = dict.fromkeys(item.suggester for item in suggestions)
+    suggesters = [f"{name.adapter} {name.adapter_version}, model {format_value(name.model_id)}" for name in identities]
+    if suggesters:
+        console.print(f"Prompt suggester: {'; '.join(suggesters)}", markup=False, soft_wrap=True)
+
+    for item in suggestions:
+        moment = format_offset((item.requested_at - started_at).total_seconds()) if started_at else item.requested_at.isoformat()
+        ran = f"suggester ran {item.suggester_seconds:.2f} s" if item.ran_suggester else "next in the list, suggester not run"
+        if item.failure is not None:
+            failure = f"failed, {ran}: {item.failure.error}: {item.failure.message}"
+            console.print(f"Prompt suggestion {item.number} at {moment}: {failure}", style="red", markup=False, soft_wrap=True)
+            continue
+
+        details = f'"{item.text}", list position {item.list_position}, {ran}'
+        console.print(f"Prompt suggestion {item.number} at {moment}: {details}", markup=False, soft_wrap=True)
 
 
 def print_session_header(saved: SavedSession, console: Console) -> None:
@@ -99,6 +164,12 @@ def print_round_record(record: RoundRecord, console: Console) -> None:
         console.print(f"Negative prompt: {guidance.negative_prompt or 'none'}", markup=False, soft_wrap=True)
         console.print(f"Requested: {format_controls(guidance.controls)}, seed {format_value(record.request.seed)}", markup=False)
 
+    # Say how the prompt came about, and list the prompt suggestions shown since the previous round.
+    console.print(f"Prompt origin: {describe_prompt_origin(record.prompt_origin, record.prompt_suggestions or ())}",
+                  markup=False, soft_wrap=True)
+    if record.prompt_suggestions != ():
+        print_prompt_suggestions(record.prompt_suggestions, None, console)
+
     sketch_kind = "raw sketch" if record.use_raw else f"processed sketch, rotation {record.rotation}"
     age, source = record.frame_age_seconds, format_value(record.source)
     frame_age = "" if isinstance(age, Unavailable) else f", frame age {age:.2f} s"
@@ -137,21 +208,12 @@ def format_duration(seconds: float) -> str:
     return f"{minutes} min {rest} s" if minutes else f"{rest} s"
 
 
-def format_offset(seconds: float) -> str:
-    """
-    Format seconds from a drawing's start as "+mm:ss".
-    """
-    minutes, rest = divmod(round(seconds), 60)
-    return f"+{minutes:02d}:{rest:02d}"
-
-
 def describe_prompt(suggestion: SuggestionRecord) -> str:
     """
     Quote the prompt exactly as typed, say "(empty)" for a blank one, and mark one the model's token limit cut.
     """
-    prompt = suggestion.request.prompt
     truncated = suggestion.result is not None and suggestion.result.effective.controls.get("prompt_truncated") is True
-    quoted = f'"{prompt}"' if prompt.strip() else "(empty)"
+    quoted = quote_prompt(suggestion.request.prompt)
     return f"{quoted} (truncated)" if truncated else quoted
 
 
@@ -192,7 +254,8 @@ def print_suggestion(record: DrawingRecord, suggestion: SuggestionRecord, rule: 
     """
     shown_or_pressed = suggestion.shown_at or suggestion.requested_at
     offset = format_offset((shown_or_pressed - record.started_at).total_seconds())
-    prompt = describe_prompt(suggestion) if suggestion.request else "no request"
+    origin = describe_prompt_origin(suggestion.prompt_origin, record.prompt_suggestions or ())
+    prompt = f"{describe_prompt(suggestion)}, origin {origin}" if suggestion.request else f"no request, origin {origin}"
     if suggestion.failure is not None:
         failure = suggestion.failure
         reason = f"failed during {failure.stage}: {failure.error}: {failure.message}"
@@ -226,6 +289,17 @@ def describe_drawing_state(record: DrawingRecord) -> str:
     return f"finished after {duration}" if record.end == "finished" else f"ended by a new session after {duration}"
 
 
+def describe_final_prompt(record: DrawingRecord) -> str:
+    """
+    Quote the prompt box text at finish with how it came about, or say why there is none.
+    """
+    prompt = record.final_prompt
+    if not isinstance(prompt, str):
+        return format_value(prompt)
+
+    return f"{quote_prompt(prompt)}, origin {describe_prompt_origin(record.final_prompt_origin, record.prompt_suggestions or ())}"
+
+
 def print_drawing_record(record: DrawingRecord, console: Console) -> None:
     """
     Print a saved drawing: its state, captures, canvas, suggester, follow method and rule, and each suggestion's result.
@@ -240,6 +314,12 @@ def print_drawing_record(record: DrawingRecord, console: Console) -> None:
     canvas = f"canvas {record.canvas_width}x{record.canvas_height}"
     summary = f"{describe_drawing_state(record)}, {len(record.captures)} captures, {canvas}{final_text}"
     console.print(f"Drawing {record.number}: {summary}", markup=False, soft_wrap=True)
+
+    # Name a study drawing's condition, and the final prompt of an ended drawing.
+    if record.study is not None:
+        console.print(f"Condition: {CONDITION_WORDS[record.study.condition]}")
+    if record.end is not None:
+        console.print(f"Final prompt: {describe_final_prompt(record)}", markup=False, soft_wrap=True)
     if not record.suggestions_enabled:
         console.print("Suggestions: off")
         return
@@ -260,6 +340,7 @@ def print_drawing_record(record: DrawingRecord, console: Console) -> None:
         recorded = "Rule" if record.rule is not None else "Rule, not recorded, so show applies the provisional one"
         console.print(f"{recorded}: {rule.describe()}", markup=False, soft_wrap=True)
 
+    print_prompt_suggestions(record.prompt_suggestions, record.started_at, console)
     for suggestion in record.suggestions:
         print_suggestion(record, suggestion, rule, console)
 

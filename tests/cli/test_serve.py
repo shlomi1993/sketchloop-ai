@@ -2,23 +2,30 @@
 Tests that the ui subcommand launches the page with telemetry off and the settings applied.
 """
 
+import io
 import os
 import pytest
 import sys
 import types
 
 from pathlib import Path
+from rich.console import Console
 
 import sketchloop
 from sketchloop.app import AppController
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.cli import main
+from sketchloop.cli.serve import warm_up_suggester
+from sketchloop.experiments import load_session
 from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
-from sketchloop.suggestion import FLORENCE_MODEL
+from sketchloop.suggestion import FLORENCE_MODEL, FlorenceSuggester, SuggestionError, TemplateSuggester
 
 
 # Run every test from tmp_path, so a sketchloop.toml in the repository cannot change CLI settings.
 pytestmark = pytest.mark.usefixtures("isolated_cwd")
+
+
+EXAMPLE_SKETCH = Path(__file__).resolve().parents[2] / "examples" / "sketch-photo.jpg"
 
 
 @pytest.fixture
@@ -69,7 +76,7 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     config = config_dir / "ui.toml"
     config.write_text("\n".join(['[generator]', 'backend = "diffusers"', '[generator.diffusers]', 'mode = "quality"',
                                  '[models]', 'dir = "weights"', '[storage]', 'runs_dir = "file-runs"', '[ui]', 'candidates = 3',
-                                 '']),
+                                 '[prompt_suggester]', 'name = "florence"', '']),
                       encoding="utf-8")
     config_exit = main(["ui", "--config", str(config)])
     fake_flag_exit = main(["ui", "--config", str(config), "--backend", "fake"])
@@ -99,7 +106,7 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     controller_runs = config_controller.store.root.resolve()
     assert controller_runs == (config_dir / "file-runs").resolve(), f"Runs must sit next to the file, got {controller_runs}"
 
-    # The prompt suggester reads its model from the same [models] folder as the backend.
+    # The file's Florence-2 prompt suggester reads its model from the same [models] folder as the backend.
     suggester_folder = config_controller.suggester._model_folder.resolve()
     expected_folder = (config_dir / "weights" / FLORENCE_MODEL.folder).resolve()
     assert suggester_folder == expected_folder, f"The suggester must read {expected_folder}, got {suggester_folder}"
@@ -124,3 +131,50 @@ def test_cli_ui_passes_stroke_suggester_and_drawing_settings(tmp_path: Path,
     assert exit_code == 0 and isinstance(controller.stroke_suggester, FakeStrokeSuggester), f"Bad suggester {controller}"
     drawing = (controller.canvas_size, controller.save_interval_seconds)
     assert drawing == ((640, 480), 3.0), f"Expected the file's canvas and interval, got {drawing}"
+
+
+def test_cli_ui_builds_prompt_suggester_from_settings(tmp_path: Path,
+                                                      launches: list[tuple[AppController, dict[str, object]]]) -> None:
+    config = tmp_path / "prompts.toml"
+    config.write_text('[prompt_suggester]\nname = "florence"\n\n[models]\ndir = "no-weights"\n', encoding="utf-8")
+    default_exit = main(["ui"])
+    florence_exit = main(["ui", "--config", str(config)])
+    default_controller, florence_controller = launches[0][0], launches[1][0]
+
+    # The templates are the default with the fake backend, and the file chooses Florence-2 with the fake backend too.
+    assert (default_exit, florence_exit) == (0, 0), f"Expected two launches, got {default_exit}, {florence_exit}"
+    assert isinstance(default_controller.suggester, TemplateSuggester), f"Got {type(default_controller.suggester).__name__}"
+    assert isinstance(florence_controller.suggester, FlorenceSuggester), f"Got {type(florence_controller.suggester).__name__}"
+
+    # The warm-up prints why Florence-2 is unavailable without weights.
+    output = io.StringIO()
+    warm_up_suggester(florence_controller.suggester, Console(file=output, width=200))
+    assert "Prompt suggestions are unavailable: Model folder" in output.getvalue(), f"Got {output.getvalue()!r}"
+
+    # A press is then refused with the download hint and recorded as failed in the next round.
+    with pytest.raises(SuggestionError, match="download_models.py"):
+        florence_controller.request_prompt_suggestion(EXAMPLE_SKETCH, 0, False)
+    florence_controller.run_round(EXAMPLE_SKETCH, "upload", "a chair", n_candidates=1)
+    recorded = load_session(florence_controller.session.folder).rounds[0].prompt_suggestions
+    assert [item.status for item in recorded] == ["failed"], f"Expected one failed press, got {recorded}"
+
+
+@pytest.mark.parametrize(("arguments", "settings_text", "study"), [
+    (["--study"], None, True),
+    ([], "[study]\nenabled = true\n", True),
+    (["--no-study"], "[study]\nenabled = true\n", False),
+    ([], None, False)
+], ids=["flag", "file", "flag-beats-file", "default"])
+def test_cli_ui_study_mode(tmp_path: Path, capsys: pytest.CaptureFixture[str],
+                           launches: list[tuple[AppController, dict[str, object]]], arguments: list[str],
+                           settings_text: str | None, study: bool) -> None:
+    if settings_text is not None:
+        (tmp_path / "sketchloop.toml").write_text(settings_text, encoding="utf-8")
+    exit_code = main(["ui", *arguments])
+    output = " ".join(capsys.readouterr().out.split())
+    options = launches[0][1]
+
+    # The page gets the study flag only in study mode, which prints its line and a warning for each stand-in.
+    assert exit_code == 0 and options.get("study", False) == study, f"Expected study {study}, got {options}"
+    assert ("Serving the study page" in output) == study, f"Unexpected study line in {output}"
+    assert ("fake stroke suggester" in output and "fixed style templates" in output) == study, f"Unexpected warnings {output}"

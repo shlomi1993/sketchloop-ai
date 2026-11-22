@@ -76,3 +76,33 @@ def test_guided_sketching_values_refused(tmp_path: Path, text: str, message: str
     config.write_text(text, encoding="utf-8")
     with pytest.raises(SettingsError, match=re.escape(message)):
         load_settings(config)
+
+
+def test_study_and_prompt_suggester_settings(tmp_path: Path) -> None:
+    defaults = Settings()
+
+    # Study mode is off, exports go under the ignored data folder, and prompts come from the templates.
+    assert not defaults.study.enabled, "Study mode must be off by default"
+    assert defaults.study.export_dir == Path("data/study-exports"), f"Unexpected export folder {defaults.study.export_dir}"
+    assert defaults.prompt_suggester.name == "templates", f"Unexpected prompt suggester {defaults.prompt_suggester.name}"
+
+    # A file turns study mode on, chooses Florence-2, and places the export folder next to itself.
+    config = tmp_path / "config" / "sketchloop.toml"
+    config.parent.mkdir()
+    study_text = '[study]\nenabled = true\nexport_dir = "exports"\n\n[prompt_suggester]\nname = "florence"\n'
+    config.write_text(study_text, encoding="utf-8")
+    settings = load_settings(config)
+    assert settings.study.enabled and settings.prompt_suggester.name == "florence", f"Unexpected settings {settings}"
+    assert settings.study.export_dir == tmp_path / "config" / "exports", f"Unexpected folder {settings.study.export_dir}"
+
+
+@pytest.mark.parametrize(("text", "message"), [
+    ('[study]\nenabled = "yes"\n', 'study.enabled must be true or false, got "yes".'),
+    ("[study]\nexport_dir = \"\"\n", 'study.export_dir must be non-empty text, got "".'),
+    ("[study]\ntask = \"car\"\n", "unknown key study.task. Keys in [study]: enabled, export_dir.")
+], ids=["text-enabled", "empty-folder", "task-key"])
+def test_study_values_refused(tmp_path: Path, text: str, message: str) -> None:
+    config = tmp_path / "sketchloop.toml"
+    config.write_text(text, encoding="utf-8")
+    with pytest.raises(SettingsError, match=re.escape(message)):
+        load_settings(config)

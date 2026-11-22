@@ -11,11 +11,11 @@ from rich.console import Console
 
 from sketchloop.app import AppController
 from sketchloop.cli.common import make_configured_generator
-from sketchloop.components import FAKE_BACKEND, make_evaluator, make_preprocessor, make_store, make_stroke_suggester
+from sketchloop.components import make_evaluator, make_preprocessor, make_prompt_suggester, make_store, make_stroke_suggester
 from sketchloop.domain import SketchLoopError
 from sketchloop.settings import Settings
 from sketchloop.stroke_suggestion import StrokeSuggester
-from sketchloop.suggestion import FlorenceSuggester, PromptSuggester, TemplateSuggester
+from sketchloop.suggestion import PromptSuggester
 
 
 def warm_up_suggester(suggester: PromptSuggester, console: Console) -> None:
@@ -56,9 +56,8 @@ def make_controller(settings: Settings, console: Console) -> AppController:
     store = make_store(settings.storage)
     generator, setup_seconds = make_configured_generator(settings, console)
 
-    # Name the sketched object with the local model next to a real backend, and use the fixed styles with the fake.
-    is_real = settings.generator.backend != FAKE_BACKEND
-    suggester = FlorenceSuggester(settings.models.dir) if is_real else TemplateSuggester()
+    # Build the configured prompt suggester apart from the image backend, and load any model in the background.
+    suggester = make_prompt_suggester(settings)
     threading.Thread(target=warm_up_suggester, args=(suggester, console), daemon=True).start()
 
     # Warm up the configured next-stroke suggester at the canvas size, so the first press does not wait for the model.
@@ -78,6 +77,15 @@ def make_controller(settings: Settings, console: Console) -> AppController:
     return controller
 
 
+def announce_study_mode(controller: AppController, console: Console) -> None:
+    """
+    Say that the page is in study mode, and warn about each suggester that stands in for a real one.
+    """
+    console.print("Serving the study page: participants see the sketch, the prompt, and AI help only in the AI condition.")
+    for warning in controller.list_stand_in_warnings():
+        console.print(warning, style="yellow", markup=False, soft_wrap=True)
+
+
 def launch_ui(args: argparse.Namespace, console: Console) -> None:
     """
     Serve the browser interface on this machine with one loaded backend, until the person stops it with Ctrl+C.
@@ -94,5 +102,12 @@ def launch_ui(args: argparse.Namespace, console: Console) -> None:
     from sketchloop.ui import launch_app
 
     settings = args.settings
-    launch_app(make_controller(settings, console), default_candidates=settings.ui.candidates, default_seed=settings.ui.seed,
-               capture_interval_seconds=settings.ui.capture_interval_seconds)
+    controller = make_controller(settings, console)
+
+    # Pass the study flag only when it is on, until the page takes it in the study page slice.
+    study_options = {"study": True} if settings.study.enabled else {}
+    if settings.study.enabled:
+        announce_study_mode(controller, console)
+
+    launch_app(controller, default_candidates=settings.ui.candidates, default_seed=settings.ui.seed,
+               capture_interval_seconds=settings.ui.capture_interval_seconds, **study_options)

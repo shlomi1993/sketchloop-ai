@@ -81,7 +81,7 @@ The download script fetches about 7 GB into the git-ignored `models/` folder and
 Run `sketchloop`, which is short for `sketchloop ui`. The page is served on 127.0.0.1 only, with no share link and Gradio analytics off.
 
 1. **Sketch:** the webcam starts streaming by itself, or switch to uploading a PNG or JPEG. The page shows the sketch the model will receive, refreshed every 0.5 s and preprocessed unless raw is ticked. Clockwise rotation turns the input, 180 degrees by default for the webcam.
-2. **Direction:** type a prompt, or press **Suggest a prompt**. Pressing it again for the same drawing gives the next style. Set the steps and the other generation sliders, the seed, and the number of candidates.
+2. **Direction:** type a prompt, or press **Suggest a prompt**. Pressing it again for the same drawing gives the next style. The suggestions come from the fixed style templates by default, or from the local Florence-2 model with `[prompt_suggester] name = "florence"`. Every suggestion is recorded with the open drawing or the next round, with the suggester that made it. Set the steps and the other generation sliders, the seed, and the number of candidates.
 3. **Choose:** click **Generate**, tick the candidates you like, or none, and click **Record selection**. Then change the drawing or the prompt and generate the next round.
 
 The page lists the current session's history, and **New session** starts a fresh session with the model still loaded. All browser tabs share one session, and reloading the page keeps it.
@@ -97,7 +97,10 @@ The page lists the current session's history, and **New session** starts a fresh
 | `--seed` | random | Starting base seed |
 | `--capture-interval` | 0.5 | Seconds between the webcam frames the page keeps |
 | `--runs-dir` | `runs` | Where sessions are saved |
+| `--study` | off | Serve the study page, see below |
 | `--config` | `./sketchloop.toml` if present | Settings file |
+
+**Study mode (in progress, T10):** `sketchloop ui --study`, or `enabled = true` under `[study]`, serves the page for a user study, and `--no-study` turns it off for one run. The experimenter starts each experiment with a name and a condition, with or without AI, and a drawing without AI offers neither next-stroke nor prompt suggestions. Each drawing records its condition, every prompt suggestion, whether each prompt was typed, suggested, or an edited suggestion, and the prompt box text at finish. The command prints a warning for each stand-in, the fake stroke suggester or the template prompts, since a study needs the real ones. The study page itself is still being built, so `--study` cannot serve a page yet.
 
 ## Using the command line
 
@@ -139,7 +142,7 @@ sketchloop show runs/<session>
 sketchloop rerun runs/<session> --round 1
 ```
 
-`show` prints the records and lists missing or changed files. For a guided drawing it prints the experiment name, the drawing's length and captures, the suggester and the rule, and for each suggestion its prompt as typed, parts, timings, and whether each part was followed. `rerun` recreates the backend and settings from the recorded round, generates from the stored `sketch.png`, and reports which candidates came out byte-identical and what changed in the environment. It never claims exact replay when the backend cannot guarantee it.
+`show` prints the records and lists missing or changed files. For a guided drawing it prints the experiment name, the study condition, the drawing's length and captures, the suggester and the rule, each prompt suggestion, the final prompt, and for each suggestion its prompt as typed and how it came about, parts, timings, and whether each part was followed. Records saved before a value was recorded say "not recorded". `rerun` recreates the backend and settings from the recorded round, generates from the stored `sketch.png`, and reports which candidates came out byte-identical and what changed in the environment. It never claims exact replay when the backend cannot guarantee it.
 
 ### Benchmark
 
@@ -189,6 +192,8 @@ runs_dir = "runs"
 - **Paths:** a relative `runs_dir` or `[models] dir` is relative to the file's folder. Run `scripts/download_models.py` with the same file, so it downloads where the backend looks.
 - **Feedback:** a command that uses a file first prints `Settings:` with its path, and a bad value exits with one line naming the key.
 - **Rerun:** `rerun` takes only the store and models folder from the file, and everything else from the recorded round. It scores with the evaluator the round recorded, and uses the file's evaluator only when the recorded one cannot be recreated, saying so.
+- **Prompt suggestions:** `[prompt_suggester]` chooses what **Suggest a prompt** uses, independently of the image backend: `templates`, the default, which fills five style templates without a model, or `florence`, which names the sketched object with Florence-2-base from the models folder. When its weights are missing, the server prints why at start, and each press is recorded as failed.
+- **Study:** `[study]` sets `enabled`, which serves the study page, and `export_dir`, where the study export creates its folders, `data/study-exports` by default and relative to the file.
 - **Guided sketching:** `[stroke_suggester]` names the next-stroke suggester, `fake`, which draws test shapes, or `controlnet`, which redraws the paper canvas as a line drawing with the downloaded SD 1.5, scribble ControlNet, and LCM-LoRA weights and keeps up to four new parts, and `[drawing]` sets the paper canvas size, 512x360 by default, and the seconds between saved captures, 2 by default. The page does not use them yet, and a canvas side must be a multiple of 8 from 256 to 1024.
 - **Evaluator:** `none`, the default, gives no scores. `clip-b32` (CLIP ViT-B/32, about 0.6 GB) and `clip-l14` (CLIP ViT-L/14, about 1.7 GB) score each candidate by the cosine similarity between its image and the prompt, from -1 to 1. They load from the models folder before the first round's scoring, which adds a few seconds to that round's model load time. The score says how well the image matches the words, not how good the design is, and each round records the CLIP model and revision that produced it.
 

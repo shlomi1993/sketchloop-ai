@@ -9,17 +9,19 @@ from pathlib import Path
 
 from sketchloop.backends.diffusers import DiffusersSketchGenerator, ModelSource
 from sketchloop.backends.t2i_adapter import T2IAdapterSketchGenerator
-from sketchloop.components import (EVALUATOR_MODELS, EVALUATORS, STROKE_SUGGESTERS, check_component_names,
+from sketchloop.components import (EVALUATOR_MODELS, EVALUATORS, PROMPT_SUGGESTERS, STROKE_SUGGESTERS, check_component_names,
                                    find_recorded_evaluator, make_evaluator, make_generator, make_preprocessor,
-                                   make_stroke_suggester)
+                                   make_prompt_suggester, make_stroke_suggester)
 from sketchloop.evaluation import NoOpEvaluator
 from sketchloop.evaluators.clip import CLIP_B32_MODEL, CLIP_L14_MODEL, ClipEvaluator
 from sketchloop.preprocessing import MinimalPreprocessor, StrokePreprocessor
 from sketchloop.settings import (ControlNetSuggesterSettings, DiffusersSettings, EvaluatorSettings, GeneratorSettings,
-                                 ModelsSettings, PreprocessingSettings, Settings, SettingsError, StrokeSuggesterSettings)
+                                 ModelsSettings, PreprocessingSettings, PromptSuggesterSettings, Settings, SettingsError,
+                                 StrokeSuggesterSettings)
 from sketchloop.stroke_suggesters.controlnet import ControlNetStrokeSuggester
 from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
 from sketchloop.stroke_suggestion import StrokeSuggestionError
+from sketchloop.suggestion import FLORENCE_MODEL, FlorenceSuggester, SuggestionError, TemplateSuggester
 
 
 def make_settings(evaluator_name: str, models_dir: Path) -> Settings:
@@ -136,3 +138,24 @@ def test_unknown_stroke_suggester_settings_refused(suggester: StrokeSuggesterSet
     """
     with pytest.raises(SettingsError, match=re.escape(message)):
         check_component_names(Settings(stroke_suggester=suggester), "sketchloop.toml")
+
+
+def test_prompt_suggester_registry(tmp_path: Path) -> None:
+    default = make_prompt_suggester(Settings())
+    florence = make_prompt_suggester(Settings(models=ModelsSettings(dir=tmp_path),
+                                              prompt_suggester=PromptSuggesterSettings(name="florence")))
+
+    # The templates need no model and are the default, and florence is built with the fake image backend, loading nothing.
+    assert isinstance(default, TemplateSuggester), f"Expected the templates by default, got {type(default).__name__}"
+    assert isinstance(florence, FlorenceSuggester), f"Expected Florence-2, got {type(florence).__name__}"
+    assert set(PROMPT_SUGGESTERS) == {"templates", "florence"}, f"Unexpected prompt suggesters {sorted(PROMPT_SUGGESTERS)}"
+
+    # Florence-2 looks for its weights in the configured models folder, which is empty here.
+    with pytest.raises(SuggestionError, match=re.escape(f"{(tmp_path / FLORENCE_MODEL.folder).as_posix()} is missing")):
+        florence.warm_up()
+
+
+def test_unknown_prompt_suggester_refused() -> None:
+    message = 'prompt_suggester.name must be one of templates or florence, got "llava"'
+    with pytest.raises(SettingsError, match=re.escape(message)):
+        check_component_names(Settings(prompt_suggester=PromptSuggesterSettings(name="llava")), "sketchloop.toml")

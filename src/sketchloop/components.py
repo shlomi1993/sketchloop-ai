@@ -1,5 +1,5 @@
 """
-Factories that build the capture, preprocessing, evaluation, storage, and stroke suggestion components the settings name.
+Factories that build the capture, preprocessing, evaluation, storage, and suggestion components the settings name.
 """
 
 from collections.abc import Callable, Mapping
@@ -20,6 +20,7 @@ from sketchloop.settings import (CaptureSettings, PreprocessingSettings, Setting
 from sketchloop.stroke_suggesters.controlnet import ControlNetStrokeSuggester
 from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
 from sketchloop.stroke_suggestion import StrokeSuggester
+from sketchloop.suggestion import FlorenceSuggester, PromptSuggester, TemplateSuggester
 
 
 FAKE_BACKEND: Final = "fake"
@@ -31,6 +32,7 @@ PreprocessorFactory: TypeAlias = Callable[[PreprocessingSettings], Preprocessor]
 EvaluatorFactory: TypeAlias = Callable[[Settings], Evaluator]
 StoreFactory: TypeAlias = Callable[[StorageSettings], ExperimentStore]
 StrokeSuggesterFactory: TypeAlias = Callable[[Settings], StrokeSuggester]
+PromptSuggesterFactory: TypeAlias = Callable[[Settings], PromptSuggester]
 
 
 def make_diffusers_generator(settings: Settings, generator_class: type[DiffusersSketchGenerator]) -> Generator:
@@ -96,6 +98,10 @@ STORES: Final[dict[str, StoreFactory]] = {
 STROKE_SUGGESTERS: Final[dict[str, StrokeSuggesterFactory]] = {
     "fake": lambda settings: FakeStrokeSuggester(),
     "controlnet": make_controlnet_stroke_suggester,
+}
+PROMPT_SUGGESTERS: Final[dict[str, PromptSuggesterFactory]] = {
+    "templates": lambda settings: TemplateSuggester(),
+    "florence": lambda settings: FlorenceSuggester(settings.models.dir),
 }
 
 
@@ -183,6 +189,13 @@ def make_stroke_suggester(settings: Settings) -> StrokeSuggester:
     return STROKE_SUGGESTERS[settings.stroke_suggester.name](settings)
 
 
+def make_prompt_suggester(settings: Settings) -> PromptSuggester:
+    """
+    Create the configured prompt suggester, which reads the models folder from the settings, without loading any model.
+    """
+    return PROMPT_SUGGESTERS[settings.prompt_suggester.name](settings)
+
+
 def check_component_names(settings: Settings, label: str) -> None:
     """
     Refuse a backend, mode, precision, or component name that no registry knows, naming the first bad key.
@@ -201,6 +214,7 @@ def check_component_names(settings: Settings, label: str) -> None:
         "storage.store": (settings.storage.store, STORES),
         "stroke_suggester.name": (settings.stroke_suggester.name, STROKE_SUGGESTERS),
         "stroke_suggester.controlnet.precision": (settings.stroke_suggester.controlnet.precision, list(TorchPrecision)),
+        "prompt_suggester.name": (settings.prompt_suggester.name, PROMPT_SUGGESTERS),
     }
 
     # An unset mode or precision means the device default, so only a set one is checked.

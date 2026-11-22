@@ -8,6 +8,8 @@ import pytest
 import re
 
 from collections.abc import Callable
+from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sketchloop.backends.fake import FakeGenerator
@@ -16,7 +18,7 @@ from sketchloop.cli import main
 from sketchloop.domain import Guidance, SketchSource
 from sketchloop.drawing import GuidedDrawing
 from sketchloop.evaluation import Evaluator
-from sketchloop.experiments import FolderStore
+from sketchloop.experiments import DrawingStudy, FolderStore, PromptSuggestionRecord, StudyCondition
 from sketchloop.session import SketchSession
 from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
 from sketchloop.stroke_suggestion import StrokeSuggestionError, StrokeSuggestionOutput, StrokeSuggestionRequest
@@ -183,10 +185,11 @@ def test_show_prints_a_finished_drawing(tmp_path: Path, capsys: pytest.CaptureFi
     assert "Rule: coverage_16 >= 0.35 and precision_16 >= 0.4" in output, f"Missing rule in {output}"
 
     # Suggestion 1 keeps its typed prompt and its recorded decision, and the failed press names its stage.
-    assert re.search(r'Suggestion 1 at \+\d\d:\d\d: "a \[bold\]car", 2 parts, seed', output), f"Missing suggestion 1 in {output}"
+    first_line = r'Suggestion 1 at \+\d\d:\d\d: "a \[bold\]car", origin typed, 2 parts, seed'
+    assert re.search(first_line, output), f"Missing suggestion 1 in {output}"
     window_line = r"followed: part 1 followed, part 2 not followed\. Window \d+ s, 3 captures, ended by finished\."
     assert re.search(window_line, output), f"Missing decision line in {output}"
-    failed_line = r"Suggestion 2 at \+\d\d:\d\d: \(empty\), failed during generation: StrokeSuggestionError"
+    failed_line = r"Suggestion 2 at \+\d\d:\d\d: \(empty\), origin typed, failed during generation: StrokeSuggestionError"
     assert re.search(failed_line, output), f"Missing failed press in {output}"
     assert "computed by show" not in output, "A finished drawing's decisions are recorded, not computed"
 
@@ -230,3 +233,61 @@ def test_show_older_drawing_and_changed_files(tmp_path: Path, capsys: pytest.Cap
     assert "Rule, not recorded, so show applies the provisional one: coverage_16 >= 0.35" in output, output
     assert "followed, computed by show, not recorded" in output, f"Missing computed result in {output}"
     assert "drawing-1/suggestions/suggestion-1/part-2.png does not match its recorded checksum." in output, output
+
+
+def test_show_prints_study_conditions_prompt_suggestions_and_final_prompts(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str], sheet_capture: CapturedSketch,
+        make_prompt_suggestion: Callable[..., PromptSuggestionRecord]) -> None:
+    session = SketchSession(FakeGenerator(), FolderStore(tmp_path / "runs"), name="p1_car")
+    with_ai = session.start_drawing(FakeStrokeSuggester(), canvas_width=512, canvas_height=360, save_interval_seconds=2.0,
+                                    study=DrawingStudy(condition=StudyCondition.AI))
+    now = datetime.now(timezone.utc)
+    shown = with_ai.record_prompt_suggestion(replace(make_prompt_suggestion("a car, studio render", "p-1"), requested_at=now,
+                                                     shown_at=now))
+    with_ai.suggest(sheet_capture, source=SketchSource.UPLOAD, rotation=0, prompt="a car, studio render",
+                    prompt_suggestion_id=shown.id)
+    with_ai.finish(sheet_capture, source=SketchSource.UPLOAD, prompt="a red car", prompt_suggestion_id=shown.id)
+    without_ai = session.start_drawing(None, canvas_width=512, canvas_height=360, save_interval_seconds=2.0,
+                                       study=DrawingStudy(condition=StudyCondition.NO_AI))
+    without_ai.finish(sheet_capture, source=SketchSource.UPLOAD, prompt="")
+    output = show_text(session.folder, capsys)
+
+    # Each drawing names its condition and final prompt with how it came about.
+    assert "Condition: with AI" in output and "Condition: without AI" in output, f"Missing conditions in {output}"
+    assert 'Final prompt: "a red car", origin edited 1' in output, f"Missing edited final prompt in {output}"
+    assert "Final prompt: (empty), origin typed Suggestions: off" in output, f"Missing typed final prompt in {output}"
+
+    # The prompt suggestion is listed with its suggester, text, and position, and the stroke suggestion names it.
+    assert "Prompt suggester: sketchloop.prompt-templates 1, model unavailable (fixed style templates" in output, output
+    suggestion_line = r'Prompt suggestion 1 at \+00:00: "a car, studio render", list position 0, suggester ran 0\.01 s'
+    assert re.search(suggestion_line, output), f"Missing prompt suggestion line in {output}"
+    assert '"a car, studio render", origin suggested 1, 2 parts' in output, f"Missing suggested origin in {output}"
+
+
+def test_show_older_records_say_prompt_details_were_not_recorded(tmp_path: Path, capsys: pytest.CaptureFixture[str],
+                                                                 sheet_capture: CapturedSketch) -> None:
+    session = SketchSession(FakeGenerator(), FolderStore(tmp_path / "runs"), name="p1_car")
+    raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
+    session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.FILE)
+    drawing = session.start_drawing(FakeStrokeSuggester(), canvas_width=512, canvas_height=360, save_interval_seconds=2.0)
+    drawing.suggest(sheet_capture, source=SketchSource.UPLOAD, rotation=0, prompt="a car")
+    drawing.finish(sheet_capture, source=SketchSource.UPLOAD, prompt="a car")
+
+    # Delete the keys T10 added, standing in for records saved before it.
+    round_file, drawing_file = session.folder / "round-1" / "round.json", session.folder / "drawing-1" / "drawing.json"
+    round_data = json.loads(round_file.read_text(encoding="utf-8"))
+    drawing_data = json.loads(drawing_file.read_text(encoding="utf-8"))
+    del round_data["prompt_origin"], round_data["prompt_suggestions"]
+    for key in ("study", "prompt_suggestions", "final_prompt", "final_prompt_origin"):
+        del drawing_data[key]
+    del drawing_data["suggestions"][0]["prompt_origin"]
+    round_file.write_text(json.dumps(round_data), encoding="utf-8")
+    drawing_file.write_text(json.dumps(drawing_data), encoding="utf-8")
+    output = show_text(session.folder, capsys)
+
+    # Every missing value says it was not recorded, and no condition is invented.
+    assert "Prompt origin: unavailable (not recorded before prompt origins were)" in output, f"Missing round origin in {output}"
+    assert output.count("Prompt suggestions: not recorded") == 2, f"Expected two unrecorded lists in {output}"
+    assert "Final prompt: unavailable (not recorded in drawings saved before final prompts were)" in output, output
+    assert '"a car", origin unavailable (not recorded before prompt origins were)' in output, f"Missing origin in {output}"
+    assert "Condition:" not in output, f"An older drawing has no condition, got {output}"
