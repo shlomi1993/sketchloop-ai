@@ -55,4 +55,4 @@ demo = page_module.SketchPage(controller, default_candidates=settings.ui.candida
                               study=settings.study.enabled).build()
 
 # Serve the page the first time, while later runs only hand Gradio its theme, CSS, and script.
-page_module.serve_app(demo, controller)
+page_module.serve_app(demo, controller, study=settings.study.enabled)

@@ -23,7 +23,7 @@ from sketchloop.experiments import (OUTSIDE_SESSION_REASON, SETUP_REUSED_REASON,
                                     FolderStore, PromptOrigin, PromptOriginKind, PromptSuggestionStatus, StudyCondition,
                                     load_session)
 from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
-from sketchloop.stroke_suggestion import StrokeSuggestionOutput, StrokeSuggestionRequest
+from sketchloop.stroke_suggestion import StrokeSuggestionError, StrokeSuggestionOutput, StrokeSuggestionRequest
 from sketchloop.suggestion import STYLE_TEMPLATES, FlorenceSuggester, PromptSuggester, SuggestionError, TemplateSuggester
 
 
@@ -40,6 +40,18 @@ class EmptySuggester(FakeStrokeSuggester):
         line_drawing = output.suggestion.line_drawing
         return StrokeSuggestionOutput(suggestion=replace(output.suggestion, parts=()),
                                       payloads={line_drawing.path: output.payloads[line_drawing.path]})
+
+
+class FailingStrokeSuggester(FakeStrokeSuggester):
+    """
+    Test-only fake suggester whose suggestion fails as if the device ran out of memory.
+    """
+
+    def suggest(self, request: StrokeSuggestionRequest, canvas_payload: bytes) -> StrokeSuggestionOutput:
+        """
+        Raise the error a real suggester raises when generation fails.
+        """
+        raise StrokeSuggestionError("The device ran out of memory. Close other apps and retry.")
 
 
 class StubPromptSuggester(PromptSuggester):
@@ -393,9 +405,25 @@ def test_app_reports_no_new_strokes(tmp_path: Path, sheet_frame: np.ndarray) -> 
     controller.start_drawing("p1")
     view = controller.suggest_strokes(sheet_frame, "upload", "a car", rotation=0)
 
-    # The page gets the message, and the drawing holds the attempt.
+    # The page gets the message, and the drawing holds the attempt, which did not fail.
     assert view.status == NO_NEW_STROKES_MESSAGE and view.part_count == 0, f"Unexpected view {view}"
     assert controller.latest_drawing().suggestion_lines == ("Suggestion 1: no new strokes",), "The attempt must be recorded"
+    assert controller.latest_drawing().latest_suggestion_failed is False, "A suggestion without parts did not fail"
+
+
+def test_app_marks_a_failed_latest_suggestion(tmp_path: Path, sheet_frame: np.ndarray) -> None:
+    """
+    A failed suggestion is recorded and marked in the drawing view, so the page can word it for the participant.
+    """
+    controller = AppController(FakeGenerator(), FolderStore(tmp_path / "runs"), stroke_suggester=FailingStrokeSuggester())
+    controller.start_drawing("p1")
+    with pytest.raises(StrokeSuggestionError):
+        controller.suggest_strokes(sheet_frame, "upload", "a car", rotation=0)
+
+    # The view marks the failure, and its line keeps the cause for the experimenter.
+    view = controller.latest_drawing()
+    assert view.latest_suggestion_failed is True, f"The failed suggestion must be marked, got {view}"
+    assert "ran out of memory" in view.suggestion_lines[-1], f"The line must keep the cause, got {view.suggestion_lines}"
 
 
 class ManualClock:

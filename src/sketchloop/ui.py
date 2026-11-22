@@ -61,12 +61,26 @@ STUDY_PROMPT_PLACEHOLDER: Final = "Optional. Describe your drawing in a few word
 WAITING_STATUS: Final = "Waiting for the experimenter to start."
 DRAWING_STATUS: Final = "Drawing. Tell the experimenter when you are done."
 FINISHED_STATUS: Final = "Finished. Thank you."
+DONE_REMINDER: Final = "Tell the experimenter when you are done."
+SUGGESTION_FAILED_STATUS: Final = "That suggestion did not work. Keep drawing, or press again."
+PROMPT_FAILED_STATUS: Final = "That did not work. Keep drawing, or press again."
 CONDITION_CHOICES: Final = [("With AI", StudyCondition.AI), ("Without AI", StudyCondition.NO_AI)]
 CONDITION_WORDS: Final = {StudyCondition.AI: "with AI", StudyCondition.NO_AI: "without AI"}
 CHOOSE_CONDITION_MESSAGE: Final = "Choose a condition, then start the drawing."
 NO_EXPERIMENT_STATUS: Final = "No experiment started yet. Enter a name, choose a condition, and press **Start drawing**."
 EXPERIMENTER_LABEL: Final = "Experimenter"
-SAVING_FAILED_LABEL: Final = "Experimenter: saving failed"
+CHECK_NEEDED_LABEL: Final = "Experimenter: check needed"
+CAMERA_STOPPED_NOTICE: Final = "**The webcam stopped sending frames, so nothing is being saved.** Open this panel and restart it."
+SAME_TAB_NOTE: Final = "Use Start and Finish in the participant's tab, since each tab keeps its own prompt."
+START_LABEL: Final = "Start drawing"
+FINISH_LABEL: Final = "Finish drawing"
+FINISH_CONFIRM_LABEL: Final = "Press again to finish"
+
+# The class that tells ui.js to close the experimenter panel once the webcam streams, after a reload during a drawing.
+CLOSE_PANEL_CLASS: Final = "close-panel-when-streaming"
+
+# Seconds a first press of Finish waits for the second, so one stray click never ends a drawing.
+FINISH_CONFIRM_SECONDS: Final = 5.0
 
 # The study page's sketch view height and its right column's width in pixels, fixed so nothing moves between conditions.
 STUDY_SKETCH_HEIGHT: Final = 560
@@ -80,6 +94,9 @@ STALE_FRAME_INTERVALS: Final = 10
 
 # Serve only on this machine.
 SERVER_HOST: Final = "127.0.0.1"
+
+# The study page's only footer link, leaving out the API, runs, and settings pages.
+STUDY_FOOTER_LINKS: Final = ["gradio"]
 
 # A neutral look, so the images stand out.
 THEME: Final = gr.themes.Default(primary_hue="indigo", neutral_hue="slate", radius_size="lg")
@@ -95,6 +112,9 @@ DrawingOutputs: TypeAlias = tuple[str, gr.Button, gr.Button, gr.Button, gr.Textb
 
 # Participant status, Suggest a prompt, Suggest next strokes, the name box, the condition, Finish, and the experimenter status.
 StudyDrawingOutputs: TypeAlias = tuple[str, gr.Button, gr.Button, gr.Textbox, gr.Radio, gr.Button, str]
+
+# A drawing's experiment, number, open state, and suggestion count, or None before the first drawing.
+DrawingSignature: TypeAlias = tuple[str | None, int, bool, int] | None
 
 
 def describe_round_status(view: RoundView) -> str:
@@ -232,6 +252,13 @@ def can_start_study_drawing(name: str | None, condition: str | None, is_open: bo
     return can_start_drawing(name, is_open) and bool(condition)
 
 
+def label_start_button(condition: str | None) -> str:
+    """
+    Repeat the chosen condition on Start, such as "Start with AI", so a wrong choice shows before the click.
+    """
+    return f"Start {CONDITION_WORDS[StudyCondition(condition)]}" if condition else START_LABEL
+
+
 def offers_ai_help(view: DrawingView | None) -> bool:
     """
     Tell whether a drawing is open with AI help, so the participant sees the two suggestion buttons.
@@ -248,7 +275,7 @@ def describe_participant_status(view: DrawingView | None, suggestion: Suggestion
         suggestion (SuggestionView | None, optional): The suggestion just shown, if any. Defaults to None.
 
     Returns:
-        str: One status line for the participant.
+        str: The participant's status, with the reminder to say when done under any suggestion line.
     """
     if view is None:
         return WAITING_STATUS
@@ -256,16 +283,30 @@ def describe_participant_status(view: DrawingView | None, suggestion: Suggestion
     if not view.is_open:
         return FINISHED_STATUS
 
-    # Show the suggestion just made, warning first when it is fake, or the latest one after a reload.
+    # Show the suggestion just made, warning first when it is fake, or the latest one after a reload, worded calmly if it failed.
     if suggestion is not None:
-        return f"{FAKE_SUGGESTER_PREFIX} {suggestion.status}" if suggestion.is_fake else suggestion.status
+        line = f"{FAKE_SUGGESTER_PREFIX} {suggestion.status}" if suggestion.is_fake else suggestion.status
+    elif view.latest_suggestion_failed:
+        line = SUGGESTION_FAILED_STATUS
+    elif view.suggestion_lines:
+        line = view.suggestion_lines[-1]
+    else:
+        return DRAWING_STATUS
 
-    return view.suggestion_lines[-1] if view.suggestion_lines else DRAWING_STATUS
+    return f"{line}\n\n{DONE_REMINDER}"
 
 
-def describe_experimenter_status(view: DrawingView | None) -> str:
+def describe_experimenter_status(view: DrawingView | None, problem: str | None = None) -> str:
     """
-    Name the experiment, its condition, its start time, and whether it is open, such as "p1_car, without AI, started 10:02".
+    Name the experiment, its condition, start time, and state, with a failed suggestion's full line or another problem.
+
+    Args:
+        view (DrawingView | None): The latest drawing, or None before the first.
+        problem (str | None, optional): A problem to name, such as a suggestion error, or None for the latest failed
+            suggestion's line, if any. Defaults to None.
+
+    Returns:
+        str: One status line for the experimenter, such as "p1_car, without AI, started 10:02, drawing open".
     """
     if view is None:
         return NO_EXPERIMENT_STATUS
@@ -277,14 +318,36 @@ def describe_experimenter_status(view: DrawingView | None) -> str:
     if view.started_at is not None:
         parts.append(f"started {view.started_at:%H:%M}")
     parts.append("drawing open" if view.is_open else "drawing finished")
-    return ", ".join(parts)
+    status = ", ".join(parts)
+
+    # Add the problem, or the latest failed suggestion's line, which the participant sees only in calm words.
+    detail = problem or (view.suggestion_lines[-1] if view.latest_suggestion_failed and view.suggestion_lines else None)
+    return f"{status}. {detail}" if detail else status
 
 
-def label_experimenter_panel(saving_failed: bool) -> str:
+def style_experimenter_panel(needs_check: bool) -> gr.Accordion:
     """
-    Label the experimenter panel, naming a failed save so it shows while the panel is closed.
+    Label and mark the experimenter panel when something needs a check, in neutral words the participant may see.
     """
-    return SAVING_FAILED_LABEL if saving_failed else EXPERIMENTER_LABEL
+    label = CHECK_NEEDED_LABEL if needs_check else EXPERIMENTER_LABEL
+    return gr.Accordion(label=label, elem_classes=["needs-check"] if needs_check else [])
+
+
+def sign_drawing(view: DrawingView | None) -> DrawingSignature:
+    """
+    Sum up what the participant's status and buttons show for a drawing, so a tab updates them only when it changes.
+    """
+    if view is None:
+        return None
+
+    return view.experiment, view.number, view.is_open, view.suggestion_count
+
+
+def is_finish_armed(armed_at: float | None, now: float) -> bool:
+    """
+    Tell whether Finish was pressed once within the confirmation window, so the next press finishes.
+    """
+    return armed_at is not None and 0 <= now - armed_at <= FINISH_CONFIRM_SECONDS
 
 
 def build_study_drawing_outputs(view: DrawingView | None, *, clear_inputs: bool = False) -> StudyDrawingOutputs:
@@ -307,8 +370,9 @@ def build_study_drawing_outputs(view: DrawingView | None, *, clear_inputs: bool 
     condition_update: dict[str, object] = {"value": None} if clear_inputs else {}
     name_box = gr.Textbox(info=FINISH_FIRST_MESSAGE if is_open else EXPERIMENT_NAME_HINT, interactive=not is_open, **name_update)
     condition = gr.Radio(interactive=not is_open, **condition_update)
+    finish = gr.Button(value=FINISH_LABEL, interactive=is_open)
     return (describe_participant_status(view), gr.Button(visible=shows_ai), gr.Button(visible=shows_ai, interactive=shows_ai),
-            name_box, condition, gr.Button(interactive=is_open), describe_experimenter_status(view))
+            name_box, condition, finish, describe_experimenter_status(view))
 
 
 def name_upload_capture(view: DrawingView | None, choice: str, upload_path: str | None) -> UploadCaptureKey | None:
@@ -446,6 +510,7 @@ class ParticipantArea:
     suggest_prompt: gr.Button  # Writes a suggested prompt, shown only in an open drawing with AI help
     suggest_strokes: gr.Button  # Suggests next strokes, shown only in an open drawing with AI help
     status: gr.Markdown  # The drawing's state in the same words in both conditions
+    shown_drawing: gr.State  # Signature of the drawing the status and buttons show, so the timer follows other tabs
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -464,6 +529,7 @@ class ExperimenterPanel:
     rotation: gr.Dropdown  # Degrees to turn the sketch clockwise
     webcam: gr.Image  # Live webcam preview that streams frames
     upload: gr.Image  # Uploaded sketch file, for dry runs
+    finish_armed: gr.State  # When this tab's Finish was pressed once, None until it is
 
 
 class SketchPage:
@@ -498,6 +564,9 @@ class SketchPage:
         # The failed interval save the experimenter sees, empty while saving works, and the upload saved last.
         self.capture_failure = ""
         self.saved_upload: UploadCaptureKey | None = None
+
+        # The study page's problem last printed in the terminal, empty while everything works.
+        self.reported_problem = ""
 
     def take_fresh_frame(self) -> tuple[np.ndarray, float] | None:
         """
@@ -718,10 +787,11 @@ class SketchPage:
 
     def start_session(self) -> tuple[object, ...]:
         """
-        Start a new session, which ends an open drawing, clear the round display and history, and forget the kept prompt ID.
+        Start a new session, which ends an open drawing, and clear the round display, history, prompt, and its kept ID.
         """
         self.controller.start_new_session()
-        return *self.clear_rounds(NEW_SESSION_STATUS), *build_drawing_outputs(self.controller.latest_drawing()), None
+        drawing_outputs = build_drawing_outputs(self.controller.latest_drawing())
+        return *self.clear_rounds(NEW_SESSION_STATUS), *drawing_outputs, gr.Textbox(value=""), None
 
     def restore_view(self) -> tuple[object, ...]:
         """
@@ -883,6 +953,18 @@ class SketchPage:
             self.capture_failure = ""
             self.saved_upload = upload_key
 
+    def save_due_capture(self, choice: str, upload_path: str | None, rotation_degrees: int) -> None:
+        """
+        Save the current sketch into the open drawing when a capture is due, keeping any failure for the notice.
+        """
+        # Save while a drawing is open, skipping an upload already saved in it, since saving it again stores a duplicate.
+        view = self.controller.latest_drawing()
+        upload_key = name_upload_capture(view, choice, upload_path)
+        if not is_drawing_open(view):
+            self.capture_failure = ""
+        elif upload_key is None or upload_key != self.saved_upload:
+            self.record_capture_quietly(choice, upload_path, rotation_degrees, upload_key)
+
     def save_drawing_capture(self, choice: str, upload_path: str | None, rotation_degrees: int,
                              shown_notice: str | None) -> gr.Markdown | dict:
         """
@@ -897,13 +979,7 @@ class SketchPage:
         Returns:
             gr.Markdown | dict: The notice, shown with a failure and hidden without one, or a skip when it is unchanged.
         """
-        # Save while a drawing is open, skipping an upload already saved in it, since saving it again stores a duplicate.
-        view = self.controller.latest_drawing()
-        upload_key = name_upload_capture(view, choice, upload_path)
-        if not is_drawing_open(view):
-            self.capture_failure = ""
-        elif upload_key is None or upload_key != self.saved_upload:
-            self.record_capture_quietly(choice, upload_path, rotation_degrees, upload_key)
+        self.save_due_capture(choice, upload_path, rotation_degrees)
 
         # Leave the page untouched unless the notice changes, so ticks never flicker or repeat a message.
         if (shown_notice or "") == self.capture_failure:
@@ -931,10 +1007,10 @@ class SketchPage:
 
     def update_study_start_button(self, name: str | None, condition: str | None) -> gr.Button:
         """
-        Enable the study page's Start drawing once a name is typed and a condition chosen, unless a drawing is open.
+        Name the chosen condition on Start, and enable it once a name and condition are given, unless a drawing is open.
         """
         is_open = is_drawing_open(self.controller.latest_drawing())
-        return gr.Button(interactive=can_start_study_drawing(name, condition, is_open))
+        return gr.Button(value=label_start_button(condition), interactive=can_start_study_drawing(name, condition, is_open))
 
     def start_study_drawing(self, name: str | None, condition: str | None) -> tuple[object, ...]:
         """
@@ -946,7 +1022,7 @@ class SketchPage:
 
         Returns:
             tuple[object, ...]: The study drawing outputs, Start drawing, the emptied sketch view, the cleared prompt and its
-                kept ID, and the closed panel.
+                kept ID, the closed panel, the drawing this tab shows, and a disarmed Finish.
         """
         # Refuse a start without a condition, so no drawing gets a condition nobody chose.
         if not condition:
@@ -955,13 +1031,13 @@ class SketchPage:
         view = self.open_drawing(name, StudyCondition(condition))
 
         # Empty the view until the paper is found, clear the previous prompt and its ID, and hide the panel from the participant.
-        return (*build_study_drawing_outputs(view, clear_inputs=True), gr.Button(interactive=False), gr.Image(value=None),
-                gr.Textbox(value=""), None, gr.Accordion(open=False))
+        return (*build_study_drawing_outputs(view, clear_inputs=True), gr.Button(value=START_LABEL, interactive=False),
+                gr.Image(value=None), gr.Textbox(value=""), None, gr.Accordion(open=False), sign_drawing(view), None)
 
-    def finish_study_drawing(self, choice: str, upload_path: str | None, rotation_degrees: int, prompt_text: str | None,
-                             prompt_suggestion_id: str | None) -> tuple[object, ...]:
+    def press_finish(self, choice: str, upload_path: str | None, rotation_degrees: int, prompt_text: str | None,
+                     prompt_suggestion_id: str | None, armed_at: float | None) -> tuple[object, ...]:
         """
-        Finish the open study drawing with its final capture and the prompt box text, and empty the sketch view.
+        Arm Finish on a first press, and on a second press within the window finish the drawing and empty the sketch view.
 
         Args:
             choice (str): Chosen sketch source.
@@ -969,12 +1045,79 @@ class SketchPage:
             rotation_degrees (int): Degrees to turn the sketch clockwise.
             prompt_text (str | None): Prompt box text at finish, kept as the final prompt.
             prompt_suggestion_id (str | None): ID of the prompt suggestion written into the prompt box, or None.
+            armed_at (float | None): When this tab's Finish was pressed first, or None.
 
         Returns:
-            tuple[object, ...]: The study drawing outputs and the emptied sketch view.
+            tuple[object, ...]: The study drawing outputs, the sketch view, the drawing this tab shows, and the armed time.
         """
+        # A first press only asks for a second, leaving everything else as it is.
+        now = time.monotonic()
+        if not is_finish_armed(armed_at, now):
+            unchanged = [gr.skip()] * 5
+            return (*unchanged, gr.Button(value=FINISH_CONFIRM_LABEL), gr.skip(), gr.skip(), gr.skip(), now)
+
         view = self.close_drawing(choice, upload_path, rotation_degrees, prompt_text or "", prompt_suggestion_id)
-        return *build_study_drawing_outputs(view), gr.Image(value=None)
+        return *build_study_drawing_outputs(view), gr.Image(value=None), sign_drawing(view), None
+
+    def disarm_finish(self, armed_at: float | None) -> tuple[gr.Button | dict, float | None | dict]:
+        """
+        Turn an armed Finish back into Finish drawing once the confirmation window has passed, and change nothing otherwise.
+        """
+        if armed_at is None or is_finish_armed(armed_at, time.monotonic()):
+            return gr.skip(), gr.skip()
+
+        return gr.Button(value=FINISH_LABEL), None
+
+    def suggest_study_strokes(self, choice: str, upload_path: str | None, prompt_text: str | None,
+                              prompt_suggestion_id: str | None, rotation_degrees: int) -> tuple[object, ...]:
+        """
+        Suggest next strokes on the study page, telling the participant calmly about a failure and the experimenter its cause.
+
+        Args:
+            choice (str): Chosen sketch source.
+            upload_path (str | None): Uploaded sketch file, if any.
+            prompt_text (str | None): Prompt box text, sent exactly as typed, possibly empty.
+            prompt_suggestion_id (str | None): ID of the prompt suggestion written into the prompt box, or None.
+            rotation_degrees (int): Degrees to turn the sketch clockwise.
+
+        Returns:
+            tuple[object, ...]: The participant status, the sketch view, the experimenter status, and the drawing this tab shows.
+        """
+        # Show the suggestion, or a calm line for the participant with the full error in the experimenter's status.
+        try:
+            status, sketch_view = self.suggest_next_strokes(choice, upload_path, prompt_text, prompt_suggestion_id,
+                                                            rotation_degrees)
+        except gr.Error as error:
+            view = self.controller.latest_drawing()
+            problem = f"Suggestion failed: {error.message}"
+            return (f"{SUGGESTION_FAILED_STATUS}\n\n{DONE_REMINDER}", gr.skip(), describe_experimenter_status(view, problem),
+                    sign_drawing(view))
+
+        view = self.controller.latest_drawing()
+        return status, sketch_view, describe_experimenter_status(view), sign_drawing(view)
+
+    def suggest_study_prompt(self, choice: str, upload_path: str | None, rotation_degrees: int) -> tuple[object, ...]:
+        """
+        Write a suggested prompt on the study page, telling the participant calmly about a failure and the experimenter its cause.
+
+        Args:
+            choice (str): Chosen sketch source.
+            upload_path (str | None): Uploaded sketch file, if any.
+            rotation_degrees (int): Degrees to turn the sketch clockwise.
+
+        Returns:
+            tuple[object, ...]: The prompt, its kept ID, the participant status, and the experimenter status, with the prompt
+                and ID left as they were after a failure and both statuses left as they were after a success.
+        """
+        # Show a calm line instead of a popup, and keep the prompt box and its ID as they were.
+        try:
+            text, suggestion_id = self.suggest_another(choice, upload_path, rotation_degrees)
+        except gr.Error as error:
+            problem = f"Prompt suggestion failed: {error.message}"
+            return (gr.skip(), gr.skip(), f"{PROMPT_FAILED_STATUS}\n\n{DONE_REMINDER}",
+                    describe_experimenter_status(self.controller.latest_drawing(), problem))
+
+        return text, suggestion_id, gr.skip(), gr.skip()
 
     def refresh_study_preview(self, choice: str, upload_path: str | None, rotation_degrees: int) -> np.ndarray | dict:
         """
@@ -983,31 +1126,73 @@ class SketchPage:
         payload = self.controller.preview_guided_sketch(self.pick_current_sketch(choice, upload_path), int(rotation_degrees or 0))
         return gr.skip() if payload is None else decode_preview(payload)
 
-    def save_study_capture(self, choice: str, upload_path: str | None, rotation_degrees: int,
-                           shown_notice: str | None) -> tuple[gr.Markdown | dict, gr.Accordion | dict]:
+    def find_study_problem(self, view: DrawingView | None, choice: str) -> str:
         """
-        Save the open drawing at the save interval, naming a failed save in the panel's label as well as in its notice.
+        Name what the experimenter must check: a failed save, or a webcam that stopped sending frames in an open drawing.
+        """
+        if self.capture_failure:
+            return self.capture_failure
+
+        is_webcam = SketchSource(choice) == SketchSource.WEBCAM
+        return CAMERA_STOPPED_NOTICE if is_drawing_open(view) and is_webcam and self.take_fresh_frame() is None else ""
+
+    def report_problem(self, problem: str) -> None:
+        """
+        Print one terminal line when a problem starts or changes, and one when everything works again.
+        """
+        if problem == self.reported_problem:
+            return
+
+        # Print without the Markdown emphasis the panel uses.
+        plain = problem.replace("**", "")
+        print(f"Study page check needed: {plain}" if problem else "Study page: saving and the webcam work again.", flush=True)
+        self.reported_problem = problem
+
+    def save_study_capture(self, choice: str, upload_path: str | None, rotation_degrees: int, shown_notice: str | None,
+                           shown_drawing: DrawingSignature) -> tuple[object, ...]:
+        """
+        Save the open drawing when due, flag a failed save or a stopped webcam, and follow drawing changes from other tabs.
 
         Args:
             choice (str): Chosen sketch source.
             upload_path (str | None): Uploaded sketch file, if any.
             rotation_degrees (int): Degrees to turn the sketch clockwise.
-            shown_notice (str | None): The failure notice this tab shows.
+            shown_notice (str | None): The notice this tab shows.
+            shown_drawing (DrawingSignature): The drawing state this tab's participant status and buttons show.
 
         Returns:
-            tuple[gr.Markdown | dict, gr.Accordion | dict]: The notice and the panel's label, or skips when unchanged.
+            tuple[object, ...]: The notice, the panel, the participant status, both AI buttons, and the drawing this tab
+                shows, each a skip when unchanged.
         """
-        notice = self.save_drawing_capture(choice, upload_path, rotation_degrees, shown_notice)
-        if not isinstance(notice, gr.Markdown):
-            return notice, gr.skip()
+        # Save when due, then name any problem once in the terminal.
+        self.save_due_capture(choice, upload_path, rotation_degrees)
+        view = self.controller.latest_drawing()
+        problem = self.find_study_problem(view, choice)
+        self.report_problem(problem)
 
-        return notice, gr.Accordion(label=label_experimenter_panel(bool(self.capture_failure)))
+        # Update the notice and the panel only when the problem changes, so ticks never flicker.
+        if (shown_notice or "") == problem:
+            notice_updates: tuple[object, ...] = (gr.skip(), gr.skip())
+        else:
+            notice_updates = (gr.Markdown(value=problem, visible=bool(problem)), style_experimenter_panel(bool(problem)))
+
+        # Follow a start, finish, or suggestion from another tab, and leave this tab's status alone otherwise.
+        signature = sign_drawing(view)
+        if signature == shown_drawing:
+            return *notice_updates, gr.skip(), gr.skip(), gr.skip(), gr.skip()
+
+        shows_ai = offers_ai_help(view)
+        return (*notice_updates, describe_participant_status(view), gr.Button(visible=shows_ai),
+                gr.Button(visible=shows_ai, interactive=shows_ai), signature)
 
     def restore_study_view(self) -> tuple[object, ...]:
         """
-        Show the latest drawing's statuses and buttons on page load, with Start drawing waiting for a name and condition.
+        Show the latest drawing on page load, marking an open one so the script closes the panel once the webcam streams.
         """
-        return *build_study_drawing_outputs(self.controller.latest_drawing()), gr.Button(interactive=False)
+        view = self.controller.latest_drawing()
+        status, *outputs = build_study_drawing_outputs(view)
+        marked_status = gr.Markdown(value=status, elem_classes=[CLOSE_PANEL_CLASS] if is_drawing_open(view) else [])
+        return marked_status, *outputs, gr.Button(value=START_LABEL, interactive=False), sign_drawing(view)
 
     def show_history(self) -> list[list[str | int]]:
         """
@@ -1184,8 +1369,8 @@ class SketchPage:
         cleared_rounds = [choose.gallery, choose.picks, choose.round_state, choose.status, history]
         drawing_outputs = [choose.drawing_status, choose.suggest_strokes, experiment.finish, choose.new_session, experiment.name,
                            choose.sketch_view]
-        choose.new_session.click(self.start_session, None, [*cleared_rounds, *drawing_outputs, direction.prompt_suggestion],
-                                 concurrency_id="session", concurrency_limit=1)
+        new_session_outputs = [*cleared_rounds, *drawing_outputs, direction.prompt, direction.prompt_suggestion]
+        choose.new_session.click(self.start_session, None, new_session_outputs, concurrency_id="session", concurrency_limit=1)
 
         # Start and finish drawings in the session queue, leaving errors to the one-line message so the name box stays readable.
         start_outputs = [*drawing_outputs, experiment.start, direction.prompt, direction.prompt_suggestion, sketch.upload,
@@ -1241,7 +1426,8 @@ class SketchPage:
                 status = gr.Markdown(WAITING_STATUS, elem_id="participant-status")
 
         return ParticipantArea(sketch_view=sketch_view, prompt=prompt, prompt_suggestion=gr.State(None),
-                               suggest_prompt=suggest_prompt, suggest_strokes=suggest_strokes, status=status)
+                               suggest_prompt=suggest_prompt, suggest_strokes=suggest_strokes, status=status,
+                               shown_drawing=gr.State(None))
 
     def describe_system(self) -> str:
         """
@@ -1261,10 +1447,11 @@ class SketchPage:
             with gr.Row(equal_height=True):
                 name = gr.Textbox(label="Experiment name", info=EXPERIMENT_NAME_HINT, max_lines=1, scale=3)
                 condition = gr.Radio(choices=CONDITION_CHOICES, value=None, label="Condition", scale=2)
-                start = gr.Button("Start drawing", interactive=False, scale=1)
-                finish = gr.Button("Finish drawing", interactive=False, scale=1)
+                start = gr.Button(START_LABEL, interactive=False, scale=1)
+                finish = gr.Button(FINISH_LABEL, variant="stop", interactive=False, scale=1)
             status = gr.Markdown(NO_EXPERIMENT_STATUS, elem_id="experimenter-status")
             capture_notice = gr.Markdown(visible=False, elem_id="capture-notice")
+            gr.Markdown(SAME_TAB_NOTE, elem_id="same-tab-note")
 
             # The camera the experimenter aims and turns, beside the source choice and what the system runs.
             with gr.Row(equal_height=False):
@@ -1280,7 +1467,8 @@ class SketchPage:
                     gr.Markdown(self.describe_system(), elem_id="system")
 
         return ExperimenterPanel(panel=panel, name=name, condition=condition, start=start, finish=finish, status=status,
-                                 capture_notice=capture_notice, source=source, rotation=rotation, webcam=webcam, upload=upload)
+                                 capture_notice=capture_notice, source=source, rotation=rotation, webcam=webcam, upload=upload,
+                                 finish_armed=gr.State(None))
 
     def _wire_study_events(self, app: gr.Blocks, participant: ParticipantArea, experimenter: ExperimenterPanel) -> None:
         """
@@ -1299,46 +1487,53 @@ class SketchPage:
         experimenter.webcam.stream(self.store_frame, [experimenter.webcam], None, stream_every=self.capture_interval_seconds,
                                    show_progress="hidden", time_limit=None)
 
-        # Start needs a name and a condition, and Start and Finish run in the session queue with errors as one line.
+        # Start needs a name and a condition and names the condition, and it runs in the session queue with errors as one line.
         drawing_outputs = [participant.status, participant.suggest_prompt, participant.suggest_strokes, experimenter.name,
                            experimenter.condition, experimenter.finish, experimenter.status]
         start_inputs = [experimenter.name, experimenter.condition]
         for component in start_inputs:
             component.change(self.update_study_start_button, start_inputs, [experimenter.start], show_progress="hidden")
         start_outputs = [*drawing_outputs, experimenter.start, participant.sketch_view, participant.prompt,
-                         participant.prompt_suggestion, experimenter.panel]
+                         participant.prompt_suggestion, experimenter.panel, participant.shown_drawing, experimenter.finish_armed]
         experimenter.start.click(self.start_study_drawing, start_inputs, start_outputs, concurrency_id="session",
                                  concurrency_limit=1, show_progress="hidden")
-        prompt_inputs = [participant.prompt, participant.prompt_suggestion]
-        experimenter.finish.click(self.finish_study_drawing, [*sketch_inputs, *prompt_inputs],
-                                  [*drawing_outputs, participant.sketch_view], concurrency_id="session", concurrency_limit=1,
-                                  show_progress="hidden")
 
-        # Write a suggested prompt and keep its ID, one model call at a time.
-        participant.suggest_prompt.click(self.suggest_another, sketch_inputs, prompt_inputs, concurrency_id="suggest",
+        # Finish takes two presses within a few seconds, and a timer turns an unconfirmed first press back.
+        prompt_inputs = [participant.prompt, participant.prompt_suggestion]
+        finish_outputs = [*drawing_outputs, participant.sketch_view, participant.shown_drawing, experimenter.finish_armed]
+        experimenter.finish.click(self.press_finish, [*sketch_inputs, *prompt_inputs, experimenter.finish_armed], finish_outputs,
+                                  concurrency_id="session", concurrency_limit=1, show_progress="hidden")
+        finish_timer = gr.Timer(1)
+        finish_timer.tick(self.disarm_finish, [experimenter.finish_armed], [experimenter.finish, experimenter.finish_armed],
+                          show_progress="hidden")
+
+        # Write a suggested prompt and keep its ID in the session queue, so it cannot cross a Finish and the next Start.
+        participant.suggest_prompt.click(self.suggest_study_prompt, sketch_inputs,
+                                         [*prompt_inputs, participant.status, experimenter.status], concurrency_id="session",
                                          concurrency_limit=1)
 
-        # Say at once that a suggestion is running, then show it or the failure line, and re-enable the button.
+        # Say at once that a suggestion is running, then show it or a calm failure line, and re-enable the button.
         status = participant.status
         waiting = participant.suggest_strokes.click(self.show_suggesting, None, [status, participant.suggest_strokes],
                                                     queue=False, show_progress="hidden")
-        suggesting = waiting.then(self.suggest_next_strokes, [experimenter.source, experimenter.upload, *prompt_inputs,
-                                                              experimenter.rotation],
-                                  [status, participant.sketch_view], concurrency_id="session", concurrency_limit=1,
-                                  show_progress="minimal", show_progress_on=[status])
+        suggest_inputs = [experimenter.source, experimenter.upload, *prompt_inputs, experimenter.rotation]
+        suggesting = waiting.then(self.suggest_study_strokes, suggest_inputs,
+                                  [status, participant.sketch_view, experimenter.status, participant.shown_drawing],
+                                  concurrency_id="session", concurrency_limit=1, show_progress="minimal",
+                                  show_progress_on=[status])
         suggesting.then(self.update_suggest_button, None, [participant.suggest_strokes], show_progress="hidden")
-        suggesting.failure(self.show_drawing_status, None, [status], show_progress="hidden")
 
-        # Follow the paper at the capture interval, and save the open drawing at the save interval in its own queue.
+        # Follow the paper at the capture interval, and save, check the camera, and follow other tabs at the save interval.
         frame_timer = gr.Timer(self.capture_interval_seconds)
         frame_timer.tick(self.refresh_study_preview, sketch_inputs, [participant.sketch_view], show_progress="hidden")
         capture_timer = gr.Timer(self.controller.save_interval_seconds)
-        capture_timer.tick(self.save_study_capture, [*sketch_inputs, experimenter.capture_notice],
-                           [experimenter.capture_notice, experimenter.panel], concurrency_id="drawing-capture",
-                           concurrency_limit=1, show_progress="hidden")
+        capture_outputs = [experimenter.capture_notice, experimenter.panel, participant.status, participant.suggest_prompt,
+                           participant.suggest_strokes, participant.shown_drawing]
+        capture_timer.tick(self.save_study_capture, [*sketch_inputs, experimenter.capture_notice, participant.shown_drawing],
+                           capture_outputs, concurrency_id="drawing-capture", concurrency_limit=1, show_progress="hidden")
 
         # Restore the latest drawing on load.
-        app.load(self.restore_study_view, None, [*drawing_outputs, experimenter.start])
+        app.load(self.restore_study_view, None, [*drawing_outputs, experimenter.start, participant.shown_drawing])
 
     def _build_generation_page(self, app: gr.Blocks) -> None:
         """
@@ -1385,17 +1580,20 @@ class SketchPage:
         return app
 
 
-def serve_app(app: gr.Blocks, controller: AppController) -> None:
+def serve_app(app: gr.Blocks, controller: AppController, *, study: bool = False) -> None:
     """
     Serve a built page on this machine only, with no share link, the theme, CSS, and script, and access to the runs folder only.
 
     Args:
         app (gr.Blocks): Page built by SketchPage.
         controller (AppController): Service whose store holds the runs folder.
+        study (bool, optional): Show only the "Built with Gradio" footer link, so participants find no API, runs, or settings
+            pages, and keep no history of calls in the browser. Defaults to False.
     """
     head = f"<script>{SCRIPT_PATH.read_text(encoding='utf-8')}</script>"
     app.launch(server_name=SERVER_HOST, share=False, ssr_mode=False, inbrowser=True, theme=THEME, css_paths=[STYLESHEET_PATH],
-               head=head, allowed_paths=[str(controller.store.root.resolve())], max_file_size="20mb", show_error=False)
+               head=head, allowed_paths=[str(controller.store.root.resolve())], max_file_size="20mb", show_error=False,
+               footer_links=STUDY_FOOTER_LINKS if study else None, run_history=False if study else None)
 
 
 def launch_app(controller: AppController, *, default_candidates: int, default_seed: int | None,
@@ -1412,4 +1610,4 @@ def launch_app(controller: AppController, *, default_candidates: int, default_se
     """
     page = SketchPage(controller, default_candidates=default_candidates, default_seed=default_seed,
                       capture_interval_seconds=capture_interval_seconds, study=study)
-    serve_app(page.build(), controller)
+    serve_app(page.build(), controller, study=study)

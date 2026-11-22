@@ -104,6 +104,9 @@ The page lists the current session's history, and **New session** starts a fresh
 
 - **Participant view:** only the sketch view, the prompt box, and a status line worded the same in both conditions. "Suggest a prompt" and "Suggest next strokes" appear only while a drawing with AI is open, in a column that keeps its space without them, so nothing moves between conditions. Image generation is not part of study mode.
 - **Experimenter panel:** at the bottom, holding the experiment name, the condition (With AI or Without AI, no default), Start, Finish, and the camera controls. It is open when the page loads, because the webcam only starts once its panel has been shown, and Start closes it. Start needs a name and a condition and clears both, so nothing carries over to the next experiment.
+- **Finish:** press it twice within 5 seconds. The first press only changes it to "Press again to finish", so one stray click never ends a drawing.
+- **Check needed:** when saving fails or the webcam stops sending frames during a drawing, the panel's label turns to "Experimenter: check needed" with a colored edge, the cause shows inside the panel, and the terminal prints one line, then another when it works again. The participant sees no alarm.
+- **One tab:** use Start and Finish in the participant's tab, since each tab keeps its own prompt. Other tabs follow the drawing's state within a few seconds.
 - **Records:** each drawing records its condition, every prompt suggestion, whether each prompt was typed, suggested, or an edited suggestion, and the prompt box text at Finish as its final prompt.
 
 ### Export the study drawings

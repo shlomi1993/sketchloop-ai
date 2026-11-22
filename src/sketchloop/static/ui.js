@@ -12,6 +12,15 @@ window.sketchloop = {
         if (attemptsLeft > 0) setTimeout(() => this.startWebcam(attemptsLeft - 1), grant ? 1000 : 250);
     },
 
+    // After a reload during a study drawing, close the open experimenter panel once, when the webcam streams.
+    closePanelWhenStreaming() {
+        if (this.panelClosed || !document.querySelector(".close-panel-when-streaming")) return;
+        const webcam = document.getElementById("webcam");
+        if (!webcam?.offsetParent || !webcam.querySelector('[title="stop recording"]')) return;
+        document.querySelector("#experimenter > button")?.click();
+        this.panelClosed = true;
+    },
+
     // Start the stream each time the webcam input becomes visible, including the first time.
     watchWebcam() {
         let wasVisible = false;
@@ -19,6 +28,7 @@ window.sketchloop = {
             const isVisible = Boolean(document.getElementById("webcam")?.offsetParent);
             if (isVisible && !wasVisible) this.startWebcam();
             wasVisible = isVisible;
+            this.closePanelWhenStreaming();
         }, 500);
     },
 };

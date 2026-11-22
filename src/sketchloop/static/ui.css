@@ -1,5 +1,5 @@
 /* A calm, neutral layout with one accent color, so the sketches and candidates stand out. */
-.gradio-container { max-width: 1280px !important; margin: auto; }
+.gradio-container { width: 100%; max-width: 1280px !important; margin: auto; }
 #header h1 { font-size: 2.2rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0; }
 #header p { color: var(--body-text-color-subdued); margin-top: 0.25rem; }
 .step-title h3 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-accent); margin: 0; }
@@ -31,3 +31,12 @@
 .study #participant-status p { font-size: 1.4rem; line-height: 1.4; }
 .study #participant-status .pending { opacity: 1 !important; }
 .study #experimenter-status, .study #system { color: var(--body-text-color-subdued); }
+
+/* Fill the study sketch view with the canvas, keeping its shape. */
+.study #study-sketch-view img { width: 100%; height: 100%; object-fit: contain; }
+
+/* The experimenter panel when saving failed or the webcam stopped. ui.py sets the class. */
+#experimenter.needs-check { border-left: 6px solid var(--error-border-color); }
+#experimenter.needs-check > button { background: var(--error-background-fill); }
+#capture-notice { color: var(--error-text-color); }
+#same-tab-note { color: var(--body-text-color-subdued); }

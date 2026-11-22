@@ -121,6 +121,7 @@ class DrawingView:
     condition: StudyCondition | None = None  # Study condition, None outside study mode
     suggestions_enabled: bool = True  # Whether the page offers AI help, next-stroke and prompt suggestions, in this drawing
     started_at: datetime | None = None  # Local start time for the experimenter's status line, None only in page tests
+    latest_suggestion_failed: bool = False  # Whether the latest suggestion failed, so the page can word it for the participant
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -187,7 +188,8 @@ def build_drawing_view(drawing: GuidedDrawing, experiment: str | None) -> Drawin
                        suggestion_count=len(record.suggestions),
                        suggestion_lines=tuple(describe_suggestion(suggestion) for suggestion in record.suggestions),
                        condition=record.study.condition if record.study else None,
-                       suggestions_enabled=record.suggestions_enabled, started_at=record.started_at.astimezone())
+                       suggestions_enabled=record.suggestions_enabled, started_at=record.started_at.astimezone(),
+                       latest_suggestion_failed=bool(record.suggestions) and record.suggestions[-1].failure is not None)
 
 
 def describe_selection(iteration: Iteration, selection: SelectionEvent) -> str:
