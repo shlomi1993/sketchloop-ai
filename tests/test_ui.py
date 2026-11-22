@@ -13,7 +13,7 @@ from pathlib import Path
 from sketchloop.app import NO_FRAME_MESSAGE, NO_NEW_STROKES_MESSAGE, NO_SKETCH_MESSAGE, AppController, DrawingView, SuggestionView
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.domain import Rotation, Unavailable
-from sketchloop.experiments import EXPERIMENT_NAME_RULE, NOT_STREAMED_REASON, FolderStore, load_session
+from sketchloop.experiments import EXPERIMENT_NAME_RULE, NOT_STREAMED_REASON, FolderStore, StoreError, load_session
 
 
 @pytest.fixture
@@ -290,3 +290,89 @@ def test_page_has_experiment_controls_and_no_goal(controller: AppController) -> 
     # No component asks for a goal or a task, since the system is never told one.
     named = [label for label in labels if re.search(r"\b(goal|task)\b", label, re.IGNORECASE)]
     assert not named, f"The page must not name a goal or task, found {named}"
+
+
+@pytest.mark.usefixtures("no_network")
+def test_page_saves_drawing_captures_quietly(sheet_frame: np.ndarray, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    The capture timer saves the open drawing's frames, skips stale frames and repeated uploads, and shows a failure once.
+    """
+    import gradio
+
+    from sketchloop import ui
+
+    controller = AppController(FakeGenerator(), FolderStore(tmp_path / "runs"), save_interval_seconds=0.001)
+    page = ui.SketchPage(controller, default_candidates=1, default_seed=None)
+
+    def captures() -> int:
+        """
+        Count the first drawing's saved captures.
+        """
+        return len(controller.session.drawings[0].record.captures)
+
+    # Without an open drawing, a tick saves nothing and changes nothing on the page.
+    assert page.save_drawing_capture("webcam", None, 0, "") == gradio.skip(), "A tick without a drawing must change nothing"
+    assert controller.latest_drawing() is None, "A tick must not start a drawing"
+
+    # While a drawing is open, each tick saves the fresh webcam frame as an interval JPEG.
+    page.start_drawing("p1")
+    page.keep_frame(np.ascontiguousarray(sheet_frame[:, :, ::-1]), "webcam", None, "")
+    for _ in range(2):
+        assert page.save_drawing_capture("webcam", None, 0, "") == gradio.skip(), "A saved capture must change nothing"
+    jpegs = list((tmp_path / "runs" / "p1").rglob("*.jpg"))
+    assert captures() == 2 and jpegs, f"Expected 2 captures with JPEG files, got {captures()} and {jpegs}"
+
+    # A frame from before the stream stopped is skipped without an error.
+    page.latest_frame_time -= ui.STALE_FRAME_INTERVALS * page.capture_interval_seconds + 1
+    assert page.save_drawing_capture("webcam", None, 0, "") == gradio.skip(), "A stale frame must be skipped quietly"
+    assert captures() == 2, f"A stale frame must not be saved, got {captures()} captures"
+
+    # An upload is saved once per drawing, and again only when another file is uploaded.
+    first_upload, second_upload = tmp_path / "first.png", tmp_path / "second.png"
+    for path in (first_upload, second_upload):
+        path.write_bytes(cv2.imencode(".png", sheet_frame)[1].tobytes())
+    for path in (first_upload, first_upload, second_upload):
+        page.save_drawing_capture("upload", str(path), 0, "")
+    assert captures() == 4, f"Expected one capture per uploaded file, got {captures() - 2}"
+
+    # A failed save shows one calm notice, keeps it without updating on later ticks, and clears it after a save works.
+    def fail_to_save(*args: object, **kwargs: object) -> None:
+        """
+        Fail like a full disk.
+        """
+        raise StoreError("Could not save drawing.json. Free disk space and retry.")
+
+    monkeypatch.setattr(controller, "record_drawing_capture", fail_to_save)
+    page.keep_frame(np.ascontiguousarray(sheet_frame[:, :, ::-1]), "webcam", None, "")
+    notice = page.save_drawing_capture("webcam", None, 0, "")
+    assert notice.visible is True and "Free disk space" in notice.value, f"A failed save must show its line, got {notice}"
+    assert page.save_drawing_capture("webcam", None, 0, notice.value) == gradio.skip(), "The notice must not repeat"
+    monkeypatch.undo()
+    cleared = page.save_drawing_capture("webcam", None, 0, notice.value)
+    assert cleared.visible is False and cleared.value == "", f"A working save must clear the notice, got {cleared}"
+
+    # After Finish, ticks save nothing more.
+    page.finish_drawing("webcam", None, 0)
+    finished = captures()
+    page.save_drawing_capture("webcam", None, 0, "")
+    assert captures() == finished, "A finished drawing must not get interval captures"
+
+
+def test_upload_capture_key_names_the_drawing_and_file() -> None:
+    """
+    An upload's capture key changes with the drawing or the file, and a webcam frame has none, so it is always saved.
+    """
+    from sketchloop import ui
+
+    drawing = make_drawing_view(is_open=True)
+    other = DrawingView(number=1, experiment="p2", is_open=True, capture_count=0, suggestion_count=0, suggestion_lines=())
+
+    # The same file in the same drawing gives the same key, and another file or experiment gives another.
+    keys = [ui.name_upload_capture(drawing, "upload", "a.png"), ui.name_upload_capture(drawing, "upload", "b.png"),
+            ui.name_upload_capture(other, "upload", "a.png")]
+    assert keys[0] == ui.name_upload_capture(drawing, "upload", "a.png"), "The same upload must keep its key"
+    assert len(set(keys)) == 3, f"Another file or experiment must change the key, got {keys}"
+
+    # A webcam frame and a missing upload have no key.
+    assert ui.name_upload_capture(drawing, "webcam", "a.png") is None, "A webcam frame must have no upload key"
+    assert ui.name_upload_capture(drawing, "upload", None) is None, "A missing upload must have no key"

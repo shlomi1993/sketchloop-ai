@@ -70,6 +70,9 @@ THEME: Final = gr.themes.Default(primary_hue="indigo", neutral_hue="slate", radi
 # Gallery, sketch, picks, iteration ID, and status.
 RoundOutputs: TypeAlias = tuple[list[tuple[str, str]], str | None, gr.CheckboxGroup, str | None, str]
 
+# A drawing's experiment, its number, and an uploaded file's path, so an unchanged upload is saved once per drawing.
+UploadCaptureKey: TypeAlias = tuple[str | None, int, str]
+
 # Drawing status, Suggest next strokes, Finish drawing, Start a new session, the name box, and the sketch view's style.
 DrawingOutputs: TypeAlias = tuple[str, gr.Button, gr.Button, gr.Button, gr.Textbox, gr.Image]
 
@@ -202,6 +205,23 @@ def build_drawing_outputs(view: DrawingView | None, *, clear_name: bool = False)
             gr.Button(interactive=not is_open), name_box, style_sketch_view(view))
 
 
+def name_upload_capture(view: DrawingView | None, choice: str, upload_path: str | None) -> UploadCaptureKey | None:
+    """
+    Name an upload's interval capture by its drawing and file, or None for a webcam frame, which changes with every tick.
+    """
+    if view is None or upload_path is None or SketchSource(choice) != SketchSource.UPLOAD:
+        return None
+
+    return view.experiment, view.number, upload_path
+
+
+def describe_capture_failure(error: Exception, interval_seconds: float) -> str:
+    """
+    Say in one line that saving the drawing failed and that the page keeps trying.
+    """
+    return f"**Saving the drawing failed.** {error} The page tries again every {interval_seconds:g} s."
+
+
 def decode_preview(payload: bytes) -> np.ndarray:
     """
     Decode encoded preview bytes into an RGB image for display.
@@ -305,6 +325,7 @@ class ExperimentCard:
     name: gr.Textbox  # Experiment name, which also names the session folder
     start: gr.Button  # Starts a named experiment and its drawing
     finish: gr.Button  # Finishes the open drawing with the current sketch as its final capture
+    capture_notice: gr.Markdown  # A failed interval save, hidden while saving works
 
 
 class SketchPage:
@@ -332,6 +353,10 @@ class SketchPage:
         self.frame_lock = threading.Lock()
         self.latest_frame: np.ndarray | None = None
         self.latest_frame_time = 0.0
+
+        # The failed interval save the experimenter sees, empty while saving works, and the upload saved last.
+        self.capture_failure = ""
+        self.saved_upload: UploadCaptureKey | None = None
 
     def take_fresh_frame(self) -> tuple[np.ndarray, float] | None:
         """
@@ -459,18 +484,24 @@ class SketchPage:
         except (SketchLoopError, OSError) as error:
             raise gr.Error(str(error)) from error
 
-    def take_sketch(self, choice: str, upload_path: str | None) -> tuple[Path | np.ndarray | None, float | None]:
+    def find_sketch(self, choice: str, upload_path: str | None) -> tuple[Path | np.ndarray | None, float | None]:
         """
-        Return the chosen source's sketch and a webcam frame's age, refusing a frame from before the stream stopped.
+        Return the chosen source's sketch and a webcam frame's age, or None and None when there is no fresh sketch.
         """
         if SketchSource(choice) != SketchSource.WEBCAM:
             return None if upload_path is None else Path(upload_path), None
 
-        fresh_frame = self.take_fresh_frame()
-        if fresh_frame is None and self.latest_frame is not None:
+        return self.take_fresh_frame() or (None, None)
+
+    def take_sketch(self, choice: str, upload_path: str | None) -> tuple[Path | np.ndarray | None, float | None]:
+        """
+        Return the chosen source's sketch and a webcam frame's age, refusing a frame from before the stream stopped.
+        """
+        sketch, frame_age_seconds = self.find_sketch(choice, upload_path)
+        if sketch is None and SketchSource(choice) == SketchSource.WEBCAM and self.latest_frame is not None:
             raise gr.Error(STALE_FRAME_MESSAGE)
 
-        return fresh_frame or (None, None)
+        return sketch, frame_age_seconds
 
     def run_generation(self, choice: str, upload_path: str | None, prompt_text: str, candidate_count: float,
                        seed: str | float | None, rotation_degrees: int, use_raw: bool, *control_values: float,
@@ -634,6 +665,61 @@ class SketchPage:
 
         return build_drawing_outputs(view)
 
+    def record_capture_quietly(self, choice: str, upload_path: str | None, rotation_degrees: int,
+                               upload_key: UploadCaptureKey | None) -> None:
+        """
+        Save an interval capture of the open drawing when one is due, keeping any failure for the notice instead of raising.
+
+        Args:
+            choice (str): Chosen sketch source.
+            upload_path (str | None): Uploaded sketch file, if any.
+            rotation_degrees (int): Degrees to turn the sketch clockwise.
+            upload_key (UploadCaptureKey | None): The upload's capture key, or None for a webcam frame.
+        """
+        # A stopped stream passes no frame, which the controller skips, so gaps show only in the capture times.
+        sketch, frame_age_seconds = self.find_sketch(choice, upload_path)
+        try:
+            capture = self.controller.record_drawing_capture(sketch, SketchSource(choice), rotation=int(rotation_degrees or 0),
+                                                             frame_age_seconds=frame_age_seconds)
+        except (SketchLoopError, OSError) as error:
+            # Ignore a drawing that finished meanwhile, and otherwise keep the line until a save works.
+            is_open = is_drawing_open(self.controller.latest_drawing())
+            self.capture_failure = describe_capture_failure(error, self.controller.save_interval_seconds) if is_open else ""
+            return
+
+        # A saved capture clears the notice and marks the upload as saved, while a capture that was not due changes nothing.
+        if capture is not None:
+            self.capture_failure = ""
+            self.saved_upload = upload_key
+
+    def save_drawing_capture(self, choice: str, upload_path: str | None, rotation_degrees: int,
+                             shown_notice: str | None) -> gr.Markdown | dict:
+        """
+        Save the current sketch into the open drawing at the save interval, updating the notice only when it changes.
+
+        Args:
+            choice (str): Chosen sketch source.
+            upload_path (str | None): Uploaded sketch file, if any.
+            rotation_degrees (int): Degrees to turn the sketch clockwise.
+            shown_notice (str | None): The failure notice this tab shows.
+
+        Returns:
+            gr.Markdown | dict: The notice, shown with a failure and hidden without one, or a skip when it is unchanged.
+        """
+        # Save while a drawing is open, skipping an upload already saved in it, since saving it again stores a duplicate.
+        view = self.controller.latest_drawing()
+        upload_key = name_upload_capture(view, choice, upload_path)
+        if not is_drawing_open(view):
+            self.capture_failure = ""
+        elif upload_key is None or upload_key != self.saved_upload:
+            self.record_capture_quietly(choice, upload_path, rotation_degrees, upload_key)
+
+        # Leave the page untouched unless the notice changes, so ticks never flicker or repeat a message.
+        if (shown_notice or "") == self.capture_failure:
+            return gr.skip()
+
+        return gr.Markdown(value=self.capture_failure, visible=bool(self.capture_failure))
+
     def show_drawing_status(self) -> str:
         """
         Show the latest drawing's status, such as a failed suggestion's line, in place of the waiting line.
@@ -752,8 +838,9 @@ class SketchPage:
                 name = gr.Textbox(label="Experiment name", info=EXPERIMENT_NAME_HINT, max_lines=1, scale=3)
                 start = gr.Button("Start drawing", interactive=False, scale=1)
                 finish = gr.Button("Finish drawing", interactive=False, scale=1)
+            capture_notice = gr.Markdown(visible=False, elem_id="capture-notice")
 
-        return ExperimentCard(name=name, start=start, finish=finish)
+        return ExperimentCard(name=name, start=start, finish=finish, capture_notice=capture_notice)
 
     def _build_history(self) -> gr.Dataframe:
         """
@@ -848,6 +935,12 @@ class SketchPage:
                                   show_progress="minimal", show_progress_on=[status])
         suggesting.then(self.update_suggest_button, None, [choose.suggest_strokes], show_progress="hidden")
         suggesting.failure(self.show_drawing_status, None, [status], show_progress="hidden")
+
+        # Save the open drawing at the save interval in its own queue, so captures never wait behind a round or a suggestion.
+        capture_timer = gr.Timer(self.controller.save_interval_seconds)
+        capture_inputs = [*sketch_inputs, sketch.rotation, experiment.capture_notice]
+        capture_timer.tick(self.save_drawing_capture, capture_inputs, [experiment.capture_notice],
+                           concurrency_id="drawing-capture", concurrency_limit=1, show_progress="hidden")
 
         # Write a suggested style on request, one model call at a time.
         suggest_inputs = [sketch.source, sketch.upload, sketch.rotation, sketch.raw]
