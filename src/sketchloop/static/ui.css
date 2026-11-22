@@ -22,3 +22,12 @@
 
 /* A failed interval save, shown to the experimenter as one calm line until saving works again. */
 #capture-notice { padding: 8px 16px; border-radius: 12px; background: var(--background-fill-secondary); }
+
+/* Study page: a tall sketch view, and status text that reads from the drawing position. ui.py sets the class. */
+.study #study-sketch-view { min-height: 560px; }
+.study #ai-help { min-height: 128px; gap: 12px; }
+.study #suggest-prompt, .study #suggest-strokes { min-height: 56px; font-size: 1.1rem; }
+.study #participant-status { padding: 16px; border-radius: 12px; background: var(--background-fill-secondary); }
+.study #participant-status p { font-size: 1.4rem; line-height: 1.4; }
+.study #participant-status .pending { opacity: 1 !important; }
+.study #experimenter-status, .study #system { color: var(--body-text-color-subdued); }

@@ -454,12 +454,6 @@ class AppController:
         self._suggestions, self._suggestion_index, self._suggested_signature = suggestions, position, signature
         return PromptSuggestionView(suggestion_id=recorded.id, text=suggestions[position])
 
-    def suggest_prompt(self, sketch: Path | np.ndarray | None, rotation: int, use_raw: bool) -> str:
-        """
-        Suggest and record one style prompt and return only its text, for a page that does not send the ID back yet.
-        """
-        return self.request_prompt_suggestion(sketch, rotation, use_raw).text
-
     def describe_prompt_suggester(self) -> str:
         """
         Name the prompt suggester in one sentence for the experimenter, by its model or why it has none.

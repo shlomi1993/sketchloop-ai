@@ -51,7 +51,8 @@ if "controller" not in globals():
 sys.modules.update(kept_modules)
 page_module = importlib.import_module(PAGE_MODULE)
 demo = page_module.SketchPage(controller, default_candidates=settings.ui.candidates, default_seed=settings.ui.seed,
-                              capture_interval_seconds=settings.ui.capture_interval_seconds).build()
+                              capture_interval_seconds=settings.ui.capture_interval_seconds,
+                              study=settings.study.enabled).build()
 
 # Serve the page the first time, while later runs only hand Gradio its theme, CSS, and script.
 page_module.serve_app(demo, controller)

@@ -296,8 +296,8 @@ def test_app_suggests_the_next_style_for_the_same_drawing(tmp_path: Path, sketch
     """
     controller = AppController(FakeGenerator(), FolderStore(tmp_path / "runs"),
                                suggester=FlorenceSuggester(captioner=lambda payload: "a drawing of a chair"))
-    first = controller.suggest_prompt(sketch_file, 0, False)
-    second = controller.suggest_prompt(sketch_file, 0, False)
+    first = controller.request_prompt_suggestion(sketch_file, 0, False).text
+    second = controller.request_prompt_suggestion(sketch_file, 0, False).text
 
     # The styles follow the template order for the named object.
     assert first == f"a chair, {STYLE_TEMPLATES[0].split(', ', 1)[1]}", f"Unexpected first suggestion {first!r}"
@@ -580,17 +580,6 @@ def test_app_prompt_suggestion_outside_drawing_goes_to_the_next_round(tmp_path: 
     suggested = PromptOrigin(kind=PromptOriginKind.SUGGESTED, prompt_suggestion=shown.suggestion_id)
     assert rounds[0].prompt_origin == suggested, f"Expected a suggested prompt, got {rounds[0].prompt_origin}"
     assert rounds[1].prompt_suggestions == () and rounds[1].prompt_origin == Unavailable(OUTSIDE_SESSION_REASON), "Bad round 2"
-
-
-def test_app_text_suggestion_keeps_the_page_working(tmp_path: Path, sketch_file: Path,
-                                                    prompt_suggester: StubPromptSuggester) -> None:
-    controller = make_study_controller(tmp_path, prompt_suggester)
-
-    # The page's current call still gets the text, and the press is recorded for the next round.
-    assert controller.suggest_prompt(sketch_file, 0, False) == prompt_suggester.prompts[0], "Expected the first prompt as text"
-    controller.run_round(sketch_file, "upload", "a chair", n_candidates=1)
-    recorded = load_session(controller.session.folder).rounds[0].prompt_suggestions
-    assert len(recorded) == 1, f"The text press must be recorded, got {recorded}"
 
 
 def test_app_refuses_an_unknown_condition_before_saving(controller: AppController) -> None:

@@ -100,7 +100,20 @@ The page lists the current session's history, and **New session** starts a fresh
 | `--study` | off | Serve the study page, see below |
 | `--config` | `./sketchloop.toml` if present | Settings file |
 
-**Study mode (in progress, T10):** `sketchloop ui --study`, or `enabled = true` under `[study]`, serves the page for a user study, and `--no-study` turns it off for one run. The experimenter starts each experiment with a name and a condition, with or without AI, and a drawing without AI offers neither next-stroke nor prompt suggestions. Each drawing records its condition, every prompt suggestion, whether each prompt was typed, suggested, or an edited suggestion, and the prompt box text at finish. The command prints a warning for each stand-in, the fake stroke suggester or the template prompts, since a study needs the real ones. The study page itself is still being built, so `--study` cannot serve a page yet.
+**Study mode:** `sketchloop ui --study`, or `enabled = true` under `[study]`, serves the page for a user study, and `--no-study` turns it off for one run. The command prints a warning for each stand-in, the fake stroke suggester or the template prompts, since a study needs the real ones.
+
+- **Participant view:** only the sketch view, the prompt box, and a status line worded the same in both conditions. "Suggest a prompt" and "Suggest next strokes" appear only while a drawing with AI is open, in a column that keeps its space without them, so nothing moves between conditions. Image generation is not part of study mode.
+- **Experimenter panel:** at the bottom, holding the experiment name, the condition (With AI or Without AI, no default), Start, Finish, and the camera controls. It is open when the page loads, because the webcam only starts once its panel has been shown, and Start closes it. Start needs a name and a condition and clears both, so nothing carries over to the next experiment.
+- **Records:** each drawing records its condition, every prompt suggestion, whether each prompt was typed, suggested, or an edited suggestion, and the prompt box text at Finish as its final prompt.
+
+### Export the study drawings
+
+```sh
+sketchloop study export [--runs-dir runs] [--output DIR] [--match "p3_*"]
+sketchloop study summary [--runs-dir runs] [--match "p3_*"]
+```
+
+`study export` writes each study drawing's final canvas as `drawings/<CODE>.png` under a random code, plus `key.csv`, which maps codes to experiments and conditions, and `export.json`. The default folder is `data/study-exports/export-<time>/`, which Git ignores. Hand over only `drawings/`, and keep `key.csv` and `export.json` local. `study summary` prints one row per study drawing with its condition, length, captures, suggestions and their results, prompt origins, and whether it has a final drawing.
 
 ## Using the command line
 
@@ -112,6 +125,8 @@ The page lists the current session's history, and **New session** starts a fresh
 | `sketchloop rerun runs/SESSION --round N` | Repeat a round as a new linked session |
 | `sketchloop benchmark SKETCH --prompt TEXT` | Time repeated rounds and report statistics per stage |
 | `sketchloop ui` | Open the browser page, also the default with no command |
+| `sketchloop study export` | Export blinded final drawings for expert evaluation |
+| `sketchloop study summary` | Print one row per study drawing |
 
 Run any command with `--help` for all its options. `run`, `ui`, and `benchmark` share `--backend`, `--mode`, `--precision`, `--seed`, `--candidates`, and `--runs-dir`.
 
