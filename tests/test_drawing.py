@@ -11,9 +11,10 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Final
 
-from sketchloop.capture import CapturedSketch, InvalidSketchError
+from sketchloop.capture import CapturedSketch, InvalidSketchError, encode_frame
 from sketchloop.domain import ColorMode, SketchLoopError, SketchSource
-from sketchloop.drawing import NO_STROKES_MESSAGE, GuidedDrawing, check_suggestion_output, parse_hex_color
+from sketchloop.drawing import (NO_STROKES_MESSAGE, GuidedDrawing, check_suggestion_output, compress_interval_frame,
+                                parse_hex_color)
 from sketchloop.experiments import (CaptureTrigger, DrawingEnd, DrawingRecord, MemoryStore, StoreError, SuggestionStage,
                                     SuggestionStatus, drawing_from_dict, drawing_to_dict)
 from sketchloop.preprocessing import make_paper_canvas
@@ -104,6 +105,14 @@ def start_drawing(store: MemoryStore, suggester: StrokeSuggester | None) -> Guid
     """
     return GuidedDrawing(store, SESSION_ID, 1, suggester, canvas_width=CANVAS_SIZE[0], canvas_height=CANVAS_SIZE[1],
                          save_interval_seconds=2.0)
+
+
+def encode_capture(frame: np.ndarray) -> CapturedSketch:
+    """
+    Encode a frame as the PNG raw sketch the browser controller would capture, with a fixed 0.01 s capture time.
+    """
+    image, payload = encode_frame(frame)
+    return CapturedSketch(image=image, payload=payload, capture_seconds=0.01)
 
 
 def suggest(drawing: GuidedDrawing, captured: CapturedSketch, prompt: str = "a car") -> None:
@@ -282,3 +291,90 @@ def test_parse_hex_color() -> None:
     """
     # The first part color is Okabe-Ito blue.
     assert parse_hex_color(PART_COLORS[0]) == (0, 114, 178), f"Unexpected levels {parse_hex_color(PART_COLORS[0])}"
+
+
+def test_drawing_interval_captures_are_jpeg_and_aligned(sheet_frame: np.ndarray, sheet_capture: CapturedSketch) -> None:
+    """
+    Interval frames are kept as JPEG and press frames as PNG, and captures after a suggestion record their alignment.
+    """
+    store = MemoryStore()
+    drawing = start_drawing(store, FakeStrokeSuggester())
+    before = drawing.record_capture(sheet_capture, source=SketchSource.WEBCAM, rotation=0, frame_age_seconds=0.3)
+    suggest(drawing, sheet_capture)
+    shifted = encode_capture(np.roll(sheet_frame, (2, 3), axis=(0, 1)))
+    after = drawing.record_capture(shifted, source=SketchSource.UPLOAD, rotation=0)
+    record = drawing.finish(sheet_capture, source=SketchSource.UPLOAD)
+
+    # Interval frames are JPEG, while the press and finish frames stay lossless PNG.
+    media = [(capture.trigger, capture.raw.media_type, capture.raw.path) for capture in record.captures]
+    expected = [(CaptureTrigger.INTERVAL, "image/jpeg", "captures/capture-0001-raw.jpg"),
+                (CaptureTrigger.SUGGESTION, "image/png", "captures/capture-0002-raw.png"),
+                (CaptureTrigger.INTERVAL, "image/jpeg", "captures/capture-0003-raw.jpg"),
+                (CaptureTrigger.FINISH, "image/png", "captures/capture-0004-raw.png")]
+    assert media == expected, f"Unexpected capture formats {media}"
+    jpeg = store.drawing_files[(SESSION_ID, 1, "captures/capture-0001-raw.jpg")]
+    assert jpeg.startswith(b"\xff\xd8\xff"), "The interval frame must be saved as JPEG bytes"
+
+    # Only captures after the press are aligned, to suggestion 1, and the shifted frame aligns with its time recorded.
+    assert before.follow is None and record.captures[1].follow is None, "Captures before a suggestion have no alignment"
+    follow = after.follow
+    assert follow.suggestion == 1 and follow.alignment.converged, f"Expected an alignment to suggestion 1, got {follow}"
+    assert follow.new_stroke_pixels is not None and follow.seconds_since_shown >= 0, f"Unexpected scores {follow}"
+    assert record.captures[3].follow.suggestion == 1, "The finish capture is aligned to the open suggestion too"
+    stages = set(after.timings_seconds)
+    assert {"capture", "canvas", "scoring", "saving"} <= stages, f"Unexpected capture timings {stages}"
+
+    # The follow method is recorded once, and the whole record round-trips through JSON unchanged.
+    assert record.follow_detector.name == "aligned-strokes", f"Unexpected follow method {record.follow_detector}"
+    text = json.dumps(drawing_to_dict(record), allow_nan=False)
+    assert drawing_from_dict(json.loads(text)) == record, "drawing.json with captures must load back unchanged"
+
+
+def test_drawing_without_alignment_fields_loads(sheet_capture: CapturedSketch) -> None:
+    """
+    A drawing.json written before follow detection, without follow fields, loads with no alignment and no follow method.
+    """
+    drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
+    suggest(drawing, sheet_capture)
+    drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
+    data = drawing_to_dict(drawing.record)
+    del data["follow_detector"]
+    for capture in data["captures"]:
+        del capture["follow"]
+    loaded = drawing_from_dict(data)
+
+    # The older record loads with no follow method and no capture alignment.
+    assert loaded.follow_detector is None and loaded.captures[0].follow is None, f"Unexpected older drawing {loaded}"
+
+
+def test_drawing_keeps_interval_capture_after_failed_save(sheet_capture: CapturedSketch) -> None:
+    """
+    A failed save of an interval capture raises, keeps the capture, and writes its files with the next save.
+    """
+    store = FlakyDrawingStore()
+    drawing = start_drawing(store, FakeStrokeSuggester())
+    store.failures_left = 1
+    with pytest.raises(StoreError, match="No space left"):
+        drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
+    drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
+
+    # Both captures and the first one's files reached the store.
+    files = {path for (_, _, path) in store.drawing_files}
+    assert len(store.drawings[(SESSION_ID, 1)].captures) == 2, "Both interval captures must be saved"
+    assert "captures/capture-0001-raw.jpg" in files, f"The first capture's frame must be saved on the retry, got {files}"
+
+
+def test_compress_interval_frame_keeps_jpeg(sheet_frame: np.ndarray) -> None:
+    """
+    A JPEG frame is kept as received, while a PNG frame is re-encoded as JPEG with the same size.
+    """
+    jpeg_payload = cv2.imencode(".jpg", sheet_frame)[1].tobytes()
+    png = encode_capture(sheet_frame)
+    jpeg = CapturedSketch(image=replace(png.image, path="sketch-raw.jpg", media_type="image/jpeg"), payload=jpeg_payload,
+                          capture_seconds=0.01)
+    compressed = compress_interval_frame(png)
+
+    # The JPEG is unchanged, and the PNG became a JPEG of the same size with its re-encoding timed.
+    assert compress_interval_frame(jpeg) is jpeg, "A JPEG frame must be kept as received"
+    size = (compressed.image.width, compressed.image.height, compressed.image.media_type)
+    assert size == (640, 480, "image/jpeg") and compressed.capture_seconds >= 0.01, f"Unexpected compressed frame {size}"

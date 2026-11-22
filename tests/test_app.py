@@ -8,6 +8,7 @@ import json
 import numpy as np
 import pytest
 import re
+import time
 
 from dataclasses import replace
 from pathlib import Path
@@ -365,3 +366,82 @@ def test_app_reports_no_new_strokes(tmp_path: Path, sheet_frame: np.ndarray) -> 
     # The page gets the message, and the drawing holds the attempt.
     assert view.status == NO_NEW_STROKES_MESSAGE and view.part_count == 0, f"Unexpected view {view}"
     assert controller.latest_drawing().suggestion_lines == ("Suggestion 1: no new strokes",), "The attempt must be recorded"
+
+
+class ManualClock:
+    """
+    Test clock for time.monotonic that moves only when the test advances it.
+    """
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        """
+        Return the current time.
+        """
+        return self.now
+
+
+def test_app_records_interval_captures_when_due(tmp_path: Path, sheet_frame: np.ndarray,
+                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Interval captures are saved as JPEG at most once per 0.8 of the interval, and none without a drawing or a frame.
+    """
+    clock = ManualClock()
+    monkeypatch.setattr(time, "monotonic", clock)
+    controller = AppController(FakeGenerator(), FolderStore(tmp_path / "runs"))
+
+    # Nothing is saved before a drawing starts or without a frame.
+    assert controller.record_drawing_capture(sheet_frame, "webcam", rotation=0) is None, "No drawing means no capture"
+    controller.start_drawing("p1")
+    assert controller.record_drawing_capture(None, "webcam", rotation=0) is None, "No frame means no capture"
+
+    # The first call saves capture 1, an immediate repeat is turned away, and one after 1.6 s saves capture 2.
+    first = controller.record_drawing_capture(sheet_frame, "webcam", rotation=0, frame_age_seconds=0.2)
+    clock.now += 1.5
+    early = controller.record_drawing_capture(sheet_frame, "webcam", rotation=0)
+    clock.now += 0.1
+    second = controller.record_drawing_capture(sheet_frame, "webcam", rotation=0)
+    assert (first.drawing, first.number, early, second.number) == (1, 1, None, 2), f"Unexpected captures {first}, {early}"
+    assert first.follow is None and not first.canvas_failed, f"Expected a plain capture before any suggestion, got {first}"
+
+    # After a suggestion, the next due capture reports its alignment to it.
+    controller.suggest_strokes(sheet_frame, "webcam", "", rotation=0)
+    clock.now += 2.0
+    aligned = controller.record_drawing_capture(sheet_frame, "webcam", rotation=0)
+    assert aligned.number == 4 and aligned.follow.suggestion == 1, f"Expected capture 4 aligned to suggestion 1, got {aligned}"
+    assert aligned.follow.alignment.converged, f"The same frame must align, got {aligned.follow.alignment}"
+
+    # The interval frames are JPEG on disk, and the saved drawing loads with every file matching.
+    saved = load_session(controller.session.folder)
+    raw_paths = [capture.raw.path for capture in saved.drawings[0].captures]
+    assert raw_paths[0].endswith("-raw.jpg") and raw_paths[2].endswith("-raw.png"), f"Unexpected raw formats {raw_paths}"
+    assert saved.problems == (), f"Expected no problems, got {saved.problems}"
+
+
+def test_app_capture_turns_away_concurrent_call(controller: AppController, sheet_frame: np.ndarray) -> None:
+    """
+    A capture call that arrives while another is saving returns None at once instead of saving a second frame.
+    """
+    controller.start_drawing("p1")
+    with controller._capture_lock:
+        busy = controller.record_drawing_capture(sheet_frame, "webcam", rotation=0)
+
+    # The busy call saved nothing, and the next call saves capture 1.
+    assert busy is None and controller.latest_drawing().capture_count == 0, "A concurrent call must save nothing"
+    assert controller.record_drawing_capture(sheet_frame, "webcam", rotation=0).number == 1, "The next call must save"
+
+
+def test_app_capture_refuses_bad_input(controller: AppController, sheet_frame: np.ndarray) -> None:
+    """
+    A due capture with an unsupported rotation or a frame age for an upload is refused before anything is saved.
+    """
+    controller.start_drawing("p1")
+    with pytest.raises(SketchLoopError, match="Rotation must be one of"):
+        controller.record_drawing_capture(sheet_frame, "webcam", rotation=45)
+    with pytest.raises(SketchLoopError, match="Only a streamed webcam frame has a frame age"):
+        controller.record_drawing_capture(sheet_frame, "upload", rotation=0, frame_age_seconds=0.2)
+
+    # Neither call saved a capture.
+    assert controller.latest_drawing().capture_count == 0, "A refused capture must save nothing"

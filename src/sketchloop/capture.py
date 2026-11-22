@@ -192,6 +192,33 @@ def encode_frame(frame: np.ndarray) -> tuple[ImageRef, bytes]:
     return raw_image_ref(frame, payload, ".png", "image/png"), payload
 
 
+def encode_frame_jpeg(frame: np.ndarray, quality: int) -> tuple[ImageRef, bytes]:
+    """
+    Encode an 8-bit BGR, BGRA, or grayscale camera frame as a JPEG raw frame, dropping any alpha channel.
+
+    Args:
+        frame (np.ndarray): Camera frame in OpenCV channel order.
+        quality (int): JPEG quality from 1 to 100.
+
+    Returns:
+        tuple[ImageRef, bytes]: The image reference and the frame's JPEG bytes.
+    """
+    if not 1 <= quality <= 100:
+        raise ValueError(f"JPEG quality must be from 1 to 100, got {quality}.")
+
+    # JPEG holds no alpha, so keep the color channels of a BGRA frame.
+    if frame.dtype != np.uint8 or count_channels(frame) not in MODE_BY_CHANNELS:
+        raise InvalidSketchError("Camera frame cannot be saved as JPEG. Try another camera.")
+
+    pixels = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR) if count_channels(frame) == 4 else frame
+    encoded, buffer = cv2.imencode(".jpg", pixels, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not encoded:
+        raise InvalidSketchError("Camera frame cannot be saved as JPEG. Try another camera.")
+
+    payload = buffer.tobytes()
+    return raw_image_ref(pixels, payload, ".jpg", "image/jpeg"), payload
+
+
 def capture_from_camera(camera_index: int, open_camera: Callable[[int], VideoSource] = OpenCVCamera) -> CapturedSketch:
     """
     Show a live camera preview, capture a frame on Space, and describe it as a PNG raw sketch.

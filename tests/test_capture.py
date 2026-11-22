@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from sketchloop.capture import (SPACE_KEY, CameraCapture, CapturedSketch, FileCapture, InvalidSketchError, VideoSource,
-                                capture_from_camera, load_sketch_file)
+                                capture_from_camera, encode_frame_jpeg, load_sketch_file)
 
 
 EXAMPLE_SKETCH = Path(__file__).resolve().parents[1] / "examples" / "sketch-photo.jpg"
@@ -125,3 +125,29 @@ def test_camera_capture_excludes_preview(monkeypatch: pytest.MonkeyPatch) -> Non
 
     # Only the encode after Space is timed, which is one 7 s clock step, never the preview.
     assert captured.capture_seconds == 7.0, f"The preview must not count as capture time, got {captured.capture_seconds}"
+
+
+@pytest.mark.parametrize(("channels", "mode"), [(1, "L"), (3, "RGB"), (4, "RGB")])
+def test_encode_frame_jpeg(channels: int, mode: str) -> None:
+    """
+    A gray, BGR, or BGRA frame is encoded as a JPEG raw frame, dropping alpha, with its size and checksum.
+    """
+    frame = np.full((48, 64, channels), 220, dtype=np.uint8)
+    image, payload = encode_frame_jpeg(frame[..., 0] if channels == 1 else frame, 90)
+
+    # The bytes are JPEG and the reference describes them.
+    assert payload.startswith(b"\xff\xd8\xff"), "Expected JPEG bytes"
+    described = (image.path, image.media_type, image.width, image.height, image.mode)
+    assert described == ("sketch-raw.jpg", "image/jpeg", 64, 48, mode), f"Unexpected reference {described}"
+
+
+@pytest.mark.parametrize(("frame", "quality", "error"), [
+    (np.zeros((8, 8, 3), dtype=np.uint8), 0, ValueError),
+    (np.zeros((8, 8, 3), dtype=np.uint16), 90, InvalidSketchError),
+])
+def test_encode_frame_jpeg_refuses_bad_input(frame: np.ndarray, quality: int, error: type[Exception]) -> None:
+    """
+    A quality outside 1 to 100 or a frame that is not 8-bit is refused.
+    """
+    with pytest.raises(error):
+        encode_frame_jpeg(frame, quality)

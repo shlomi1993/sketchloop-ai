@@ -18,6 +18,7 @@ from sketchloop.evaluation import Evaluator, NoOpEvaluator
 from sketchloop.experiments import (SETUP_NOT_MEASURED_REASON, BenchmarkPlan, ExperimentStore, RerunLink, RoundRecord, RoundStage,
                                     RoundStatus, SessionRecord, StoreError, check_experiment_name, collect_environment,
                                     describe_failure, require_known_source, resolve_frame_age)
+from sketchloop.follow import FollowDetector
 from sketchloop.generation import GenerationOutput, Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor, StrokePreprocessor
 from sketchloop.stroke_suggestion import StrokeSuggester
@@ -264,7 +265,7 @@ class SketchSession:
         self.selections[latest_id] = selection
 
     def start_drawing(self, suggester: StrokeSuggester | None, *, canvas_width: int, canvas_height: int,
-                      save_interval_seconds: float) -> GuidedDrawing:
+                      save_interval_seconds: float, follow_detector: FollowDetector | None = None) -> GuidedDrawing:
         # Allow one open drawing at a time, so captures and suggestions always belong to a single drawing.
         if self.drawings and self.drawings[-1].is_open:
             raise SketchLoopError(f"Drawing {self.drawings[-1].record.number} is still open. Finish it before starting another.")
@@ -272,6 +273,7 @@ class SketchSession:
         # Save the session record first, then number the drawing after the earlier ones.
         self.ensure_session_record()
         drawing = GuidedDrawing(self.store, self.session_id, len(self.drawings) + 1, suggester, canvas_width=canvas_width,
-                                canvas_height=canvas_height, save_interval_seconds=save_interval_seconds)
+                                canvas_height=canvas_height, save_interval_seconds=save_interval_seconds,
+                                follow_detector=follow_detector)
         self.drawings.append(drawing)
         return drawing

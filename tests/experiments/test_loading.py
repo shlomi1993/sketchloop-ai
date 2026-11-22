@@ -234,11 +234,12 @@ def test_session_without_drawings_or_name_loads(tmp_path: Path) -> None:
 
 def run_named_drawing(runs_dir: Path, captured: CapturedSketch) -> SketchSession:
     """
-    Start a named session, suggest once with the fake, and finish the drawing.
+    Start a named session, suggest once with the fake, take an interval capture, and finish the drawing.
     """
     session = SketchSession(FakeGenerator(), FolderStore(runs_dir), name="p1_car")
     drawing = session.start_drawing(FakeStrokeSuggester(), canvas_width=512, canvas_height=360, save_interval_seconds=2.0)
     drawing.suggest(captured, source=SketchSource.UPLOAD, rotation=0, prompt="a car")
+    drawing.record_capture(captured, source=SketchSource.UPLOAD, rotation=0)
     drawing.finish(captured, source=SketchSource.UPLOAD)
     return session
 
@@ -251,6 +252,7 @@ def test_drawing_loads_and_reports_changed_mask(tmp_path: Path, sheet_capture: C
     record = session.drawings[0].record
     saved = load_session(session.folder)
     (session.folder / "drawing-1" / "suggestions" / "suggestion-1" / "part-1.png").write_bytes(b"changed")
+    (session.folder / "drawing-1" / "captures" / "capture-0002-raw.jpg").unlink()
     (session.folder / "drawing-2").mkdir()
     damaged = load_session(session.folder)
 
@@ -258,8 +260,9 @@ def test_drawing_loads_and_reports_changed_mask(tmp_path: Path, sheet_capture: C
     assert saved.drawings == (record,) and saved.problems == (), f"Expected the drawing unchanged, got {saved.problems}"
     assert saved.checked_files == len(record.captures) * 2 + 5, f"Unexpected checked file count {saved.checked_files}"
 
-    # A changed mask and an interrupted drawing are listed as problems, not errors.
-    expected = ("drawing-1/suggestions/suggestion-1/part-1.png does not match its recorded checksum.",
+    # A missing interval frame, a changed mask, and an interrupted drawing are listed as problems, not errors.
+    expected = ("drawing-1/captures/capture-0002-raw.jpg is missing.",
+                "drawing-1/suggestions/suggestion-1/part-1.png does not match its recorded checksum.",
                 "drawing-2 has no drawing.json, so the drawing was interrupted.")
     assert damaged.problems == expected, f"Unexpected problems {damaged.problems}"
 
@@ -271,11 +274,15 @@ def test_drawing_loads_and_reports_changed_mask(tmp_path: Path, sheet_capture: C
     (lambda data: data["suggestions"][0]["request"].update(max_parts=1), "more than the 1 requested"),
     (lambda data: data.update(final_capture=1), "must have trigger finish"),
     (lambda data: data.update(end=None), "end time exactly when it has an end"),
+    (lambda data: data["captures"][1]["follow"].update(suggestion=2), "not the one open when it was taken"),
+    (lambda data: data["captures"][0].update(follow=data["captures"][1]["follow"]), "not the one open when it was taken"),
+    (lambda data: data.update(follow_detector=None), "follow scores but no follow method"),
+    (lambda data: data["captures"][1]["follow"]["alignment"].update(warp=None), "3x3 warp"),
 ])
 def test_invalid_drawing_rejected(tmp_path: Path, sheet_capture: CapturedSketch, edit: Callable[[dict], None],
                                   message: str) -> None:
     """
-    A drawing.json with a path leaving its folder, a capture gap, a wrong baseline, too many parts, or a bad end fails to load.
+    A drawing.json with an outside path, a capture gap, a wrong baseline, too many parts, or a bad end or alignment fails.
     """
     session = run_named_drawing(tmp_path, sheet_capture)
     drawing_file = session.folder / "drawing-1" / "drawing.json"

@@ -3,6 +3,7 @@ Framework-free controller and view records that the browser page calls to run an
 """
 
 import numpy as np
+import threading
 import time
 
 from collections.abc import Mapping, Sequence
@@ -10,14 +11,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from sketchloop.capture import CapturedSketch, InvalidSketchError, encode_frame, load_sketch_file
+from sketchloop.capture import CapturedSketch, InvalidSketchError, encode_frame, encode_frame_jpeg, load_sketch_file
 from sketchloop.domain import (
-    ControlValue, Guidance, InvalidSelectionError, Iteration, Rotation, SelectionEvent, SketchLoopError, SketchSource,
+    ControlValue, Guidance, ImageRef, InvalidSelectionError, Iteration, Rotation, SelectionEvent, SketchLoopError, SketchSource,
     Unavailable, record_no_selection, select_candidates)
-from sketchloop.drawing import GuidedDrawing
+from sketchloop.drawing import INTERVAL_JPEG_QUALITY, GuidedDrawing
 from sketchloop.evaluation import Evaluator
-from sketchloop.experiments import (SETUP_NOT_MEASURED_REASON, SETUP_REUSED_REASON, DrawingEnd, ExperimentStore, RoundRecord,
-                                    RoundStage, RoundStatus, SuggestionRecord, SuggestionStage, check_experiment_name)
+from sketchloop.experiments import (SETUP_NOT_MEASURED_REASON, SETUP_REUSED_REASON, CaptureRecord, DrawingEnd, ExperimentStore,
+                                    RoundRecord, RoundStage, RoundStatus, SuggestionRecord, SuggestionStage,
+                                    check_experiment_name)
+from sketchloop.follow import AlignedStrokeFollowDetector, CaptureScores, FollowDetector
 from sketchloop.generation import ControlKind, ControlSpec, Generator
 from sketchloop.preprocessing import Preprocessor, make_paper_canvas
 from sketchloop.session import RoundOutcome, SketchSession
@@ -33,6 +36,7 @@ NO_FRAME_MESSAGE: Final = "No sketch yet. Start the webcam or upload a PNG or JP
 NO_NEW_STROKES_MESSAGE: Final = "No new strokes to suggest. Keep drawing or press again for another try."
 DEFAULT_CANVAS_SIZE: Final = (512, 360)  # Paper frame width and height, A4 or Letter in landscape on the latent grid
 DEFAULT_SAVE_INTERVAL_SECONDS: Final = 2.0
+CAPTURE_DUE_SHARE: Final = 0.8  # An interval capture is due once this share of the interval passed, so timer jitter skips none
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -83,6 +87,17 @@ class SuggestionView:
     is_fake: bool  # Whether the fake suggester drew the parts
     generation_seconds: float | None  # Seconds the suggester spent generating, None when it reported none
     status: str  # One line such as "Suggestion 2: 3 colored parts" or the no-new-strokes message
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CaptureView:
+    """
+    A saved interval capture as the page may report it.
+    """
+    drawing: int  # Drawing number in the current session
+    number: int  # Capture number in the drawing
+    canvas_failed: bool  # Whether the paper canvas could not be made, so the capture holds only the raw frame
+    follow: CaptureScores | None  # Alignment to the open suggestion's baseline, None without an open suggestion
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -217,18 +232,35 @@ def build_history_row(record: RoundRecord) -> HistoryRow:
     return HistoryRow(number=record.number, status=record.status, prompt=prompt, outcome=outcome)
 
 
-def capture_browser_sketch(sketch: Path | np.ndarray) -> CapturedSketch:
+def build_capture_view(drawing_number: int, capture: CaptureRecord) -> CaptureView:
+    """
+    Turn a saved interval capture into the view the page may report.
+    """
+    return CaptureView(drawing=drawing_number, number=capture.number, canvas_failed=capture.failure is not None,
+                       follow=capture.follow)
+
+
+def encode_browser_frame(frame: np.ndarray, jpeg_quality: int | None) -> tuple[ImageRef, bytes]:
+    """
+    Encode a camera frame as PNG, or as JPEG at the given quality.
+    """
+    return encode_frame(frame) if jpeg_quality is None else encode_frame_jpeg(frame, jpeg_quality)
+
+
+def capture_browser_sketch(sketch: Path | np.ndarray, jpeg_quality: int | None = None) -> CapturedSketch:
     """
     Load an uploaded file, or encode a camera frame in OpenCV channel order, and time it as the capture stage.
 
     Args:
         sketch (Path | np.ndarray): Uploaded sketch file, or a webcam frame from the browser.
+        jpeg_quality (int | None, optional): JPEG quality for a camera frame, or None for PNG. Defaults to None.
 
     Returns:
         CapturedSketch: The raw sketch, its bytes, and how long loading or encoding took.
     """
     started = time.perf_counter()
-    image, payload = encode_frame(sketch) if isinstance(sketch, np.ndarray) else load_sketch_file(sketch)
+    is_frame = isinstance(sketch, np.ndarray)
+    image, payload = encode_browser_frame(sketch, jpeg_quality) if is_frame else load_sketch_file(sketch)
     return CapturedSketch(image=image, payload=payload, capture_seconds=time.perf_counter() - started)
 
 
@@ -240,7 +272,8 @@ class AppController:
                  preprocessor: Preprocessor | None = None, suggester: PromptSuggester | None = None,
                  generator_setup_seconds: float | Unavailable = Unavailable(SETUP_NOT_MEASURED_REASON),
                  stroke_suggester: StrokeSuggester | None = None, canvas_size: tuple[int, int] = DEFAULT_CANVAS_SIZE,
-                 save_interval_seconds: float = DEFAULT_SAVE_INTERVAL_SECONDS) -> None:
+                 save_interval_seconds: float = DEFAULT_SAVE_INTERVAL_SECONDS,
+                 follow_detector: FollowDetector | None = None) -> None:
         # The page shows candidates from their saved files, so refuse a store that keeps none.
         if store.root is None:
             raise SketchLoopError(NO_FILES_MESSAGE)
@@ -253,6 +286,8 @@ class AppController:
         self.stroke_suggester = stroke_suggester or FakeStrokeSuggester()
         self.canvas_size = canvas_size
         self.save_interval_seconds = save_interval_seconds
+        self.follow_detector = follow_detector or AlignedStrokeFollowDetector()
+        self._capture_lock = threading.Lock()
         self._suggestions: tuple[str, ...] = ()
         self._suggestion_index = 0
         self._suggested_signature: np.ndarray | None = None
@@ -480,7 +515,7 @@ class AppController:
         self.session = session
         width, height = self.canvas_size
         drawing = session.start_drawing(self.stroke_suggester, canvas_width=width, canvas_height=height,
-                                        save_interval_seconds=self.save_interval_seconds)
+                                        save_interval_seconds=self.save_interval_seconds, follow_detector=self.follow_detector)
         return build_drawing_view(drawing, session.name)
 
     def suggest_strokes(self, sketch: Path | np.ndarray | None, source: SketchSource, prompt: str, *, rotation: int,
@@ -505,6 +540,43 @@ class AppController:
         suggestion = drawing.suggest(captured, source=source, rotation=rotation, prompt=prompt, seed=seed,
                                      frame_age_seconds=frame_age_seconds)
         return build_suggestion_view(drawing.record.number, suggestion)
+
+    def record_drawing_capture(self, sketch: Path | np.ndarray | None, source: SketchSource, *, rotation: int,
+                               frame_age_seconds: float | None = None) -> CaptureView | None:
+        """
+        Save an interval capture of the open drawing when one is due, returning at once when none is.
+
+        Args:
+            sketch (Path | np.ndarray | None): Newest fresh webcam frame or uploaded file, or None when there is none.
+            source (SketchSource): Where the sketch came from.
+            rotation (int): Degrees to turn the sketch clockwise.
+            frame_age_seconds (float | None, optional): Age of a streamed webcam frame. Defaults to None.
+
+        Returns:
+            CaptureView | None: The saved capture, or None when no drawing is open, there is no frame, the last capture is
+                less than 0.8 of the save interval old, or another call is saving one.
+        """
+        # Let one call save at a time, and turn away calls from other tabs or a fast timer instead of making them wait.
+        if not self._capture_lock.acquire(blocking=False):
+            return None
+
+        try:
+            # Save nothing without an open drawing or a frame, or while the latest capture is recent.
+            drawing = self._find_open_drawing()
+            if drawing is None or sketch is None:
+                return None
+
+            since_last = drawing.seconds_since_last_capture
+            if since_last is not None and since_last < CAPTURE_DUE_SHARE * drawing.record.save_interval_seconds:
+                return None
+
+            # Check the inputs, then save the frame as JPEG with its canvas and alignment.
+            self._check_drawing_inputs(sketch, source, rotation, frame_age_seconds)
+            captured = capture_browser_sketch(sketch, INTERVAL_JPEG_QUALITY)
+            capture = drawing.record_capture(captured, source=source, rotation=rotation, frame_age_seconds=frame_age_seconds)
+            return build_capture_view(drawing.record.number, capture)
+        finally:
+            self._capture_lock.release()
 
     def preview_guided_sketch(self, sketch: Path | np.ndarray | None, rotation: int) -> bytes | None:
         """

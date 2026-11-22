@@ -17,6 +17,7 @@ from sketchloop.experiments.provenance import redact_paths
 from sketchloop.experiments.serialization import (backend_from_dict, backend_to_dict, check_schema_version, decode_value,
                                                   effective_from_dict, effective_to_dict, encode_value, image_from_dict,
                                                   parse_time)
+from sketchloop.follow import Alignment, CaptureScores, FollowMethod
 from sketchloop.preprocessing import PreprocessingStep
 from sketchloop.stroke_suggestion import (CANVAS_GRID_PIXELS, PART_COLORS, StrokeSuggestion, StrokeSuggestionRequest,
                                           SuggestedPart, is_count)
@@ -59,6 +60,7 @@ class SuggestionStage(StrEnum):
     GENERATION = "generation"
     EXTRACTION = "extraction"
     OVERLAY = "overlay"
+    SCORING = "scoring"
     SAVING = "saving"
 
 
@@ -119,6 +121,7 @@ class CaptureRecord:
     steps: tuple[PreprocessingStep, ...]  # Steps that made the canvas, empty when it failed
     timings_seconds: Mapping[str, float]  # Duration by stage, holding only stages that ran and were timed
     failure: StageFailure | None  # Why the canvas could not be made, None when it was
+    follow: CaptureScores | None = None  # Alignment to the open suggestion's baseline, None outside a window or without a canvas
 
     def __post_init__(self) -> None:
         # Number, time, and trigger place the capture in the drawing.
@@ -142,6 +145,7 @@ class CaptureRecord:
         has_one = (self.canvas is None) == (self.failure is not None)
         require(has_one, f"Capture {self.number} needs a canvas or a failure, not both.")
         require(self.canvas is None or self.canvas.mode == ColorMode.L, f"Capture {self.number} canvas must be mode L.")
+        require(self.follow is None or self.canvas is not None, f"Capture {self.number} has follow scores without a canvas.")
         object.__setattr__(self, "steps", tuple(self.steps))
         object.__setattr__(self, "timings_seconds", freeze_timings(self.timings_seconds, f"Capture {self.number}"))
 
@@ -233,6 +237,7 @@ class DrawingRecord:
     captures: tuple[CaptureRecord, ...]  # Captures in order
     suggestions: tuple[SuggestionRecord, ...]  # Suggestions in order, shown or failed
     final_capture: int | None  # Number of the capture taken at finish, None while open or when finished without a frame
+    follow_detector: FollowMethod | None = None  # Follow method and parameters, None with suggestions off or in older drawings
 
     def __post_init__(self) -> None:
         # Identity, times, and the end are consistent.
@@ -263,6 +268,7 @@ class DrawingRecord:
         require(self.suggestions_enabled or not self.suggestions, "A drawing with suggestions off cannot have suggestions.")
         self._check_captures()
         self._check_suggestions()
+        self._check_follow()
 
     def _check_captures(self) -> None:
         # Captures are numbered without gaps, and every canvas has the drawing's canvas size.
@@ -300,6 +306,18 @@ class DrawingRecord:
                 require(valid_baseline and baseline.at <= suggestion.shown_at,
                         f"Suggestion {number} baseline must be a suggestion capture with a canvas, taken before it was shown.")
 
+    def _check_follow(self) -> None:
+        # Scores need the method that made them, and each names the latest suggestion shown before its capture.
+        shown = [suggestion for suggestion in self.suggestions if suggestion.status == SuggestionStatus.SHOWN]
+        for capture in self.captures:
+            if capture.follow is None:
+                continue
+
+            number, scored = capture.number, capture.follow.suggestion
+            require(self.follow_detector is not None, f"Capture {number} has follow scores but no follow method.")
+            earlier = [suggestion.number for suggestion in shown if suggestion.baseline_capture < number]
+            require(earlier and earlier[-1] == scored, f"Capture {number} is scored against suggestion {scored}, not the one open when it was taken.")  # noqa: E501
+
 
 def plain_value(value: ControlValue) -> ControlValue:
     """
@@ -335,6 +353,55 @@ def image_or_none(data: Mapping[str, object] | None) -> ImageRef | None:
     return None if data is None else image_from_dict(data)
 
 
+def alignment_to_dict(alignment: Alignment) -> dict[str, object]:
+    """
+    Serialize an alignment, with the warp as a list of rows and an unavailable correlation as its reason.
+    """
+    return {
+        "converged": alignment.converged,
+        "correlation": encode_value(alignment.correlation),
+        "warp": [list(row) for row in alignment.warp] if alignment.warp is not None else None,
+        "occluded_share": alignment.occluded_share,
+    }
+
+
+def capture_scores_to_dict(scores: CaptureScores) -> dict[str, object]:
+    """
+    Serialize a capture's scores against the open suggestion, in the fixed key order of drawing.json.
+    """
+    return {
+        "suggestion": scores.suggestion,
+        "seconds_since_shown": scores.seconds_since_shown,
+        "alignment": alignment_to_dict(scores.alignment),
+        "new_stroke_pixels": scores.new_stroke_pixels,
+    }
+
+
+def capture_scores_from_dict(data: Mapping[str, object]) -> CaptureScores:
+    """
+    Rebuild a capture's scores through their validating constructors.
+    """
+    alignment_data = data["alignment"]
+    alignment = Alignment(converged=alignment_data["converged"], correlation=decode_value(alignment_data["correlation"]),
+                          warp=alignment_data["warp"], occluded_share=alignment_data["occluded_share"])
+    return CaptureScores(suggestion=data["suggestion"], seconds_since_shown=data["seconds_since_shown"], alignment=alignment,
+                         new_stroke_pixels=data["new_stroke_pixels"])
+
+
+def follow_method_to_dict(method: FollowMethod) -> dict[str, object]:
+    """
+    Serialize the drawing's follow method with plain parameter values.
+    """
+    return {"method": method.name, "version": method.version, "params": {name: plain_value(value) for name, value in method.params.items()}}  # noqa: E501
+
+
+def follow_method_from_dict(data: Mapping[str, object] | None) -> FollowMethod | None:
+    """
+    Rebuild the drawing's follow method, or None when the record holds none.
+    """
+    return None if data is None else FollowMethod(name=data["method"], version=data["version"], params=data["params"])
+
+
 def capture_to_dict(capture: CaptureRecord) -> dict[str, object]:
     """
     Serialize a capture in the fixed key order of drawing.json.
@@ -357,6 +424,7 @@ def capture_to_dict(capture: CaptureRecord) -> dict[str, object]:
         "canvas": asdict(capture.canvas) if capture.canvas else None,
         "preprocessing": steps_to_list(capture.steps),
         "timings_seconds": dict(capture.timings_seconds),
+        "follow": capture_scores_to_dict(capture.follow) if capture.follow else None,
         "failure": asdict(capture.failure) if capture.failure else None,
     }
 
@@ -372,11 +440,15 @@ def capture_from_dict(data: Mapping[str, object]) -> CaptureRecord:
         CaptureRecord: The validated capture.
     """
     failure = StageFailure(**data["failure"]) if data["failure"] is not None else None
+
+    # Captures saved before follow detection have no follow key.
+    follow = capture_scores_from_dict(data["follow"]) if data.get("follow") is not None else None
     return CaptureRecord(number=data["number"], trigger=data["trigger"], at=parse_time(data["at"]),
                          seconds_since_start=data["seconds_since_start"], source=data["source"],
                          frame_age_seconds=decode_value(data["frame_age_seconds"]), rotation=data["rotation"],
                          raw=image_from_dict(data["raw"]), canvas=image_or_none(data["canvas"]),
-                         steps=steps_from_list(data["preprocessing"]), timings_seconds=data["timings_seconds"], failure=failure)
+                         steps=steps_from_list(data["preprocessing"]), timings_seconds=data["timings_seconds"], failure=failure,
+                         follow=follow)
 
 
 def stroke_request_to_dict(request: StrokeSuggestionRequest) -> dict[str, object]:
@@ -525,6 +597,7 @@ def drawing_to_dict(record: DrawingRecord) -> dict[str, object]:
         "save_interval_seconds": record.save_interval_seconds,
         "suggestions_enabled": record.suggestions_enabled,
         "suggester": record.suggester,
+        "follow_detector": follow_method_to_dict(record.follow_detector) if record.follow_detector else None,
         "captures": [capture_to_dict(capture) for capture in record.captures],
         "suggestions": [suggestion_to_dict(suggestion) for suggestion in record.suggestions],
         "final_capture": record.final_capture,
@@ -550,7 +623,8 @@ def drawing_from_dict(data: Mapping[str, object]) -> DrawingRecord:
                          save_interval_seconds=data["save_interval_seconds"], suggestions_enabled=data["suggestions_enabled"],
                          suggester=data["suggester"], captures=tuple(capture_from_dict(item) for item in data["captures"]),
                          suggestions=tuple(suggestion_from_dict(item) for item in data["suggestions"]),
-                         final_capture=data["final_capture"])
+                         final_capture=data["final_capture"],
+                         follow_detector=follow_method_from_dict(data.get("follow_detector")))
 
 
 def list_drawing_images(record: DrawingRecord) -> list[ImageRef]:
