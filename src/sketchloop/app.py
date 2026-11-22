@@ -82,7 +82,7 @@ class SuggestionView:
     colors: tuple[str, ...]  # Overlay color of each part, by index
     is_fake: bool  # Whether the fake suggester drew the parts
     generation_seconds: float | None  # Seconds the suggester spent generating, None when it reported none
-    status: str  # One line such as "Suggestion 2: 3 parts in 3.1 s" or the no-new-strokes message
+    status: str  # One line such as "Suggestion 2: 3 colored parts" or the no-new-strokes message
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -100,9 +100,9 @@ class DrawingView:
 
 def count_parts(count: int) -> str:
     """
-    Say a part count in words, such as "1 part" or "3 parts".
+    Say a count of colored parts in words, such as "1 colored part" or "3 colored parts".
     """
-    return f"{count} part" if count == 1 else f"{count} parts"
+    return f"{count} colored part" if count == 1 else f"{count} colored parts"
 
 
 def build_suggestion_view(drawing_number: int, suggestion: SuggestionRecord) -> SuggestionView:
@@ -118,9 +118,10 @@ def build_suggestion_view(drawing_number: int, suggestion: SuggestionRecord) -> 
     """
     result = suggestion.result
     seconds = suggestion.timings_seconds.get(SuggestionStage.GENERATION)
-    timing = f" in {seconds:.1f} s" if seconds is not None else ""
     parts = len(result.parts)
-    status = f"Suggestion {suggestion.number}: {count_parts(parts)}{timing}" if parts else NO_NEW_STROKES_MESSAGE
+
+    # Say what the person sees, and leave the timing to the records, since a participant has no use for it.
+    status = f"Suggestion {suggestion.number}: {count_parts(parts)}" if parts else NO_NEW_STROKES_MESSAGE
     return SuggestionView(drawing=drawing_number, number=suggestion.number, part_count=parts, colors=suggestion.part_colors,
                           is_fake=result.suggester.is_fake, generation_seconds=seconds, status=status)
 

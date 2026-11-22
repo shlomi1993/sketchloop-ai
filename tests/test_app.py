@@ -294,9 +294,9 @@ def test_app_guided_drawing_in_named_folder(tmp_path: Path, sheet_frame: np.ndar
 
     # The views report the drawing and a fake suggestion with its colors, recorded with the prompt exactly as typed.
     assert started.is_open and started.experiment == "participant1_car", f"Unexpected start view {started}"
-    assert view.part_count == 2 and view.is_fake and view.status.startswith("Suggestion 1: 2 parts in"), f"Bad view {view}"
+    assert view.part_count == 2 and view.is_fake and view.status == "Suggestion 1: 2 colored parts", f"Bad view {view}"
     assert saved.drawings[0].suggestions[0].request.prompt == "", "The empty prompt must be recorded unchanged"
-    assert not finished.is_open and finished.suggestion_lines == ("Suggestion 1: 2 parts",), f"Bad finish view {finished}"
+    assert not finished.is_open and finished.suggestion_lines == ("Suggestion 1: 2 colored parts",), f"Bad finish view {finished}"
     assert controller.latest_drawing() == finished, "latest_drawing must restore the finished view"
 
     # The guided preview has the canvas size.

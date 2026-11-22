@@ -190,21 +190,21 @@ def test_drawing_status_and_buttons_follow_the_drawing() -> None:
     assert "p1" in status and "drawing 1" in status, f"The status must name the experiment and drawing, got {status!r}"
 
     # The open drawing's preview is taller, and its label names suggested strokes only once there are some.
-    with_suggestion = ui.style_sketch_view(make_drawing_view(is_open=True, suggestion_lines=("Suggestion 1: 2 parts",)))
+    with_suggestion = ui.style_sketch_view(make_drawing_view(is_open=True, suggestion_lines=("Suggestion 1: 2 colored parts",)))
     assert sketch_view.height == ui.GUIDED_PREVIEW_HEIGHT, f"Expected a taller guided preview, got {sketch_view.height}"
     labels = [sketch_view.label, with_suggestion.label]
     assert labels == [ui.OPEN_DRAWING_LABEL, ui.GUIDED_PREVIEW_LABEL], f"Unexpected preview labels {labels}"
 
     # A suggestion's line follows, a fake one is labeled, and the no-new-strokes message is passed through.
-    fake = ui.describe_drawing_status(open_view, make_suggestion_view(status="Suggestion 1: 2 parts in 0.1 s", is_fake=True))
+    fake = ui.describe_drawing_status(open_view, make_suggestion_view(status="Suggestion 1: 2 colored parts", is_fake=True))
     empty = ui.describe_drawing_status(open_view, make_suggestion_view(status=NO_NEW_STROKES_MESSAGE, is_fake=False))
-    assert fake.startswith(ui.FAKE_SUGGESTER_PREFIX) and fake.endswith("Suggestion 1: 2 parts in 0.1 s"), f"Bad {fake!r}"
+    assert fake.startswith(ui.FAKE_SUGGESTER_PREFIX) and fake.endswith("Suggestion 1: 2 colored parts"), f"Bad {fake!r}"
     assert empty.endswith(NO_NEW_STROKES_MESSAGE) and ui.FAKE_SUGGESTER_PREFIX not in empty, f"Bad {empty!r}"
 
     # After a reload the latest suggestion line is shown, and a finished drawing says how many suggestions it had.
-    restored = ui.describe_drawing_status(make_drawing_view(is_open=True, suggestion_lines=("Suggestion 1: 2 parts",)))
-    finished = ui.describe_drawing_status(make_drawing_view(is_open=False, suggestion_lines=("Suggestion 1: 2 parts",)))
-    assert restored.endswith("Suggestion 1: 2 parts"), f"A reload must show the latest suggestion, got {restored!r}"
+    restored = ui.describe_drawing_status(make_drawing_view(is_open=True, suggestion_lines=("Suggestion 1: 2 colored parts",)))
+    finished = ui.describe_drawing_status(make_drawing_view(is_open=False, suggestion_lines=("Suggestion 1: 2 colored parts",)))
+    assert restored.endswith("Suggestion 1: 2 colored parts"), f"A reload must show the latest suggestion, got {restored!r}"
     assert "finished" in finished and "1 suggestion" in finished, f"Unexpected finished status {finished!r}"
 
 
@@ -248,7 +248,7 @@ def test_page_starts_suggests_and_finishes_a_drawing(controller: AppController, 
     waiting, disabled = page.show_suggesting()
     assert waiting == ui.SUGGESTING_STATUS and disabled.interactive is False, "A running suggestion must say so and lock"
     status, sketch_view = page.suggest_next_strokes("webcam", None, "", 0)
-    assert status.startswith(ui.FAKE_SUGGESTER_PREFIX) and "Suggestion 1: 2 parts" in status, f"Bad status {status!r}"
+    assert status.startswith(ui.FAKE_SUGGESTER_PREFIX) and "Suggestion 1: 2 colored parts" in status, f"Bad status {status!r}"
     assert sketch_view.label == ui.GUIDED_PREVIEW_LABEL and sketch_view.value, f"Bad sketch view {sketch_view.label!r}"
     recorded_prompt = controller.session.drawings[0].record.suggestions[0].request.prompt
     assert recorded_prompt == "", f"The empty prompt must be sent as typed, got {recorded_prompt!r}"
@@ -259,7 +259,7 @@ def test_page_starts_suggests_and_finishes_a_drawing(controller: AppController, 
 
     # After the suggestion its button is enabled again, and a failure would show the drawing's own status line.
     assert page.update_suggest_button().interactive is True, "Suggest must be enabled again while the drawing is open"
-    assert page.show_drawing_status().endswith("Suggestion 1: 2 parts"), "The status must fall back to the latest suggestion"
+    assert page.show_drawing_status().endswith("Suggestion 1: 2 colored parts"), "Status must show the latest suggestion"
 
     # Finish keeps the frame as the final capture, disables Suggest and Finish, and allows a new session again.
     status, suggest, finish, new_session, *_ = page.finish_drawing("webcam", None, 0)
