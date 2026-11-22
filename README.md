@@ -86,7 +86,7 @@ Run `sketchloop`, which is short for `sketchloop ui`. The page is served on 127.
 
 The page lists the current session's history, and **New session** starts a fresh session with the model still loaded. All browser tabs share one session, and reloading the page keeps it.
 
-**Guided drawing:** under **Experiment**, type a code such as `participant1_car`, never a real name, and press **Start drawing**. The code names the session folder, as in `runs/participant1_car/`. While the drawing is open, **Suggest next strokes** sends the current sketch and the prompt box text as typed, even when empty, and the sketch view shows the live paper with the suggested parts in color. **Finish drawing** keeps the current sketch as the final drawing. The stroke suggester is set under `[stroke_suggester]` in the settings, and the fake one draws labeled test shapes.
+**Guided drawing:** under **Experiment**, type a code such as `participant1_car`, never a real name, and press **Start drawing**. The code names the session folder, as in `runs/participant1_car/`. While the drawing is open, **Suggest next strokes** sends the current sketch and the prompt box text as typed, even when empty, and the sketch view shows the live paper with the suggested parts in color. **Finish drawing** keeps the current sketch as the final drawing. Every suggestion is checked against what is drawn until the next suggestion appears or the drawing ends, and is recorded as followed, not followed, or undetermined, part by part. The page never shows this to the participant, and `sketchloop show` prints it. The stroke suggester is set under `[stroke_suggester]` in the settings, and the fake one draws labeled test shapes.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -139,7 +139,7 @@ sketchloop show runs/<session>
 sketchloop rerun runs/<session> --round 1
 ```
 
-`show` prints the records and lists missing or changed files. `rerun` recreates the backend and settings from the recorded round, generates from the stored `sketch.png`, and reports which candidates came out byte-identical and what changed in the environment. It never claims exact replay when the backend cannot guarantee it.
+`show` prints the records and lists missing or changed files. For a guided drawing it prints the experiment name, the drawing's length and captures, the suggester and the rule, and for each suggestion its prompt as typed, parts, timings, and whether each part was followed. `rerun` recreates the backend and settings from the recorded round, generates from the stored `sketch.png`, and reports which candidates came out byte-identical and what changed in the environment. It never claims exact replay when the backend cannot guarantee it.
 
 ### Benchmark
 

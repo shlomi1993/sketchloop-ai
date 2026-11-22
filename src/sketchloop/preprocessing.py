@@ -248,13 +248,15 @@ def find_paper_mask(image: np.ndarray, scale: float) -> np.ndarray:
     return paper_mask
 
 
-def straighten_tilt(gray: np.ndarray, scale: float) -> tuple[np.ndarray, float]:
+def straighten_tilt(gray: np.ndarray, scale: float, tilt_from_hull: bool = False) -> tuple[np.ndarray, float]:
     """
     Turn the image so the largest bright region's edges are level, for a tilted sheet whose corners are not all visible.
 
     Args:
         gray (np.ndarray): Grayscale image.
         scale (float): Ratio of the image's long side to the reference long side.
+        tilt_from_hull (bool, optional): Measure the edges of the region's convex hull, which bridges intrusions such as a
+            hand. Defaults to False.
 
     Returns:
         tuple[np.ndarray, float]: The straightened image, enlarged to keep every pixel, and the tilt it removed in degrees.
@@ -264,8 +266,10 @@ def straighten_tilt(gray: np.ndarray, scale: float) -> tuple[np.ndarray, float]:
         return gray, 0.0
 
     # Measure the tilt from the paper's own edges, skipping edges where the frame cuts the sheet, and leave a level sheet.
+    # The convex hull bridges a hand or arm reaching in from the frame edge, whose sides would otherwise read as the sheet's.
     height, width = gray.shape
     paper = max(contours, key=cv2.contourArea)
+    paper = cv2.convexHull(paper) if tilt_from_hull else paper
     outline = cv2.approxPolyDP(paper, 0.004 * cv2.arcLength(paper, True), True).reshape(-1, 2).astype(np.float64)
     on_frame = is_on_frame_edge(outline, width, height)
     inner_edges = list_outline_edges(outline)[~(on_frame & np.roll(on_frame, -1))]
@@ -282,7 +286,8 @@ def straighten_tilt(gray: np.ndarray, scale: float) -> tuple[np.ndarray, float]:
     return straightened, round(tilt, 1)
 
 
-def isolate_paper(gray: np.ndarray, scale: float, keep_warped_sheet: bool = False) -> tuple[np.ndarray, np.ndarray, dict[str, ControlValue]]:  # noqa: E501
+def isolate_paper(gray: np.ndarray, scale: float, keep_warped_sheet: bool = False,
+                  tilt_from_hull: bool = False) -> tuple[np.ndarray, np.ndarray, dict[str, ControlValue]]:
     """
     Straighten the paper by its corners or, when some are hidden, by its edges, then whiten everything outside its outline.
 
@@ -290,6 +295,7 @@ def isolate_paper(gray: np.ndarray, scale: float, keep_warped_sheet: bool = Fals
         gray (np.ndarray): Grayscale image.
         scale (float): Ratio of the image's long side to the reference long side.
         keep_warped_sheet (bool, optional): Take a sheet warped by its corners whole. Defaults to False.
+        tilt_from_hull (bool, optional): Level a sheet without corners by its outline's convex hull. Defaults to False.
 
     Returns:
         tuple[np.ndarray, np.ndarray, dict[str, ControlValue]]: The paper-only image, the paper mask, and the parameters used.
@@ -298,8 +304,9 @@ def isolate_paper(gray: np.ndarray, scale: float, keep_warped_sheet: bool = Fals
 
     # Straighten a tilted sheet whose corners are not all visible, using its visible edges.
     if not params["corners_found"]:
-        flattened, tilt = straighten_tilt(flattened, scale)
+        flattened, tilt = straighten_tilt(flattened, scale, tilt_from_hull)
         params |= {"tilt_degrees": tilt, "width": flattened.shape[1], "height": flattened.shape[0]}
+        params |= {"tilt_outline": "convex_hull"} if tilt_from_hull else {}
 
     # A sheet warped by its corners fills the image, so when asked, take it whole rather than its brightest region.
     whole_sheet = keep_warped_sheet and bool(params["corners_found"])
@@ -622,9 +629,10 @@ def make_paper_canvas(payload: bytes, rotation: int, width: int, height: int) ->
         PreprocessingStep(name="rotate", params={"degrees_clockwise": rotation}),
     ]
 
-    # Keep the whole sheet, warped by its corners when all are visible, without dropping any stroke on it.
+    # Keep the whole sheet, warped by its corners when all are visible, without dropping any stroke on it. Without corners,
+    # level it by its outline's convex hull, so a hand reaching in from the frame edge cannot turn the canvas.
     pixel_scale = max(rotated.shape) / REFERENCE_LONG_SIDE_PIXELS
-    paper_only, paper_mask, paper_params = isolate_paper(rotated, pixel_scale, keep_warped_sheet=True)
+    paper_only, paper_mask, paper_params = isolate_paper(rotated, pixel_scale, keep_warped_sheet=True, tilt_from_hull=True)
 
     # Fill outside the sheet with the paper's own level, since a white border makes the paper beside it look like strokes.
     # The filled area, such as a hand reaching in from the frame edge, is kept as a mask, so it is known to be unseen.

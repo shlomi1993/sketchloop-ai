@@ -396,3 +396,46 @@ def test_paper_canvas_with_corners_fills_only_a_thin_rim() -> None:
     inner[20:-20, 20:-20] = True
     assert not (filled & inner).any(), "Nothing inside the rim may be filled"
     assert filled[0, 0] and filled[-1, -1], "The eroded rim at the canvas corners must be filled"
+
+
+def photograph_full_frame_sheet(with_hand: bool) -> bytes:
+    """
+    Photograph a sheet that fills the whole frame with a rectangle on it, optionally with a hand and arm from the lower right.
+    """
+    photo = np.full((600, 800), 215, dtype=np.uint8)
+    cv2.rectangle(photo, (300, 150), (500, 300), 50, 4)
+    if with_hand:
+        cv2.ellipse(photo, (560, 450), (70, 45), 25, 0, 360, 110, -1)
+        cv2.line(photo, (560, 450), (799, 599), 110, 48)
+
+    return cv2.imencode(".png", photo)[1].tobytes()
+
+
+def test_paper_canvas_ignores_a_hand_from_the_frame_edge_when_leveling() -> None:
+    """
+    A hand reaching in from the frame edge is not read as the sheet's edge, so the canvas is not turned and its strokes stay put.
+    """
+    plain = make_paper_canvas(photograph_full_frame_sheet(with_hand=False), 0, *CANVAS_SIZE)
+    with_hand = make_paper_canvas(photograph_full_frame_sheet(with_hand=True), 0, *CANVAS_SIZE)
+
+    # The sheet's outline is measured by its convex hull, which bridges the hand, so no tilt is removed.
+    paper = with_hand.steps[2].params
+    assert paper["tilt_degrees"] == 0.0, f"A hand must not tilt the canvas, got {paper['tilt_degrees']} degrees"
+    assert paper["tilt_outline"] == "convex_hull", f"The canvas must record how its tilt was measured, got {dict(paper)}"
+
+    # Every stroke of the capture with the hand lies within 3 px of a stroke of the capture without it.
+    plain_strokes = decode_stroke_mask(extract_canvas_strokes(plain.payload).payload)
+    hand_strokes = decode_stroke_mask(extract_canvas_strokes(with_hand.payload).payload)
+    distance_to_plain = cv2.distanceTransform(np.where(plain_strokes, 0, 255).astype(np.uint8), cv2.DIST_L2, 5)
+    worst = float(distance_to_plain[hand_strokes].max())
+    assert hand_strokes.any() and worst <= 3, f"Strokes must stay within 3 px with a hand in the frame, got {worst:.1f} px"
+
+
+def test_generation_preprocessing_keeps_measuring_tilt_by_the_outline() -> None:
+    """
+    preprocess_sketch keeps its own leveling, which does not record a tilt outline, so generation sketches stay unchanged.
+    """
+    result = preprocess_sketch(photograph_full_frame_sheet(with_hand=True))
+
+    # The generation path records no tilt outline step parameter.
+    assert "tilt_outline" not in result.steps[2].params, f"Unexpected tilt outline in {dict(result.steps[2].params)}"

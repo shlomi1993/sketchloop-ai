@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import threading
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Final
 
@@ -17,7 +17,8 @@ from sketchloop.domain import ColorMode, InvalidRecordError, SketchLoopError, Sk
 from sketchloop.drawing import (INTERVAL_JPEG_QUALITY, NO_STROKES_MESSAGE, GuidedDrawing, check_suggestion_output,
                                 compress_interval_frame, parse_hex_color)
 from sketchloop.experiments import (CaptureTrigger, DrawingEnd, DrawingRecord, MemoryStore, StoreError, SuggestionStage,
-                                    SuggestionStatus, drawing_from_dict, drawing_to_dict)
+                                    SuggestionStatus, WindowEnd, decide_suggestion, drawing_from_dict, drawing_to_dict)
+from sketchloop.follow import NO_USABLE_CAPTURE_REASON, PROVISIONAL_RULE, FollowResult, FollowRule
 from sketchloop.preprocessing import make_paper_canvas
 from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester, encode_png
 from sketchloop.stroke_suggestion import (LINE_DRAWING_FILE, PART_COLORS, StrokeSuggester, StrokeSuggestionError,
@@ -26,6 +27,7 @@ from sketchloop.stroke_suggestion import (LINE_DRAWING_FILE, PART_COLORS, Stroke
 
 SESSION_ID: Final = "session"
 CANVAS_SIZE: Final = (512, 360)
+PartDrawer = Callable[[np.ndarray, bytes], np.ndarray]  # Draws a part's mask on a sheet frame
 OUT_OF_MEMORY: Final = "Next-stroke suggestion failed: out of memory. Free memory and retry."
 
 
@@ -220,8 +222,9 @@ def test_drawing_records_failed_suggestion_and_keeps_previous(sheet_frame: np.nd
         suggest(drawing, sheet_capture)
     failed = store.drawings[(SESSION_ID, 1)].suggestions[1]
 
-    # The failure is saved with its stage, request, and baseline capture, and without a result.
+    # The failure is saved with its stage, request, and baseline capture, and without a result, and its input is saved.
     assert failed.status == SuggestionStatus.FAILED and failed.failure.stage == stage, f"Unexpected failure {failed.failure}"
+    assert (SESSION_ID, 1, failed.request.canvas.path) in store.drawing_files, "The failed press's strokes must be saved"
     assert failed.request is not None and failed.result is None, f"A failed press keeps its request only, got {failed}"
     assert failed.baseline_capture == 2 and failed.shown_at is None, f"Unexpected baseline or time {failed}"
 
@@ -262,7 +265,8 @@ def test_drawing_resaves_capture_after_failed_save(sheet_capture: CapturedSketch
     files = {path for (_, _, path) in store.drawing_files}
     assert len(saved.captures) == 1 and saved.suggestions[0].failure.stage == SuggestionStage.SAVING, f"Unexpected record {saved}"
     assert "captures/capture-0001-raw.png" in files, f"The capture's frame must be saved on the next save, got {files}"
-    assert not any(path.startswith("suggestions/") for path in files), f"A failed suggestion keeps no files, got {files}"
+    suggestion_files = {path for path in files if path.startswith("suggestions/")}
+    assert suggestion_files == {"suggestions/suggestion-1/strokes.png"}, f"A failed suggestion keeps only its input, got {files}"
 
 
 def test_drawing_finish_without_frame_and_preview_without_suggestion(sheet_frame: np.ndarray) -> None:
@@ -364,7 +368,7 @@ def test_drawing_interval_captures_are_jpeg_and_aligned(sheet_frame: np.ndarray,
 
 def test_drawing_without_part_scores_loads(sheet_capture: CapturedSketch) -> None:
     """
-    A drawing.json written before part scores, filled masks, and the JPEG quality loads with those marked as not recorded.
+    A drawing.json saved before part scores, filled masks and shares, and the JPEG quality loads them as not recorded.
     """
     drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
     suggest(drawing, sheet_capture)
@@ -374,6 +378,7 @@ def test_drawing_without_part_scores_loads(sheet_capture: CapturedSketch) -> Non
     for capture in data["captures"]:
         del capture["filled"]
     del data["captures"][1]["follow"]["parts"]
+    del data["captures"][1]["follow"]["alignment"]["filled_share"]
     loaded = drawing_from_dict(data)
 
     # The quality is unavailable with a reason, and the masks and part scores are absent.
@@ -381,6 +386,7 @@ def test_drawing_without_part_scores_loads(sheet_capture: CapturedSketch) -> Non
     assert all(capture.filled is None for capture in loaded.captures), "Older captures have no filled mask"
     follow = loaded.captures[1].follow
     assert follow.parts is None and follow.alignment.converged, f"Expected an alignment without part scores, got {follow}"
+    assert isinstance(follow.alignment.filled_share, Unavailable), f"Expected no filled share, got {follow.alignment}"
 
 
 def test_drawing_part_scores_must_match_the_suggestion(sheet_capture: CapturedSketch) -> None:
@@ -427,7 +433,7 @@ def test_drawing_without_alignment_fields_loads(sheet_capture: CapturedSketch) -
     suggest(drawing, sheet_capture)
     drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
     data = drawing_to_dict(drawing.record)
-    del data["follow_detector"]
+    del data["follow_detector"], data["rule"]
     for capture in data["captures"]:
         del capture["follow"]
     loaded = drawing_from_dict(data)
@@ -467,3 +473,172 @@ def test_compress_interval_frame_keeps_jpeg(sheet_frame: np.ndarray) -> None:
     assert compress_interval_frame(jpeg) is jpeg, "A JPEG frame must be kept as received"
     size = (compressed.image.width, compressed.image.height, compressed.image.media_type)
     assert size == (640, 480, "image/jpeg") and compressed.capture_seconds >= 0.01, f"Unexpected compressed frame {size}"
+
+
+
+def test_drawing_windows_end_at_the_next_suggestion_and_at_finish(sheet_frame: np.ndarray, sheet_capture: CapturedSketch,
+                                                                   draw_part_on_sheet: PartDrawer) -> None:
+    """
+    A shown suggestion ends the previous window at its press, finish ends the last one, and each gets its decision.
+    """
+    store = MemoryStore()
+    drawing = start_drawing(store, FakeStrokeSuggester())
+    first = drawing.suggest(sheet_capture, source=SketchSource.WEBCAM, rotation=0, prompt="", frame_age_seconds=0.2)
+    part_mask = store.drawing_files[(SESSION_ID, 1, first.result.parts[0].mask.path)]
+    with_part = encode_capture(draw_part_on_sheet(sheet_frame, part_mask))
+    drawing.record_capture(with_part, source=SketchSource.UPLOAD, rotation=0)
+    suggest(drawing, with_part)
+
+    # Suggestion 1's window ended at suggestion 2's press, capture 3, with the drawn part followed and the other not.
+    ended = drawing.record.suggestions[0]
+    assert (ended.window.end, ended.window.last_capture) == (WindowEnd.NEXT_SUGGESTION, 3), f"Unexpected window {ended.window}"
+    parts = [(part.result, part.deciding_capture) for part in ended.decision.parts]
+    assert parts == [(FollowResult.FOLLOWED, 3), (FollowResult.NOT_FOLLOWED, 3)], f"Unexpected part decisions {parts}"
+    assert ended.decision.result == FollowResult.FOLLOWED and ended.decision.rule == PROVISIONAL_RULE, f"Got {ended.decision}"
+
+    # Suggestion 2 stays open until finish, which ends it at the final capture, where nothing new was drawn.
+    assert drawing.record.suggestions[1].window is None, "The latest suggestion's window must stay open"
+    record = drawing.finish(with_part, source=SketchSource.UPLOAD)
+    last = record.suggestions[1]
+    assert (last.window.end, last.window.last_capture) == (WindowEnd.FINISHED, 4), f"Unexpected window {last.window}"
+    assert last.decision.result == FollowResult.UNDETERMINED, f"Nothing new was drawn, got {last.decision}"
+
+    # The rule is recorded once for the drawing, and the record with windows round-trips and was saved.
+    assert record.rule == PROVISIONAL_RULE and store.drawings[(SESSION_ID, 1)] == record, "The decided record must be saved"
+    assert drawing_from_dict(json.loads(json.dumps(drawing_to_dict(record)))) == record, "Windows must load back unchanged"
+
+
+def test_drawing_failed_press_keeps_the_window_open(sheet_capture: CapturedSketch) -> None:
+    """
+    A failed second press neither ends nor decides the first window, which then holds the failed press's capture.
+    """
+    store = MemoryStore()
+    drawing = start_drawing(store, FakeStrokeSuggester())
+    suggest(drawing, sheet_capture)
+    drawing.suggester = FailingSuggester()
+    with pytest.raises(StrokeSuggestionError):
+        suggest(drawing, sheet_capture)
+
+    # The saved record keeps suggestion 1 open after the failure.
+    saved = store.drawings[(SESSION_ID, 1)]
+    assert saved.suggestions[0].window is None and saved.suggestions[0].decision is None, "A failed press must not end it"
+
+    # Ending the drawing for a new session ends suggestion 1, whose window holds the failed press's capture.
+    record = drawing.finish(None, end=DrawingEnd.NEW_SESSION)
+    window = record.suggestions[0].window
+    assert (window.end, window.last_capture) == (WindowEnd.NEW_SESSION, 2), f"Unexpected window {window}"
+    assert record.suggestions[1].window is None, "A failed suggestion has no window"
+
+
+def test_drawing_empty_window_is_undetermined(sheet_capture: CapturedSketch) -> None:
+    """
+    A window that ends before any capture is taken holds no capture and decides every part as undetermined.
+    """
+    drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
+    suggest(drawing, sheet_capture)
+    record = drawing.finish(None, end=DrawingEnd.NEW_SESSION)
+    suggestion = record.suggestions[0]
+
+    # The window has no last capture, and each part has no usable capture.
+    assert suggestion.window.last_capture is None, f"Expected an empty window, got {suggestion.window}"
+    reasons = {(part.result, part.reason) for part in suggestion.decision.parts}
+    assert reasons == {(FollowResult.UNDETERMINED, NO_USABLE_CAPTURE_REASON)}, f"Unexpected part decisions {reasons}"
+
+
+def test_drawing_failed_finish_reopens_the_window(sheet_capture: CapturedSketch) -> None:
+    """
+    A finish whose save fails leaves the drawing and its last window open, so finishing again ends and decides it.
+    """
+    store = FlakyDrawingStore()
+    drawing = start_drawing(store, FakeStrokeSuggester())
+    suggest(drawing, sheet_capture)
+    store.failures_left = 1
+    with pytest.raises(StoreError, match="No space left"):
+        drawing.finish(None)
+
+    # The window is open again, and the next finish ends it.
+    assert drawing.is_open and drawing.record.suggestions[0].window is None, "A failed finish must reopen the window"
+    record = drawing.finish(None)
+    assert record.suggestions[0].window.end == WindowEnd.FINISHED, f"Unexpected window {record.suggestions[0].window}"
+
+
+def test_decide_suggestion_recomputes_a_stored_drawing(sheet_frame: np.ndarray, sheet_capture: CapturedSketch,
+                                                       draw_part_on_sheet: PartDrawer) -> None:
+    """
+    A loaded drawing's suggestion can be decided again from its stored scores with another rule.
+    """
+    store = MemoryStore()
+    drawing = start_drawing(store, FakeStrokeSuggester())
+    first = drawing.suggest(sheet_capture, source=SketchSource.WEBCAM, rotation=0, prompt="", frame_age_seconds=0.2)
+    part_mask = store.drawing_files[(SESSION_ID, 1, first.result.parts[0].mask.path)]
+    drawing.record_capture(encode_capture(draw_part_on_sheet(sheet_frame, part_mask)), source=SketchSource.UPLOAD, rotation=0)
+    loaded = drawing_from_dict(json.loads(json.dumps(drawing_to_dict(drawing.finish(None)))))
+    suggestion = loaded.suggestions[0]
+
+    # The recorded rule gives the recorded decision, and a rule needing far more new strokes leaves it undetermined.
+    assert decide_suggestion(loaded, suggestion, loaded.rule) == suggestion.decision, "The recorded decision must recompute"
+    assert suggestion.decision.result == FollowResult.FOLLOWED, f"The drawn part must be followed, got {suggestion.decision}"
+    stricter = decide_suggestion(loaded, suggestion, FollowRule(min_new_stroke_pixels=100_000))
+    assert stricter.result == FollowResult.UNDETERMINED, f"A stricter rule must change the result, got {stricter}"
+
+
+def break_window_record(data: dict[str, object], case: str) -> None:
+    """
+    Change a saved drawing with two suggestions and a finish so its windows contradict each other in the named way.
+    """
+    first, second = data["suggestions"]
+    if case == "decision-without-window":
+        first["window"] = None
+    elif case == "two-open-windows":
+        first["window"], first["decision"] = None, None
+    elif case == "wrong-last-capture":
+        first["window"]["last_capture"] = 4
+    elif case == "next-without-a-next":
+        second["window"]["end"] = "next_suggestion"
+    elif case == "deciding-outside":
+        first["decision"]["parts"][0] |= {"deciding_capture": 4, "result": "not_followed", "reason": None}
+        first["decision"]["result"] = "not_followed"
+    elif case == "windows-without-rule":
+        data["rule"] = None
+
+
+@pytest.mark.parametrize(("case", "message"), [
+    ("decision-without-window", "decision exactly when its window ended"),
+    ("two-open-windows", "window must be ended"),
+    ("wrong-last-capture", "window ends at capture 3"),
+    ("next-without-a-next", "ends by next_suggestion exactly when one followed"),
+    ("deciding-outside", "decided by captures"),
+    ("windows-without-rule", "without a rule has no suggestion windows"),
+])
+def test_drawing_with_contradicting_windows_is_refused(sheet_capture: CapturedSketch, case: str, message: str) -> None:
+    """
+    A drawing.json whose windows overlap, end in the wrong place, or decide from outside them is refused on load.
+    """
+    drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
+    suggest(drawing, sheet_capture)
+    drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
+    suggest(drawing, sheet_capture)
+    data = json.loads(json.dumps(drawing_to_dict(drawing.finish(sheet_capture, source=SketchSource.UPLOAD))))
+    break_window_record(data, case)
+
+    # The record names the contradiction.
+    with pytest.raises(InvalidRecordError, match=message):
+        drawing_from_dict(data)
+
+
+def test_drawing_saved_before_decisions_loads(sheet_capture: CapturedSketch) -> None:
+    """
+    A finished drawing saved before windows and decisions, without a rule, loads with its suggestions undecided.
+    """
+    drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
+    suggest(drawing, sheet_capture)
+    data = drawing_to_dict(drawing.finish(sheet_capture, source=SketchSource.UPLOAD))
+    del data["rule"]
+    for suggestion in data["suggestions"]:
+        del suggestion["window"], suggestion["decision"]
+    loaded = drawing_from_dict(data)
+
+    # No rule and no window or decision, while the scores stay for a later decision.
+    suggestion = loaded.suggestions[0]
+    assert loaded.rule is None and suggestion.window is None and suggestion.decision is None, f"Unexpected {suggestion}"
+    assert decide_suggestion(loaded, suggestion, PROVISIONAL_RULE).parts, "An older drawing can still be decided from its scores"

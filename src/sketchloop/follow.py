@@ -9,6 +9,7 @@ import numpy as np
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Final
 
@@ -42,6 +43,10 @@ IMPLAUSIBLE_WARP_REASON: Final = "ECC converged to an implausible warp"
 NO_NEW_STROKES_REASON: Final = "no new strokes"
 NO_NEW_STROKES_NEAR_REASON: Final = "no new strokes near the part"
 PART_OCCLUDED_REASON: Final = "the whole part is occluded"
+FILLED_SHARE_NOT_RECORDED: Final = "not recorded in captures aligned before the filled share was"
+NO_USABLE_CAPTURE_REASON: Final = "no usable capture"
+NOTHING_NEW_REASON: Final = "nothing new drawn"
+NO_PARTS_REASON: Final = "no parts suggested"
 
 
 def is_finite_number(value: object) -> bool:
@@ -80,6 +85,7 @@ class Alignment:
     correlation: float | Unavailable  # ECC correlation, unavailable with the reason when ECC did not converge
     warp: tuple[tuple[float, float, float], ...] | None  # 3x3 homography from capture to baseline pixels, None without one
     occluded_share: float  # Share of the capture's canvas masked as an occluder, such as a hand, or filled in rather than seen
+    filled_share: float | Unavailable = Unavailable(FILLED_SHARE_NOT_RECORDED)  # Part of occluded_share filled in, as the rim is
 
     def __post_init__(self) -> None:
         # A converged alignment has a finite correlation and a finite 3x3 warp, and a failed one has neither.
@@ -94,6 +100,12 @@ class Alignment:
             require(isinstance(self.correlation, Unavailable), "An alignment that did not converge has no correlation.")
             require(self.warp is None, "An alignment that did not converge has no warp.")
         check_unit_share(self.occluded_share, "Alignment occluded_share")
+
+        # The filled area is part of the occluded area, so the difference is what an occluder such as a hand covered.
+        if not isinstance(self.filled_share, Unavailable):
+            check_unit_share(self.filled_share, "Alignment filled_share")
+            filled, occluded = self.filled_share, self.occluded_share
+            require(filled <= occluded, f"Alignment filled_share must be at most occluded_share, got {filled} > {occluded}.")
 
 
 def freeze_tolerance_scores(scores: Mapping[int, float | Unavailable], label: str) -> Mapping[int, float | Unavailable]:
@@ -480,7 +492,7 @@ class AlignedStrokeFollowDetector(FollowDetector):
         # Hide occluders and filled areas in both canvases, so neither a hand nor a filled-in edge steers the alignment.
         baseline_hidden = find_occluders(baseline) | decode_mask(baseline_filled, baseline.shape, "Baseline filled mask")
         capture_hidden = find_occluders(capture) | capture_filled_mask
-        occluded_share = float(capture_hidden.mean())
+        occluded_share, filled_share = float(capture_hidden.mean()), float(capture_filled_mask.mean())
         baseline_darkness = make_darkness_map(baseline)
         correlation, baseline_to_capture = align_to_baseline(baseline_darkness, make_darkness_map(capture), ~baseline_hidden,
                                                              ~capture_hidden)
@@ -494,7 +506,9 @@ class AlignedStrokeFollowDetector(FollowDetector):
         if failure is None and warp is None:
             failure = Unavailable(f"{NOT_CONVERGED_REASON}: singular warp")
         if failure is not None:
-            return Alignment(converged=False, correlation=failure, warp=None, occluded_share=occluded_share), None, ()
+            alignment = Alignment(converged=False, correlation=failure, warp=None, occluded_share=occluded_share,
+                                  filled_share=filled_share)
+            return alignment, None, ()
 
         # Warp the capture into the baseline frame, repeating its border so the edge does not look like a stroke.
         flags = cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP
@@ -509,5 +523,200 @@ class AlignedStrokeFollowDetector(FollowDetector):
         # Find the new strokes on the pixels nothing hides, then score each part against them.
         new_strokes = find_new_strokes(baseline_darkness, make_darkness_map(aligned), hidden)
         scores = tuple(score_part(index, part, new_strokes, hidden) for index, part in enumerate(parts))
-        alignment = Alignment(converged=True, correlation=correlation, warp=warp, occluded_share=occluded_share)
+        alignment = Alignment(converged=True, correlation=correlation, warp=warp, occluded_share=occluded_share,
+                              filled_share=filled_share)
         return alignment, int(new_strokes.sum()), scores
+
+
+class FollowResult(StrEnum):
+    """
+    Whether a suggestion, or one of its parts, was followed.
+    """
+    FOLLOWED = "followed"
+    NOT_FOLLOWED = "not_followed"
+    UNDETERMINED = "undetermined"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class FollowRule:
+    """
+    Thresholds that turn a window's recorded scores into followed, not followed, or undetermined.
+    """
+    coverage_tolerance_pixels: int = 16  # Tolerance whose coverage is compared with min_coverage
+    min_coverage: float = 0.35  # Smallest share of the part's skeleton near new strokes for followed
+    precision_tolerance_pixels: int = 16  # Tolerance whose precision is compared with min_precision
+    min_precision: float = 0.4  # Smallest share of the new strokes near the part that lie on it for followed
+    min_correlation: float = 0.3  # A capture aligned with a lower ECC correlation is not usable
+    max_part_occluded_share: float = 0.5  # A capture hiding more of the part than this is not usable for it
+    min_new_stroke_pixels: int = 60  # Fewer new-stroke pixels on the whole canvas than this means nothing new was drawn
+
+    def __post_init__(self) -> None:
+        # Tolerances are pixel counts, the shares are from 0 to 1, and the pixel minimum is a count.
+        for name in ("coverage_tolerance_pixels", "precision_tolerance_pixels"):
+            require(is_count(getattr(self, name), 1), f"Follow rule {name} must be an int >= 1, got {getattr(self, name)!r}.")
+        for name in ("min_coverage", "min_precision", "min_correlation", "max_part_occluded_share"):
+            check_unit_share(getattr(self, name), f"Follow rule {name}")
+        pixels = self.min_new_stroke_pixels
+        require(is_count(pixels, 0), f"Follow rule min_new_stroke_pixels must be an int >= 0, got {pixels!r}.")
+
+    def describe(self) -> str:
+        coverage, precision = self.coverage_tolerance_pixels, self.precision_tolerance_pixels
+        followed = f"coverage_{coverage} >= {self.min_coverage} and precision_{precision} >= {self.min_precision}"
+        return (f"{followed}, undetermined below correlation {self.min_correlation}, over {self.max_part_occluded_share} of a "
+                f"part occluded, or under {self.min_new_stroke_pixels} new pixels")
+
+
+PROVISIONAL_RULE: Final = FollowRule()  # Rule in force until the pilot's hand labels tune it, changed only with an ADR
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PartDecision:
+    """
+    Whether one part of a suggestion was followed, and which capture's scores decided it.
+    """
+    part: int  # Part index
+    result: FollowResult  # The part's result
+    deciding_capture: int | None  # Capture whose scores decided it, None when no capture was usable
+    reason: str | None  # Why it is undetermined, such as "nothing new drawn", None when it was decided
+
+    def __post_init__(self) -> None:
+        # A decided part names its capture, and only an undetermined one has a reason.
+        require(is_count(self.part, 0), f"Decided part must be an int >= 0, got {self.part!r}.")
+        require(self.result in list(FollowResult), f"Part {self.part} result must be one of {', '.join(FollowResult)}.")
+        object.__setattr__(self, "result", FollowResult(self.result))
+        capture = self.deciding_capture
+        require(capture is None or is_count(capture, 1), f"Part {self.part} deciding_capture must be an int >= 1 or null.")
+        undetermined = self.result == FollowResult.UNDETERMINED
+        require(undetermined or capture is not None, f"Part {self.part} is {self.result} without a deciding capture.")
+        has_reason = isinstance(self.reason, str) and bool(self.reason.strip())
+        require(has_reason == undetermined, f"Part {self.part} has a reason exactly when it is undetermined.")
+
+
+def combine_part_results(results: Sequence[FollowResult]) -> FollowResult:
+    """
+    Followed when any part is followed, otherwise not followed when any part is not, otherwise undetermined.
+    """
+    for result in (FollowResult.FOLLOWED, FollowResult.NOT_FOLLOWED):
+        if result in results:
+            return result
+
+    return FollowResult.UNDETERMINED
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class FollowDecision:
+    """
+    Whether a suggestion was followed, decided part by part from its window's scores, with the method and rule used.
+    """
+    method: str  # Detector name, such as "aligned-strokes"
+    method_version: str  # Detector version whose scores were decided
+    rule: FollowRule  # Rule that produced the results
+    result: FollowResult  # The suggestion's result, combined from its parts
+    parts: tuple[PartDecision, ...]  # One per part in index order
+    reason: str | None = None  # Why a suggestion without parts is undetermined, None otherwise
+
+    def __post_init__(self) -> None:
+        # The method is named, the rule is a rule, and the parts are in index order.
+        require(isinstance(self.method, str) and bool(self.method.strip()), "Follow decision needs a method name.")
+        require(isinstance(self.method_version, str) and bool(self.method_version.strip()), "Follow decision needs a version.")
+        require(isinstance(self.rule, FollowRule), f"Follow decision rule must be a FollowRule, got {self.rule!r}.")
+        object.__setattr__(self, "parts", tuple(self.parts))
+        indexes = [part.part if isinstance(part, PartDecision) else None for part in self.parts]
+        require(indexes == list(range(len(indexes))), f"Part decisions must be PartDecision numbered from 0, got {indexes}.")
+
+        # The result is the parts' combination, and only a suggestion without parts has a reason of its own.
+        require(self.result in list(FollowResult), f"Follow decision result must be one of {', '.join(FollowResult)}.")
+        object.__setattr__(self, "result", FollowResult(self.result))
+        expected = combine_part_results([part.result for part in self.parts])
+        require(self.result == expected, f"Follow decision result {self.result} must combine its parts into {expected}.")
+        expected_reason = None if self.parts else NO_PARTS_REASON
+        require(self.reason == expected_reason, f"Follow decision reason must be {expected_reason!r}, got {self.reason!r}.")
+
+
+def read_tolerance(scores: Mapping[int, float | Unavailable], tolerance: int, label: str) -> float | Unavailable:
+    """
+    Return the score at a rule's tolerance, refusing a tolerance the scores were not measured at.
+    """
+    if tolerance not in scores:
+        measured = ", ".join(str(value) for value in sorted(scores))
+        raise ValueError(f"The rule's {label} tolerance of {tolerance} px was not measured. Use one of {measured} px.")
+
+    return scores[tolerance]
+
+
+def find_usable_part(scores: CaptureScores, part: int, rule: FollowRule) -> PartScores | None:
+    """
+    Return a capture's scores of one part when the capture aligned well enough and the part was visible enough, else None.
+
+    Args:
+        scores (CaptureScores): A capture's scores against the suggestion's baseline.
+        part (int): Part index.
+        rule (FollowRule): Rule whose correlation and occlusion limits apply.
+
+    Returns:
+        PartScores | None: The part's scores, or None when this capture cannot decide the part.
+    """
+    alignment = scores.alignment
+    if not alignment.converged or alignment.correlation < rule.min_correlation:
+        return None
+
+    # Scores saved before per-part scoring, or of fewer parts, cannot decide this part.
+    if scores.parts is None or part >= len(scores.parts):
+        return None
+
+    part_scores = scores.parts[part]
+    coverage = read_tolerance(part_scores.coverage, rule.coverage_tolerance_pixels, "coverage")
+    visible = part_scores.occluded_share <= rule.max_part_occluded_share and not isinstance(coverage, Unavailable)
+    return part_scores if visible else None
+
+
+def decide_part(part: int, window: Sequence[tuple[int, CaptureScores]], rule: FollowRule) -> PartDecision:
+    """
+    Decide one part from the latest usable capture of its window, since new strokes accumulate against the baseline.
+
+    Args:
+        part (int): Part index.
+        window (Sequence[tuple[int, CaptureScores]]): Capture numbers and scores in the window, in capture order.
+        rule (FollowRule): Rule to apply.
+
+    Returns:
+        PartDecision: The part's result, its deciding capture, and the reason when undetermined.
+    """
+    usable = [(number, scores, found) for number, scores in window if (found := find_usable_part(scores, part, rule))]
+    if not usable:
+        return PartDecision(part=part, result=FollowResult.UNDETERMINED, deciding_capture=None, reason=NO_USABLE_CAPTURE_REASON)
+
+    # Too few new strokes anywhere means the person has not drawn yet, which says nothing about the part.
+    number, scores, part_scores = usable[-1]
+    if scores.new_stroke_pixels < rule.min_new_stroke_pixels:
+        return PartDecision(part=part, result=FollowResult.UNDETERMINED, deciding_capture=number, reason=NOTHING_NEW_REASON)
+
+    # Followed needs enough of the part drawn over and enough of the nearby new drawing on the part.
+    coverage = read_tolerance(part_scores.coverage, rule.coverage_tolerance_pixels, "coverage")
+    precision = read_tolerance(part_scores.precision, rule.precision_tolerance_pixels, "precision")
+    precise = not isinstance(precision, Unavailable) and precision >= rule.min_precision
+    followed = coverage >= rule.min_coverage and precise
+    result = FollowResult.FOLLOWED if followed else FollowResult.NOT_FOLLOWED
+    return PartDecision(part=part, result=result, deciding_capture=number, reason=None)
+
+
+def decide_follow(window: Sequence[tuple[int, CaptureScores]], part_count: int, rule: FollowRule,
+                  method: tuple[str, str]) -> FollowDecision:
+    """
+    Decide whether a suggestion was followed from the scores recorded in its window, without reading any image.
+
+    Args:
+        window (Sequence[tuple[int, CaptureScores]]): Number and scores of each scored capture in the window.
+        part_count (int): Number of parts the suggestion had.
+        rule (FollowRule): Rule to apply, the recorded one or any other for a reanalysis.
+        method (tuple[str, str]): Name and version of the detector that recorded the scores.
+
+    Returns:
+        FollowDecision: Each part's result and the suggestion's combined result.
+    """
+    ordered = sorted(window, key=lambda entry: entry[0])
+    parts = tuple(decide_part(part, ordered, rule) for part in range(part_count))
+    result = combine_part_results([part.result for part in parts])
+    name, version = method
+    return FollowDecision(method=name, method_version=version, rule=rule, result=result, parts=parts,
+                          reason=None if parts else NO_PARTS_REASON)

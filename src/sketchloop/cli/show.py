@@ -12,13 +12,17 @@ from typing import Final
 from sketchloop.app import describe_selection
 from sketchloop.cli.common import format_machine, format_timings
 from sketchloop.domain import Unavailable
-from sketchloop.experiments import (SESSION_FILE, BenchmarkSummary, ExperimentRecordError, RerunComparison, RoundRecord,
-                                    SavedSession, compare_rounds, format_value, load_session, summarize_benchmark)
+from sketchloop.experiments import (SESSION_FILE, BenchmarkSummary, DrawingRecord, ExperimentRecordError, RerunComparison,
+                                    RoundRecord, SavedSession, SuggestionRecord, SuggestionStage, compare_rounds,
+                                    decide_suggestion, format_value, load_session, summarize_benchmark)
+from sketchloop.follow import PROVISIONAL_RULE, FollowDecision, FollowResult, FollowRule
 
 
 REPLAY_LIMITS: Final = "A rerun restores the recorded conditions. Equal seeds do not guarantee identical images across devices, library versions, or model revisions."  # noqa: E501
 OLDER_TIMINGS_NOTE: Final = "Recorded by an older sketchloop: generation may include the model load, and capture, saving, and total were not measured."  # noqa: E501
 P95_RELIABLE_ROUNDS: Final = 20
+COMPUTED_NOTE: Final = "computed by show, not recorded"
+FAKE_SUGGESTER_WARNING: Final = "FAKE SUGGESTER: these parts are test shapes, not suggestions from a real model."
 
 
 def format_controls(controls: Mapping[str, object]) -> str:
@@ -45,6 +49,9 @@ def print_session_header(saved: SavedSession, console: Console) -> None:
     """
     session, environment = saved.session, saved.session.environment
     console.rule(f"Session {session.session_id}")
+    if session.name is not None:
+        console.print(f"Experiment: {session.name}", markup=False)
+
     console.print(f"Created: {session.created_at.isoformat()}")
     console.print(f"Python {environment.py_version} on {environment.platform}", markup=False)
     console.print(f"Hardware: {format_machine(environment.hardware)}", markup=False, soft_wrap=True)
@@ -122,6 +129,141 @@ def print_round_record(record: RoundRecord, console: Console) -> None:
     console.print(f"Selection: {selection}")
 
 
+def format_duration(seconds: float) -> str:
+    """
+    Format seconds as "12 min 31 s", or "45 s" under a minute.
+    """
+    minutes, rest = divmod(round(seconds), 60)
+    return f"{minutes} min {rest} s" if minutes else f"{rest} s"
+
+
+def format_offset(seconds: float) -> str:
+    """
+    Format seconds from a drawing's start as "+mm:ss".
+    """
+    minutes, rest = divmod(round(seconds), 60)
+    return f"+{minutes:02d}:{rest:02d}"
+
+
+def describe_prompt(suggestion: SuggestionRecord) -> str:
+    """
+    Quote the prompt exactly as typed, say "(empty)" for a blank one, and mark one the model's token limit cut.
+    """
+    prompt = suggestion.request.prompt
+    truncated = suggestion.result is not None and suggestion.result.effective.controls.get("prompt_truncated") is True
+    quoted = f'"{prompt}"' if prompt.strip() else "(empty)"
+    return f"{quoted} (truncated)" if truncated else quoted
+
+
+def describe_part_results(decision: FollowDecision) -> str:
+    """
+    List each part's result by its 1-based number, with the reason when it is undetermined, or the suggestion's own reason.
+    """
+    if not decision.parts:
+        return decision.reason
+
+    words = {FollowResult.FOLLOWED: "followed", FollowResult.NOT_FOLLOWED: "not followed"}
+    results = [words.get(part.result) or f"undetermined ({part.reason})" for part in decision.parts]
+    return ", ".join(f"part {part.part + 1} {result}" for part, result in zip(decision.parts, results, strict=True))
+
+
+def describe_window(record: DrawingRecord, suggestion: SuggestionRecord) -> str:
+    """
+    Describe a suggestion's window: its length and captures, and what ended it, or that it is still open.
+    """
+    window = suggestion.window
+    if window is None:
+        return f"Window open, {len(record.captures) - suggestion.baseline_capture} captures so far"
+
+    captures = window.last_capture - suggestion.baseline_capture if window.last_capture else 0
+    seconds = (window.ended_at - suggestion.shown_at).total_seconds()
+    return f"Window {format_duration(seconds)}, {captures} captures, ended by {window.end.replace('_', ' ')}"
+
+
+def print_suggestion(record: DrawingRecord, suggestion: SuggestionRecord, rule: FollowRule | None, console: Console) -> None:
+    """
+    Print one suggestion in two lines: when, what was asked and returned with its timings, then its result and window.
+
+    Args:
+        record (DrawingRecord): Drawing holding the suggestion.
+        suggestion (SuggestionRecord): Suggestion to print.
+        rule (FollowRule | None): Rule to decide an undecided window with, or None when the drawing has no scores.
+        console (Console): Console used for output.
+    """
+    shown_or_pressed = suggestion.shown_at or suggestion.requested_at
+    offset = format_offset((shown_or_pressed - record.started_at).total_seconds())
+    prompt = describe_prompt(suggestion) if suggestion.request else "no request"
+    if suggestion.failure is not None:
+        failure = suggestion.failure
+        reason = f"failed during {failure.stage}: {failure.error}: {failure.message}"
+        console.print(f"Suggestion {suggestion.number} at {offset}: {prompt}, {reason}", style="red", markup=False)
+        return
+
+    # Say what was asked and returned, and how long the model took, apart from any first load.
+    timings = suggestion.timings_seconds
+    parts = len(suggestion.result.parts)
+    details = [prompt, f"{parts} parts" if parts else "no new strokes", f"seed {format_value(suggestion.result.seed)}"]
+    stages = (SuggestionStage.GENERATION, SuggestionStage.MODEL_LOAD)
+    details += [f"{stage.replace('_', ' ')} {timings[stage]:.2f} s" for stage in stages if stage in timings]
+    console.print(f"Suggestion {suggestion.number} at {offset}: {', '.join(details)}", markup=False, soft_wrap=True)
+
+    # Print the recorded decision, or decide an open or older window from its scores, saying so.
+    decision, note = suggestion.decision, ""
+    if decision is None and rule is not None:
+        decision, note = decide_suggestion(record, suggestion, rule), f", {COMPUTED_NOTE}"
+    outcome = f"{decision.result.replace('_', ' ')}{note}: {describe_part_results(decision)}" if decision else "not scored"
+    console.print(f"  {outcome}. {describe_window(record, suggestion)}.", markup=False, soft_wrap=True)
+
+
+def describe_drawing_state(record: DrawingRecord) -> str:
+    """
+    Say how a drawing ended and after how long, or that it is not finished.
+    """
+    if record.end is None:
+        return "not finished"
+
+    duration = format_duration((record.ended_at - record.started_at).total_seconds())
+    return f"finished after {duration}" if record.end == "finished" else f"ended by a new session after {duration}"
+
+
+def print_drawing_record(record: DrawingRecord, console: Console) -> None:
+    """
+    Print a saved drawing: its state, captures, canvas, suggester, follow method and rule, and each suggestion's result.
+
+    Args:
+        record (DrawingRecord): Saved drawing.
+        console (Console): Console used for output.
+    """
+    console.rule(f"Drawing {record.number}")
+    final = record.captures[record.final_capture - 1] if record.final_capture else None
+    final_text = f", final drawing {(final.canvas or final.raw).path}" if final else ""
+    canvas = f"canvas {record.canvas_width}x{record.canvas_height}"
+    summary = f"{describe_drawing_state(record)}, {len(record.captures)} captures, {canvas}{final_text}"
+    console.print(f"Drawing {record.number}: {summary}", markup=False, soft_wrap=True)
+    if not record.suggestions_enabled:
+        console.print("Suggestions: off")
+        return
+
+    # Name the suggester and the follow method, and warn when the parts came from the fake.
+    results = [suggestion.result for suggestion in record.suggestions if suggestion.result is not None]
+    first = results[0].suggester if results else None
+    identity = f", {first.adapter} {first.adapter_version}, model {format_value(first.model_id)}" if first else ""
+    method = record.follow_detector
+    method_text = f"follow method {method.name} {method.version}" if method else "no follow method, so nothing was scored"
+    console.print(f"Suggester: {record.suggester}{identity}, {method_text}", markup=False, soft_wrap=True)
+    if any(result.suggester.is_fake for result in results):
+        console.print(FAKE_SUGGESTER_WARNING, style="yellow")
+
+    # Name the rule, applying the provisional one to a drawing saved before decisions were recorded.
+    rule = record.rule if record.rule is not None else PROVISIONAL_RULE if method else None
+    if rule is not None:
+        recorded = "Rule" if record.rule is not None else "Rule, not recorded, so show applies the provisional one"
+        console.print(f"{recorded}: {rule.describe()}", markup=False, soft_wrap=True)
+
+    for suggestion in record.suggestions:
+        print_suggestion(record, suggestion, rule, console)
+
+
 def print_benchmark_summary(summary: BenchmarkSummary, records: Sequence[RoundRecord], console: Console) -> None:
     """
     Print a benchmark session's round counts, per-stage statistics table, warm-up timings, and caveats.
@@ -197,6 +339,9 @@ def show_session(args: argparse.Namespace, console: Console) -> None:
     print_session_header(saved, console)
     for record in saved.rounds:
         print_round_record(record, console)
+
+    for drawing in saved.drawings:
+        print_drawing_record(drawing, console)
 
     # Recompute and print a benchmark session's statistics from its saved rounds.
     if saved.session.benchmark is not None:

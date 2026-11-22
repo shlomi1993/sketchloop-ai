@@ -17,7 +17,8 @@ from sketchloop.experiments.provenance import redact_paths
 from sketchloop.experiments.serialization import (backend_from_dict, backend_to_dict, check_schema_version, decode_value,
                                                   effective_from_dict, effective_to_dict, encode_value, image_from_dict,
                                                   parse_time)
-from sketchloop.follow import Alignment, CaptureScores, FollowMethod, PartScores
+from sketchloop.follow import (FILLED_SHARE_NOT_RECORDED, Alignment, CaptureScores, FollowDecision, FollowMethod, FollowRule,
+                               PartDecision, PartScores, decide_follow)
 from sketchloop.preprocessing import PreprocessingStep
 from sketchloop.stroke_suggestion import (CANVAS_GRID_PIXELS, PART_COLORS, StrokeSuggestion, StrokeSuggestionRequest,
                                           SuggestedPart, is_count)
@@ -40,6 +41,15 @@ class DrawingEnd(StrEnum):
     """
     How a drawing ended: the person finished it, or a new session replaced it.
     """
+    FINISHED = "finished"
+    NEW_SESSION = "new_session"
+
+
+class WindowEnd(StrEnum):
+    """
+    What ended a suggestion's window: the next shown suggestion, the drawing's finish, or a new session.
+    """
+    NEXT_SUGGESTION = "next_suggestion"
     FINISHED = "finished"
     NEW_SESSION = "new_session"
 
@@ -159,6 +169,24 @@ class CaptureRecord:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class SuggestionWindow:
+    """
+    How a shown suggestion's window ended: when, why, and the last capture it held.
+    """
+    ended_at: datetime  # Timezone-aware time the window ended
+    end: WindowEnd  # next_suggestion, finished, or new_session
+    last_capture: int | None  # Last capture taken in the window, which a next suggestion's press ends, None when it held none
+
+    def __post_init__(self) -> None:
+        # The end is a known reason, at a known time, after a capture of the drawing when there was one.
+        require(is_aware(self.ended_at), "Suggestion window ended_at must be timezone-aware.")
+        require(self.end in list(WindowEnd), f"Suggestion window end must be one of {', '.join(WindowEnd)}, got {self.end!r}.")
+        object.__setattr__(self, "end", WindowEnd(self.end))
+        last = self.last_capture
+        require(last is None or is_count(last, 1), f"Suggestion window last_capture must be an int >= 1 or null, got {last!r}.")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class SuggestionRecord:
     """
     One press of the suggest button: its baseline capture, request, result, overlay, timings, and any failure.
@@ -175,6 +203,8 @@ class SuggestionRecord:
     overlay: ImageRef | None  # RGBA overlay at the canvas size, None when the suggestion failed
     timings_seconds: Mapping[str, float]  # Duration by stage, holding only stages that ran and were timed
     failure: StageFailure | None  # Why the suggestion failed, None when it was shown
+    window: SuggestionWindow | None = None  # How its window ended, None while open, when failed, or in older drawings
+    decision: FollowDecision | None = None  # Whether it was followed, decided when its window ended, None until then
 
     def __post_init__(self) -> None:
         # Number, ID, times, and the baseline capture identify the press.
@@ -205,6 +235,17 @@ class SuggestionRecord:
         if self.result is not None:
             check_result_fits_request(self.number, self.request, self.result, self.overlay)
         object.__setattr__(self, "timings_seconds", freeze_timings(self.timings_seconds, f"Suggestion {self.number}"))
+        self._check_decision()
+
+    def _check_decision(self) -> None:
+        # Only a shown suggestion has a window, a decision exists exactly when its window ended, and it decides every part.
+        number = self.number
+        require(self.window is None or self.status == SuggestionStatus.SHOWN, f"Failed suggestion {number} has no window.")
+        require((self.window is None) == (self.decision is None), f"Suggestion {number} has a decision exactly when its window ended.")  # noqa: E501
+        if self.window is not None:
+            require(self.window.ended_at >= self.shown_at, f"Suggestion {number} window cannot end before it was shown.")
+            decided, parts = len(self.decision.parts), len(self.result.parts)
+            require(decided == parts, f"Suggestion {number} decision covers {decided} parts, not its {parts}.")
 
 
 def check_result_fits_request(number: int, request: StrokeSuggestionRequest, result: StrokeSuggestion, overlay: ImageRef) -> None:
@@ -247,6 +288,7 @@ class DrawingRecord:
     final_capture: int | None  # Number of the capture taken at finish, None while open or when finished without a frame
     follow_detector: FollowMethod | None = None  # Follow method and parameters, None with suggestions off or in older drawings
     interval_jpeg_quality: int | Unavailable = Unavailable(JPEG_QUALITY_NOT_RECORDED)  # Quality interval frames are encoded at
+    rule: FollowRule | None = None  # Rule deciding suggestions, None with suggestions off or in drawings saved before decisions
 
     def __post_init__(self) -> None:
         # Identity, times, and the end are consistent.
@@ -281,6 +323,7 @@ class DrawingRecord:
         self._check_captures()
         self._check_suggestions()
         self._check_follow()
+        self._check_windows()
 
     def _check_captures(self) -> None:
         # Captures are numbered without gaps, and every canvas has the drawing's canvas size.
@@ -337,6 +380,72 @@ class DrawingRecord:
             require(parts is None or not aligned or len(parts) == expected, f"Capture {number} scores {len(parts or ())} parts, not suggestion {scored}'s {expected}.")  # noqa: E501
 
 
+    def _check_windows(self) -> None:
+        # Drawings saved before decisions have no rule and no windows, and a rule needs the method whose scores it decides.
+        shown = [suggestion for suggestion in self.suggestions if suggestion.status == SuggestionStatus.SHOWN]
+        if self.rule is None:
+            require(all(suggestion.window is None for suggestion in shown), "A drawing without a rule has no suggestion windows.")
+            return
+
+        require(isinstance(self.rule, FollowRule), f"Drawing rule must be a FollowRule, got {self.rule!r}.")
+        require(self.follow_detector is not None, "A drawing with a follow rule needs its follow method.")
+
+        # Only the latest shown suggestion of an open drawing has an open window, so at most one is open.
+        for position, suggestion in enumerate(shown):
+            open_expected = self.end is None and position == len(shown) - 1
+            state = "open" if open_expected else "ended"
+            require((suggestion.window is None) == open_expected, f"Suggestion {suggestion.number}'s window must be {state}.")
+            if suggestion.window is not None:
+                next_baseline = shown[position + 1].baseline_capture if position + 1 < len(shown) else None
+                self._check_window(suggestion, next_baseline)
+
+    def _check_window(self, suggestion: SuggestionRecord, next_baseline: int | None) -> None:
+        # The window holds the captures after the suggestion's press, up to the next shown suggestion's press when there is one.
+        number, window = suggestion.number, suggestion.window
+        last = window.last_capture
+        first_possible = suggestion.baseline_capture + 1
+        valid_last = last is None or first_possible <= last <= len(self.captures)
+        require(valid_last, f"Suggestion {number} window's last capture {last} is not a capture after its press.")
+        by_next = window.end == WindowEnd.NEXT_SUGGESTION
+        require(by_next == (next_baseline is not None), f"Suggestion {number} window ends by next_suggestion exactly when one followed.")  # noqa: E501
+        require(last == next_baseline or next_baseline is None, f"Suggestion {number} window ends at capture {next_baseline}.")
+
+        # Every capture scored against the suggestion lies inside the window, and so does each deciding capture.
+        scored = [capture.number for capture in self.captures if capture.follow and capture.follow.suggestion == number]
+        inside = set(range(first_possible, (last or 0) + 1))
+        require(set(scored) <= inside, f"Suggestion {number} has scored captures {scored} outside its window.")
+        deciding = [part.deciding_capture for part in suggestion.decision.parts if part.deciding_capture is not None]
+        require(set(deciding) <= set(scored), f"Suggestion {number} is decided by captures {deciding} outside its window.")
+
+
+def list_window_scores(record: DrawingRecord, number: int) -> list[tuple[int, CaptureScores]]:
+    """
+    List the number and scores of each capture scored against a suggestion, which are exactly the scored captures of its window.
+    """
+    captures = record.captures
+    return [(capture.number, capture.follow) for capture in captures if capture.follow and capture.follow.suggestion == number]
+
+
+def decide_suggestion(record: DrawingRecord, suggestion: SuggestionRecord, rule: FollowRule) -> FollowDecision:
+    """
+    Decide a shown suggestion from the scores its drawing recorded, with any rule, without reading an image.
+
+    Args:
+        record (DrawingRecord): Drawing that holds the suggestion and its scored captures.
+        suggestion (SuggestionRecord): Shown suggestion to decide.
+        rule (FollowRule): Rule to apply, the drawing's own or another one for a reanalysis.
+
+    Returns:
+        FollowDecision: The suggestion's decision.
+    """
+    method = record.follow_detector
+    if method is None or suggestion.result is None:
+        raise ValueError(f"Suggestion {suggestion.number} cannot be decided without a follow method and a shown result.")
+
+    window = list_window_scores(record, suggestion.number)
+    return decide_follow(window, len(suggestion.result.parts), rule, (method.name, method.version))
+
+
 def plain_value(value: ControlValue) -> ControlValue:
     """
     Turn a number subclass, such as a NumPy float, into the plain Python type, so records hold plain JSON numbers.
@@ -380,6 +489,7 @@ def alignment_to_dict(alignment: Alignment) -> dict[str, object]:
         "correlation": encode_value(alignment.correlation),
         "warp": [list(row) for row in alignment.warp] if alignment.warp is not None else None,
         "occluded_share": alignment.occluded_share,
+        "filled_share": encode_value(alignment.filled_share),
     }
 
 
@@ -435,9 +545,12 @@ def capture_scores_from_dict(data: Mapping[str, object]) -> CaptureScores:
     """
     Rebuild a capture's scores through their validating constructors.
     """
+    # Alignments saved before the filled share have no filled_share key.
     alignment_data = data["alignment"]
+    filled_share = decode_value(alignment_data.get("filled_share", {"unavailable": FILLED_SHARE_NOT_RECORDED}))
     alignment = Alignment(converged=alignment_data["converged"], correlation=decode_value(alignment_data["correlation"]),
-                          warp=alignment_data["warp"], occluded_share=alignment_data["occluded_share"])
+                          warp=alignment_data["warp"], occluded_share=alignment_data["occluded_share"],
+                          filled_share=filled_share)
 
     # Scores saved before per-part scoring have no parts key.
     parts = data.get("parts")
@@ -458,6 +571,63 @@ def follow_method_from_dict(data: Mapping[str, object] | None) -> FollowMethod |
     Rebuild the drawing's follow method, or None when the record holds none.
     """
     return None if data is None else FollowMethod(name=data["method"], version=data["version"], params=data["params"])
+
+
+def rule_to_dict(rule: FollowRule) -> dict[str, object]:
+    """
+    Serialize a follow rule with every threshold by name.
+    """
+    return asdict(rule)
+
+
+def rule_from_dict(data: Mapping[str, object] | None) -> FollowRule | None:
+    """
+    Rebuild a follow rule, or None when the record holds none.
+    """
+    return None if data is None else FollowRule(**data)
+
+
+def window_to_dict(window: SuggestionWindow) -> dict[str, object]:
+    """
+    Serialize how a suggestion's window ended.
+    """
+    return {"ended_at": window.ended_at.isoformat(), "end": window.end, "last_capture": window.last_capture}
+
+
+def window_from_dict(data: Mapping[str, object] | None) -> SuggestionWindow | None:
+    """
+    Rebuild how a suggestion's window ended, or None while it is open or in older drawings.
+    """
+    if data is None:
+        return None
+
+    return SuggestionWindow(ended_at=parse_time(data["ended_at"]), end=data["end"], last_capture=data["last_capture"])
+
+
+def decision_to_dict(decision: FollowDecision) -> dict[str, object]:
+    """
+    Serialize a follow decision with its method, rule, combined result, and part decisions.
+    """
+    return {
+        "method": decision.method,
+        "method_version": decision.method_version,
+        "rule": rule_to_dict(decision.rule),
+        "result": decision.result,
+        "reason": decision.reason,
+        "parts": [asdict(part) for part in decision.parts],
+    }
+
+
+def decision_from_dict(data: Mapping[str, object] | None) -> FollowDecision | None:
+    """
+    Rebuild a follow decision through its validating constructors, or None while undecided.
+    """
+    if data is None:
+        return None
+
+    parts = tuple(PartDecision(**part) for part in data["parts"])
+    return FollowDecision(method=data["method"], method_version=data["method_version"], rule=rule_from_dict(data["rule"]),
+                          result=data["result"], parts=parts, reason=data["reason"])
 
 
 def capture_to_dict(capture: CaptureRecord) -> dict[str, object]:
@@ -611,6 +781,8 @@ def suggestion_to_dict(suggestion: SuggestionRecord) -> dict[str, object]:
         "result": stroke_suggestion_to_dict(result, suggestion.part_colors) if result else None,
         "overlay": asdict(overlay) if overlay else None,
         "timings_seconds": dict(suggestion.timings_seconds),
+        "window": window_to_dict(suggestion.window) if suggestion.window else None,
+        "decision": decision_to_dict(suggestion.decision) if suggestion.decision else None,
         "failure": asdict(failure) if failure else None,
     }
 
@@ -629,11 +801,14 @@ def suggestion_from_dict(data: Mapping[str, object]) -> SuggestionRecord:
     result, part_colors = stroke_suggestion_from_dict(data["result"]) if data["result"] is not None else (None, ())
     failure = StageFailure(**data["failure"]) if data["failure"] is not None else None
     shown_at = parse_time(data["shown_at"]) if data["shown_at"] is not None else None
+
+    # Suggestions saved before decisions have no window or decision keys.
     return SuggestionRecord(number=data["number"], id=data["id"], status=data["status"],
                             requested_at=parse_time(data["requested_at"]), shown_at=shown_at,
                             baseline_capture=data["baseline_capture"], request=request, result=result,
                             part_colors=part_colors, overlay=image_or_none(data["overlay"]),
-                            timings_seconds=data["timings_seconds"], failure=failure)
+                            timings_seconds=data["timings_seconds"], failure=failure, window=window_from_dict(data.get("window")),
+                            decision=decision_from_dict(data.get("decision")))
 
 
 def drawing_to_dict(record: DrawingRecord) -> dict[str, object]:
@@ -659,6 +834,7 @@ def drawing_to_dict(record: DrawingRecord) -> dict[str, object]:
         "suggestions_enabled": record.suggestions_enabled,
         "suggester": record.suggester,
         "follow_detector": follow_method_to_dict(record.follow_detector) if record.follow_detector else None,
+        "rule": rule_to_dict(record.rule) if record.rule else None,
         "captures": [capture_to_dict(capture) for capture in record.captures],
         "suggestions": [suggestion_to_dict(suggestion) for suggestion in record.suggestions],
         "final_capture": record.final_capture,
@@ -687,7 +863,7 @@ def drawing_from_dict(data: Mapping[str, object]) -> DrawingRecord:
                          suggestions=tuple(suggestion_from_dict(item) for item in data["suggestions"]),
                          final_capture=data["final_capture"],
                          follow_detector=follow_method_from_dict(data.get("follow_detector")),
-                         interval_jpeg_quality=quality)
+                         interval_jpeg_quality=quality, rule=rule_from_dict(data.get("rule")))
 
 
 def list_drawing_images(record: DrawingRecord) -> list[ImageRef]:

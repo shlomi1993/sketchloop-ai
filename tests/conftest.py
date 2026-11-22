@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import time
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -154,3 +154,23 @@ def blank_capture() -> CapturedSketch:
     Provide an evenly white frame, whose paper canvas has no strokes, as a captured PNG raw sketch.
     """
     return capture_frame(np.full((480, 640, 3), 255, dtype=np.uint8))
+
+
+
+def draw_part_on_sheet(frame: np.ndarray, part_mask: bytes) -> np.ndarray:
+    """
+    Draw a suggested part's mask in dark pencil on the sheet frame, mapping canvas pixels onto the sheet's corners.
+    """
+    mask = cv2.imdecode(np.frombuffer(part_mask, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+    drawn = frame.copy()
+    on_sheet = cv2.resize(mask, (521, 381), interpolation=cv2.INTER_NEAREST) > 0
+    drawn[50:431, 60:581][on_sheet] = 30
+    return drawn
+
+
+@pytest.fixture(name="draw_part_on_sheet")
+def provide_part_drawer() -> Callable[[np.ndarray, bytes], np.ndarray]:
+    """
+    Provide a function that draws a suggested part's mask on the sheet frame, as a person following it would.
+    """
+    return draw_part_on_sheet

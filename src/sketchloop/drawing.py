@@ -19,9 +19,10 @@ from typing import Final
 from sketchloop.capture import CapturedSketch, InvalidSketchError, encode_frame_jpeg
 from sketchloop.domain import SCHEMA_VERSION, ColorMode, ControlValue, ImageRef, Rotation, SketchLoopError, SketchSource
 from sketchloop.experiments import (CaptureRecord, CaptureTrigger, DrawingEnd, DrawingRecord, ExperimentStore, StoreError,
-                                    SuggestionRecord, SuggestionStage, SuggestionStatus, describe_stage_failure,
-                                    resolve_frame_age)
-from sketchloop.follow import AlignedStrokeFollowDetector, CaptureScores, FollowDetector, describe_follow_method
+                                    SuggestionRecord, SuggestionStage, SuggestionStatus, SuggestionWindow, WindowEnd,
+                                    decide_suggestion, describe_stage_failure, resolve_frame_age)
+from sketchloop.follow import (PROVISIONAL_RULE, AlignedStrokeFollowDetector, CaptureScores, FollowDetector,
+                               describe_follow_method)
 from sketchloop.preprocessing import PaperCanvas, PreprocessedSketch, decode_grayscale, extract_canvas_strokes, make_paper_canvas
 from sketchloop.stroke_suggestion import (PART_COLORS, StrokeSuggester, StrokeSuggestion, StrokeSuggestionError,
                                           StrokeSuggestionOutput, StrokeSuggestionRequest)
@@ -207,7 +208,7 @@ class GuidedDrawing:
                                      suggester=type(suggester).__name__ if suggester is not None else None, captures=(),
                                      suggestions=(), final_capture=None,
                                      follow_detector=describe_follow_method(self.follow_detector) if suggester else None,
-                                     interval_jpeg_quality=INTERVAL_JPEG_QUALITY)
+                                     interval_jpeg_quality=INTERVAL_JPEG_QUALITY, rule=PROVISIONAL_RULE if suggester else None)
 
         # Save the empty record now, so the drawing folder exists and loads as not finished if the server stops.
         self._save({})
@@ -303,17 +304,37 @@ class GuidedDrawing:
         self._pending_files |= files
         return capture, canvas, error
 
-    def _replace_suggestion(self, suggestion: SuggestionRecord) -> None:
-        # Put the suggestion in the record, replacing an earlier version with the same number.
-        kept = tuple(entry for entry in self._record.suggestions if entry.number != suggestion.number)
-        self._record = replace(self._record, suggestions=(*kept, suggestion))
+    def _merge_suggestions(self, *suggestions: SuggestionRecord) -> tuple[SuggestionRecord, ...]:
+        # Return the record's suggestions in number order, with these replacing earlier versions with the same numbers.
+        merged = {entry.number: entry for entry in self._record.suggestions} | {entry.number: entry for entry in suggestions}
+        return tuple(merged[number] for number in sorted(merged))
 
-    def _record_failed_suggestion(self, failed: SuggestionRecord, error: Exception, unsaved_files: Mapping[str, bytes]) -> None:
+    def _replace_suggestions(self, *suggestions: SuggestionRecord) -> None:
+        # Put the suggestions in the record in one change, so its invariants hold before and after.
+        self._record = replace(self._record, suggestions=self._merge_suggestions(*suggestions))
+
+    def _find_open_record(self) -> SuggestionRecord | None:
+        # Return the record's entry of the open suggestion, whose window is still open, or None.
+        if self._open_suggestion is None:
+            return None
+
+        return self._record.suggestions[self._open_suggestion.number - 1]
+
+    def _end_window(self, suggestion: SuggestionRecord, end: WindowEnd, ended_at: datetime) -> SuggestionRecord:
+        # Close the window after the latest capture, which was scored against it, and decide it from its recorded scores.
+        captures = self._record.captures
+        last_capture = captures[-1].number if captures and captures[-1].number > suggestion.baseline_capture else None
+        window = SuggestionWindow(ended_at=ended_at, end=end, last_capture=last_capture)
+        return replace(suggestion, window=window, decision=decide_suggestion(self._record, suggestion, self._record.rule))
+
+    def _record_failed_suggestion(self, failed: SuggestionRecord, error: Exception, unsaved_files: Mapping[str, bytes],
+                                  restored: Sequence[SuggestionRecord] = ()) -> None:
         # Drop files only the failed suggestion would have named, keeping the capture's, then save the failure.
         for path in unsaved_files:
             self._pending_files.pop(path, None)
 
-        self._replace_suggestion(failed)
+        # Restore the previous suggestion's open window, since a failed press does not end it.
+        self._replace_suggestions(failed, *restored)
         try:
             self._save({})
         except StoreError as store_error:
@@ -347,6 +368,7 @@ class GuidedDrawing:
                          request: StrokeSuggestionRequest, strokes: PreprocessedSketch, folder: str,
                          timings: dict[str, float]) -> tuple[SuggestionRecord, np.ndarray, tuple[bytes, ...]]:
         # Run each stage, tracking the active one so a failure record names it.
+        previous = self._find_open_record()
         stage = SuggestionStage.MODEL_LOAD
         files: dict[str, bytes] = {}
         try:
@@ -361,26 +383,30 @@ class GuidedDrawing:
             mask_payloads = [files[part.mask.path] for part in result.parts]
             overlay = draw_overlay(mask_payloads, request.canvas.width, request.canvas.height)
             overlay_ref, files[folder + OVERLAY_FILE] = encode_overlay(overlay, folder + OVERLAY_FILE)
-            files[request.canvas.path] = strokes.payload
             timings[SuggestionStage.OVERLAY] = time.perf_counter() - started
             shown = draft(status=SuggestionStatus.SHOWN, shown_at=datetime.now(timezone.utc), request=request, result=result,
                           part_colors=PART_COLORS[:len(result.parts)], overlay=overlay_ref, timings_seconds=timings, failure=None)
 
-            # Save the files and drawing.json, with the baseline capture's files when they are not saved yet.
+            # Showing this suggestion ends the previous one's window at this press, whose capture was scored against it.
             stage = SuggestionStage.SAVING
-            self._replace_suggestion(shown)
+            ended = (self._end_window(previous, WindowEnd.NEXT_SUGGESTION, shown.shown_at),) if previous else ()
+            self._replace_suggestions(shown, *ended)
+
+            # Save the files and drawing.json, with the baseline capture's files when they are not saved yet.
             started = time.perf_counter()
             self._save(files)
             timings[SuggestionStage.SAVING] = time.perf_counter() - started
         except Exception as error:
             # Keep a failed record in the drawing even when it cannot be saved, so the attempt stays visible.
             failure = describe_stage_failure(stage, error)
-            self._record_failed_suggestion(failed(request=request, timings_seconds=timings, failure=failure), error, files)
+            restored = (previous,) if previous else ()
+            self._record_failed_suggestion(failed(request=request, timings_seconds=timings, failure=failure), error, files,
+                                           restored)
             raise
 
         # The saving time is known only after saving, so it reaches drawing.json with the drawing's next save.
         shown = replace(shown, timings_seconds=timings)
-        self._replace_suggestion(shown)
+        self._replace_suggestions(shown)
         return shown, overlay, tuple(mask_payloads)
 
     def suggest(self, captured: CapturedSketch, *, source: SketchSource, rotation: int, prompt: str, seed: int | None = None,
@@ -441,6 +467,9 @@ class GuidedDrawing:
 
             request = StrokeSuggestionRequest(canvas=replace(strokes.image, path=folder + strokes.image.path), prompt=prompt,
                                               seed=seed, controls=controls or {})
+
+            # Keep the suggester's input with the press, so even a failed suggestion's request names a saved file.
+            self._pending_files[request.canvas.path] = strokes.payload
             shown, overlay, self._part_masks = self._show_suggestion(draft, failed, request, strokes, folder, timings)
             self._overlay, self._open_suggestion, self._baseline = overlay, shown, canvas
             self._shown_since_start = time.monotonic() - self._started
@@ -508,13 +537,20 @@ class GuidedDrawing:
 
                 final_capture = self._take_capture(captured, source, rotation, frame_age_seconds, CaptureTrigger.FINISH)[0].number
 
-            # Save the end, and undo it on a failed save, so the person can press finish again.
+            # End the open suggestion's window with the drawing, deciding it, then save.
             ended_at = datetime.now(timezone.utc)
-            self._record = replace(self._record, ended_at=ended_at, end=DrawingEnd(end), final_capture=final_capture)
+            previous = self._find_open_record()
+            ended = (self._end_window(previous, WindowEnd(end), ended_at),) if previous else ()
+            self._record = replace(self._record, suggestions=self._merge_suggestions(*ended), ended_at=ended_at,
+                                   end=DrawingEnd(end), final_capture=final_capture)
+
+            # Undo the end and the window on a failed save, so the person can press finish again.
             try:
                 self._save({})
             except StoreError:
-                self._record = replace(self._record, ended_at=None, end=None, final_capture=None)
+                restored = (previous,) if previous else ()
+                self._record = replace(self._record, suggestions=self._merge_suggestions(*restored), ended_at=None, end=None,
+                                       final_capture=None)
                 raise
 
             self._overlay, self._open_suggestion, self._baseline, self._part_masks = None, None, None, ()

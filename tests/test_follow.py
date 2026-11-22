@@ -10,9 +10,11 @@ from collections.abc import Callable
 from typing import Final
 
 from sketchloop.domain import InvalidRecordError, Unavailable
-from sketchloop.follow import (ALIGNED_STROKES_METHOD, IMPLAUSIBLE_WARP_REASON, NOT_CONVERGED_REASON, PART_OCCLUDED_REASON,
-                               AlignedStrokeFollowDetector, Alignment, CaptureScores, PartScores, describe_follow_method,
-                               find_implausible_warp, find_occluders)
+from sketchloop.follow import (ALIGNED_STROKES_METHOD, IMPLAUSIBLE_WARP_REASON, NO_PARTS_REASON, NO_USABLE_CAPTURE_REASON,
+                               NOT_CONVERGED_REASON, NOTHING_NEW_REASON, PART_OCCLUDED_REASON, PROVISIONAL_RULE,
+                               AlignedStrokeFollowDetector, Alignment, CaptureScores, FollowDecision, FollowResult, FollowRule,
+                               PartDecision, PartScores, decide_follow, describe_follow_method, find_implausible_warp,
+                               find_occluders)
 
 
 CANVAS_SIZE: Final = (512, 360)
@@ -202,6 +204,8 @@ def build_part_scores(**changes: object) -> PartScores:
     (lambda: Alignment(converged=True, correlation=0.8, warp=IDENTITY, occluded_share=1.5), "from 0 to 1"),
     (lambda: Alignment(converged=False, correlation=0.8, warp=None, occluded_share=0.0), "has no correlation"),
     (lambda: Alignment(converged=False, correlation=Unavailable("x"), warp=IDENTITY, occluded_share=0.0), "has no warp"),
+    (lambda: Alignment(converged=False, correlation=Unavailable("x"), warp=None, occluded_share=0.1, filled_share=0.2),
+     "filled_share must be at most"),
     (lambda: CaptureScores(suggestion=1, seconds_since_shown=1.0, new_stroke_pixels=None, parts=(),
                            alignment=Alignment(converged=True, correlation=0.8, warp=IDENTITY, occluded_share=0.0)),
      "needs new_stroke_pixels"),
@@ -375,6 +379,26 @@ def test_filled_area_counts_as_occluded(baseline_canvas: bytes) -> None:
     # Without the mask the same capture would wrongly count the part as not drawn.
     assert unmasked_parts[0].coverage[16] == 0.0, f"Without the mask the part looks undrawn, got {unmasked_parts[0]}"
 
+    # The filled share is recorded apart, so the occluded share minus it is what a hand covered, none here.
+    assert with_mask.filled_share == pytest.approx(filled.mean()), f"Expected the filled share apart, got {with_mask}"
+    hand_share = with_mask.occluded_share - with_mask.filled_share
+    assert hand_share == pytest.approx(0.0, abs=1e-9), f"No hand was in the capture, got a hand share {hand_share}"
+
+
+def test_hand_is_told_apart_from_the_filled_rim(baseline_canvas: bytes) -> None:
+    """
+    With a filled rim and a hand inside the sheet, the filled share holds only the rim, and the hand is the rest.
+    """
+    rim = np.ones(CANVAS_SIZE[::-1], dtype=bool)
+    rim[12:-12, 12:-12] = False
+    capture = photograph(draw_canvas(), make_camera_motion((1, 0), 0.0), hand=True, seed=12, hand_center=(250, 200))
+    alignment, _ = AlignedStrokeFollowDetector().align(baseline_canvas, capture, baseline_filled=encode_mask(rim),
+                                                       capture_filled=encode_mask(rim))
+
+    # The rim alone is the filled share, and the hand adds a clearly larger share on top of it.
+    assert alignment.filled_share == pytest.approx(rim.mean()), f"Expected the rim as the filled share, got {alignment}"
+    assert alignment.occluded_share - alignment.filled_share > 0.05, f"The hand must show beyond the rim, got {alignment}"
+
 
 def test_part_mask_of_another_size_is_refused(baseline_canvas: bytes) -> None:
     """
@@ -421,3 +445,153 @@ def test_scaled_capture_is_recorded_as_not_converged(baseline_canvas: bytes) -> 
     reason = alignment.correlation.reason
     assert reason.startswith(IMPLAUSIBLE_WARP_REASON) and "corner moves" in reason, f"Unexpected reason {reason}"
     assert new_stroke_pixels is None and parts == (), f"A refused alignment scores nothing, got {new_stroke_pixels} and {parts}"
+
+
+def score_window_capture(coverage_16: float | Unavailable = 0.6, precision_16: float | Unavailable = 0.7, *,
+                         new_stroke_pixels: int = 300, correlation: float = 0.8, converged: bool = True,
+                         occluded_share: float = 0.0, part_count: int = 1) -> CaptureScores:
+    """
+    Build a capture's scores against suggestion 1 with the given 16 px coverage and precision for every part.
+    """
+    if not converged:
+        alignment = Alignment(converged=False, correlation=Unavailable(NOT_CONVERGED_REASON), warp=None, occluded_share=0.0)
+        return CaptureScores(suggestion=1, seconds_since_shown=2.0, alignment=alignment, new_stroke_pixels=None, parts=())
+
+    # Nothing near the part makes precision and the distance from the new strokes unavailable.
+    near = not isinstance(precision_16, Unavailable)
+    precision = {4: 0.1, 8: 0.2, 16: precision_16, 24: 0.9} if near else dict.fromkeys((4, 8, 16, 24), precision_16)
+    coverage = {4: 0.1, 8: 0.2, 16: coverage_16, 24: 0.9}
+    parts = tuple(build_part_scores(part=index, occluded_share=occluded_share, new_pixels_near=120 if near else 0,
+                                    coverage=coverage, precision=precision, chamfer_new_to_part=3.0 if near else precision_16)
+                  for index in range(part_count))
+    alignment = Alignment(converged=True, correlation=correlation, warp=IDENTITY, occluded_share=occluded_share)
+    return CaptureScores(suggestion=1, seconds_since_shown=2.0, alignment=alignment, new_stroke_pixels=new_stroke_pixels,
+                         parts=parts)
+
+
+@pytest.mark.parametrize(("window", "result", "deciding_capture", "reason"), [
+    ([(3, score_window_capture())], FollowResult.FOLLOWED, 3, None),
+    ([(3, score_window_capture(coverage_16=0.2))], FollowResult.NOT_FOLLOWED, 3, None),
+    ([(3, score_window_capture(precision_16=0.1))], FollowResult.NOT_FOLLOWED, 3, None),
+    ([(3, score_window_capture(precision_16=Unavailable("none near")))], FollowResult.NOT_FOLLOWED, 3, None),
+    ([(3, score_window_capture(new_stroke_pixels=10))], FollowResult.UNDETERMINED, 3, NOTHING_NEW_REASON),
+    ([], FollowResult.UNDETERMINED, None, NO_USABLE_CAPTURE_REASON),
+    ([(3, score_window_capture(converged=False))], FollowResult.UNDETERMINED, None, NO_USABLE_CAPTURE_REASON),
+    ([(3, score_window_capture(correlation=0.2))], FollowResult.UNDETERMINED, None, NO_USABLE_CAPTURE_REASON),
+    ([(3, score_window_capture(occluded_share=0.8))], FollowResult.UNDETERMINED, None, NO_USABLE_CAPTURE_REASON),
+    ([(3, score_window_capture(coverage_16=0.1)), (4, score_window_capture(occluded_share=0.8))],
+     FollowResult.NOT_FOLLOWED, 3, None),
+    ([(4, score_window_capture(converged=False)), (3, score_window_capture())], FollowResult.FOLLOWED, 3, None),
+    ([(3, score_window_capture(coverage_16=0.1)), (4, score_window_capture())], FollowResult.FOLLOWED, 4, None),
+], ids=["followed", "low-coverage", "low-precision", "nothing-near", "nothing-new", "no-capture", "unaligned",
+        "weak-correlation", "occluded", "occluded-latest-uses-earlier", "unaligned-latest-uses-earlier", "latest-decides"])
+def test_decide_follow_outcomes(window: list[tuple[int, CaptureScores]], result: FollowResult, deciding_capture: int | None,
+                                reason: str | None) -> None:
+    """
+    Each part is decided by its latest usable capture, and unusable captures or nothing drawn give undetermined.
+    """
+    decision = decide_follow(window, 1, PROVISIONAL_RULE, ALIGNED_STROKES_METHOD)
+    part = decision.parts[0]
+
+    # The part's result, deciding capture, and reason, and the suggestion's result, follow the rule.
+    assert (part.result, part.deciding_capture, part.reason) == (result, deciding_capture, reason), f"Unexpected {part}"
+    assert decision.result == result and decision.rule == PROVISIONAL_RULE, f"Unexpected decision {decision}"
+    assert (decision.method, decision.method_version) == ALIGNED_STROKES_METHOD, f"Unexpected method {decision}"
+
+
+def replace_part(part: PartScores, **changes: object) -> PartScores:
+    """
+    Copy part scores with the given fields changed.
+    """
+    fields = {name: getattr(part, name) for name in PartScores.__dataclass_fields__}
+    return PartScores(**(fields | changes))
+
+
+@pytest.mark.parametrize(("part_results", "result"), [
+    ((FollowResult.FOLLOWED, FollowResult.NOT_FOLLOWED, FollowResult.UNDETERMINED), FollowResult.FOLLOWED),
+    ((FollowResult.UNDETERMINED, FollowResult.NOT_FOLLOWED), FollowResult.NOT_FOLLOWED),
+    ((FollowResult.UNDETERMINED, FollowResult.UNDETERMINED), FollowResult.UNDETERMINED),
+])
+def test_suggestion_result_combines_its_parts(part_results: tuple[FollowResult, ...], result: FollowResult) -> None:
+    """
+    A suggestion is followed when any part is, otherwise not followed when any part is not, otherwise undetermined.
+    """
+    coverages = {FollowResult.FOLLOWED: 0.9, FollowResult.NOT_FOLLOWED: 0.0, FollowResult.UNDETERMINED: 0.9}
+    occlusion = {FollowResult.UNDETERMINED: 0.9}
+    window = []
+    for capture, part_result in enumerate(part_results, start=3):
+        # Each capture scores all parts, and only its own part is visible and decisive there.
+        scores = score_window_capture(coverage_16=coverages[part_result], part_count=len(part_results))
+        hidden = [replace_part(part, occluded_share=1.0) for part in scores.parts]
+        visible = replace_part(scores.parts[capture - 3], occluded_share=occlusion.get(part_result, 0.0))
+        hidden[capture - 3] = visible
+        window.append((capture, CaptureScores(suggestion=1, seconds_since_shown=2.0, alignment=scores.alignment,
+                                              new_stroke_pixels=300, parts=tuple(hidden))))
+    decision = decide_follow(window, len(part_results), PROVISIONAL_RULE, ALIGNED_STROKES_METHOD)
+
+    # Each part gets its own result, and the suggestion's result combines them.
+    assert tuple(part.result for part in decision.parts) == part_results, f"Unexpected part results {decision.parts}"
+    assert decision.result == result, f"Expected {result}, got {decision.result}"
+
+
+def test_suggestion_without_parts_is_undetermined() -> None:
+    """
+    A suggestion with no parts has nothing to follow, so it is undetermined with its own reason.
+    """
+    decision = decide_follow([(3, score_window_capture(part_count=0))], 0, PROVISIONAL_RULE, ALIGNED_STROKES_METHOD)
+
+    # No part decisions, an undetermined result, and the reason.
+    assert (decision.result, decision.parts, decision.reason) == (FollowResult.UNDETERMINED, (), NO_PARTS_REASON), f"{decision}"
+
+
+def test_decide_follow_recomputes_with_another_rule() -> None:
+    """
+    The same stored scores decided with a stricter rule change the result, without reading any image.
+    """
+    window = [(3, score_window_capture(coverage_16=0.5, precision_16=0.5))]
+    strict = FollowRule(min_coverage=0.6)
+    loose_tolerance = FollowRule(coverage_tolerance_pixels=24, precision_tolerance_pixels=24, min_coverage=0.85)
+
+    # The provisional rule follows, the stricter one does not, and each decision keeps the rule it used.
+    provisional = decide_follow(window, 1, PROVISIONAL_RULE, ALIGNED_STROKES_METHOD)
+    stricter = decide_follow(window, 1, strict, ALIGNED_STROKES_METHOD)
+    assert provisional.result == FollowResult.FOLLOWED, f"Expected followed by the provisional rule, got {provisional}"
+    assert stricter.result == FollowResult.NOT_FOLLOWED and stricter.rule == strict, f"Expected not followed, got {stricter}"
+
+    # Another recorded tolerance works, and one never measured is refused.
+    assert decide_follow(window, 1, loose_tolerance, ALIGNED_STROKES_METHOD).result == FollowResult.FOLLOWED, "24 px must work"
+    with pytest.raises(ValueError, match="tolerance of 12 px was not measured"):
+        decide_follow(window, 1, FollowRule(coverage_tolerance_pixels=12), ALIGNED_STROKES_METHOD)
+
+
+@pytest.mark.parametrize(("build", "message"), [
+    (lambda: FollowRule(min_coverage=1.5), "min_coverage must be a number from 0 to 1"),
+    (lambda: FollowRule(coverage_tolerance_pixels=0), "coverage_tolerance_pixels must be an int >= 1"),
+    (lambda: FollowRule(min_new_stroke_pixels=-1), "min_new_stroke_pixels must be an int >= 0"),
+    (lambda: PartDecision(part=0, result=FollowResult.FOLLOWED, deciding_capture=None, reason=None), "without a deciding"),
+    (lambda: PartDecision(part=0, result=FollowResult.UNDETERMINED, deciding_capture=None, reason=None), "reason exactly"),
+    (lambda: PartDecision(part=0, result=FollowResult.FOLLOWED, deciding_capture=3, reason="x"), "reason exactly"),
+    (lambda: FollowDecision(method="aligned-strokes", method_version="2", rule=PROVISIONAL_RULE,
+                            result=FollowResult.NOT_FOLLOWED, parts=(PartDecision(part=0, result=FollowResult.FOLLOWED,
+                                                                                  deciding_capture=3, reason=None),)),
+     "must combine its parts into followed"),
+    (lambda: FollowDecision(method="aligned-strokes", method_version="2", rule=PROVISIONAL_RULE,
+                            result=FollowResult.UNDETERMINED, parts=()), "reason must be 'no parts suggested'"),
+])
+def test_decision_records_refuse_invalid_values(build: Callable[[], object], message: str) -> None:
+    """
+    Rules and decisions refuse values outside their ranges and results that contradict their parts.
+    """
+    with pytest.raises(InvalidRecordError, match=message):
+        build()
+
+
+def test_provisional_rule_describes_itself() -> None:
+    """
+    The provisional rule is coverage_16 >= 0.35 and precision_16 >= 0.4, and says so in one line.
+    """
+    text = PROVISIONAL_RULE.describe()
+
+    # The line starts with the followed condition and names the undetermined limits.
+    assert text.startswith("coverage_16 >= 0.35 and precision_16 >= 0.4"), f"Unexpected rule text {text}"
+    assert "correlation 0.3" in text and "60 new pixels" in text, f"The limits must be named, got {text}"
