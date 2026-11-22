@@ -10,6 +10,7 @@ from sketchloop.cli.rerun import rerun_round
 from sketchloop.cli.run import run_session
 from sketchloop.cli.serve import launch_ui
 from sketchloop.cli.show import show_session
+from sketchloop.cli.study import run_study
 from sketchloop.domain import SketchLoopError
 
 
@@ -31,6 +32,7 @@ def main(argv: list[str] | None = None) -> int:
         Command.RERUN: rerun_round,
         Command.UI: launch_ui,
         Command.BENCHMARK: run_benchmark,
+        Command.STUDY: run_study,
     }
 
     # Say which settings file applies before anything else, so a file found in the working folder is never a surprise.

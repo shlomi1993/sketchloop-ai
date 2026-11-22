@@ -29,6 +29,12 @@ class Command(StrEnum):
     RERUN = "rerun"
     UI = "ui"
     BENCHMARK = "benchmark"
+    STUDY = "study"
+
+
+class StudyAction(StrEnum):
+    EXPORT = "export"
+    SUMMARY = "summary"
 
 
 # Settings key each flag overrides, by command and the attribute argparse stores the flag in.
@@ -55,6 +61,7 @@ FLAG_SETTINGS: Final[dict[str, dict[str, str]]] = {
         "study": "study.enabled",
     },
     Command.RERUN: {"runs_dir": "storage.runs_dir"},
+    Command.STUDY: {"runs_dir": "storage.runs_dir"},
     Command.BENCHMARK: {
         "candidates": "run.candidates",
         "seed": "run.seed",
@@ -196,7 +203,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         argv (list[str] | None): Arguments to parse, or None for the process arguments.
 
     Returns:
-        argparse.Namespace: Parsed options, with the subcommand in `command`, and for run, rerun, ui, and benchmark the effective
+        argparse.Namespace: Parsed options, with the subcommand in `command`, and for every command but show the effective
             `settings` and the `settings_file` they came from.
     """
     # Options that a settings file can also set are absent unless given, so the file and the defaults can apply.
@@ -257,6 +264,18 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ui_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="precision of a real backend (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
     ui_parser.add_argument("--study", action=argparse.BooleanOptionalAction, default=unset, help="serve the study page, where participants see only the sketch, the prompt, and the AI buttons in the AI condition (settings study.enabled, default off)")  # noqa: E501
     ui_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
+
+    # Export the study's final drawings under random codes, or summarize its drawings.
+    study_parser = commands.add_parser(Command.STUDY, help="export or summarize the study drawings", description="Export the final study drawings for blinded rating, or summarize them.")  # noqa: E501
+    study_actions = study_parser.add_subparsers(dest="study_action", required=True)
+    export_parser = study_actions.add_parser(StudyAction.EXPORT, help="write each final drawing under a random code", description="Write each study drawing's final canvas under a random code, with a key that stays on this machine.")  # noqa: E501
+    summary_parser = study_actions.add_parser(StudyAction.SUMMARY, help="print one row per study drawing", description="Print one row per study drawing without writing anything.")  # noqa: E501
+    for action_parser in (export_parser, summary_parser):
+        action_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder the study saved into (settings storage.runs_dir, default runs)")  # noqa: E501
+        action_parser.add_argument("--match", default="*", help='glob on experiment names, ignoring case, such as "p3_*" (default: every experiment)')  # noqa: E501
+        action_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
+    export_parser.add_argument("--output", type=Path, help="new or empty folder for the export (default: export-<UTC time> under settings study.export_dir)")  # noqa: E501
+
     # A bare sketchloop opens the browser page with the settings file's choices.
     if not (sys.argv[1:] if argv is None else argv):
         argv = [Command.UI]
@@ -270,6 +289,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         Command.RERUN: rerun_parser,
         Command.UI: ui_parser,
         Command.BENCHMARK: benchmark_parser,
+        Command.STUDY: study_parser,
     }
     if args.command in (Command.RUN, Command.BENCHMARK):
         check_run_flags(command_parsers[args.command], args)

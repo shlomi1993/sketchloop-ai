@@ -14,10 +14,14 @@ from pathlib import Path
 
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import CapturedSketch, encode_frame
-from sketchloop.domain import Candidate, GenerationRequest
+from sketchloop.domain import Candidate, GenerationRequest, SketchSource
+from sketchloop.drawing import GuidedDrawing
 from sketchloop.evaluation import Evaluator
-from sketchloop.experiments import PromptSuggestionRecord, PromptSuggestionStatus
+from sketchloop.experiments import (SESSION_FILE, DrawingEnd, DrawingStudy, FolderStore, PromptSuggestionRecord,
+                                    PromptSuggestionStatus, StudyCondition)
 from sketchloop.generation import GenerationOutput
+from sketchloop.session import SketchSession
+from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
 from sketchloop.suggestion import TemplateSuggester
 
 
@@ -191,3 +195,52 @@ def build_prompt_suggestion(text: str, suggestion_id: str = "prompt-1", *, numbe
 @pytest.fixture(name="make_prompt_suggestion")
 def provide_prompt_suggestion_maker() -> Callable[..., PromptSuggestionRecord]:
     return build_prompt_suggestion
+
+
+def refuse_canvas(*_: object) -> None:
+    # Stand in for a final frame whose sheet cannot be found.
+    raise ValueError("no sheet found")
+
+
+def start_study_drawing(runs_dir: Path, name: str | None,
+                        condition: StudyCondition | None) -> tuple[SketchSession, GuidedDrawing]:
+    # A named or time-named session holding one open drawing, with the fake suggester only in the AI condition.
+    session = SketchSession(FakeGenerator(), FolderStore(runs_dir), name=name)
+    study = DrawingStudy(condition=condition) if condition is not None else None
+    suggester = FakeStrokeSuggester() if condition != StudyCondition.NO_AI else None
+    drawing = session.start_drawing(suggester, canvas_width=512, canvas_height=360, save_interval_seconds=2.0, study=study)
+    return session, drawing
+
+
+def build_study_runs(runs_dir: Path, capture: CapturedSketch) -> Path:
+    # Two exportable drawings, with and without AI, whose AI one used a prompt suggestion, then one per missing reason.
+    _, with_ai = start_study_drawing(runs_dir, "p1_car", StudyCondition.AI)
+    shown = with_ai.record_prompt_suggestion(build_prompt_suggestion("a car, studio render", "p-1"))
+    with_ai.suggest(capture, source=SketchSource.UPLOAD, rotation=0, prompt="a car, studio render", prompt_suggestion_id=shown.id)
+    with_ai.finish(capture, source=SketchSource.UPLOAD, prompt="a red car", prompt_suggestion_id=shown.id)
+    start_study_drawing(runs_dir, "p2_car", StudyCondition.NO_AI)[1].finish(capture, source=SketchSource.UPLOAD, prompt="")
+    start_study_drawing(runs_dir, "p3_car", StudyCondition.AI)[1].suggest(capture, source=SketchSource.UPLOAD, rotation=0,
+                                                                          prompt="a car")
+    start_study_drawing(runs_dir, "p4_car", StudyCondition.NO_AI)[1].finish(None, prompt="a car")
+    start_study_drawing(runs_dir, "p5_old", None)[1].finish(capture, source=SketchSource.UPLOAD, prompt="a car")
+    start_study_drawing(runs_dir, "p6_car", StudyCondition.NO_AI)[1].finish(None, end=DrawingEnd.NEW_SESSION)
+
+    # The final frame of p7 cannot become a canvas, and the final canvas of p8 changes after the drawing ends.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("sketchloop.drawing.make_paper_canvas", refuse_canvas)
+        start_study_drawing(runs_dir, "p7_car", StudyCondition.NO_AI)[1].finish(capture, source=SketchSource.UPLOAD, prompt="")
+    session, changed = start_study_drawing(runs_dir, "p8_car", StudyCondition.AI)
+    changed.finish(capture, source=SketchSource.UPLOAD, prompt="")
+    (session.folder / "drawing-1" / changed.record.captures[-1].canvas.path).write_bytes(b"changed")
+
+    # A broken session, a time-named session, and a folder that is not a session.
+    (runs_dir / "p9_broken").mkdir()
+    (runs_dir / "p9_broken" / SESSION_FILE).write_text("{", encoding="utf-8")
+    start_study_drawing(runs_dir, None, StudyCondition.AI)[1].finish(capture, source=SketchSource.UPLOAD, prompt="")
+    (runs_dir / "notes").mkdir()
+    return runs_dir
+
+
+@pytest.fixture
+def study_runs(tmp_path: Path, sheet_capture: CapturedSketch) -> Path:
+    return build_study_runs(tmp_path / "runs", sheet_capture)
