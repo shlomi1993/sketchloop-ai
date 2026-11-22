@@ -10,6 +10,7 @@ from datetime import datetime
 
 from sketchloop.domain import (SCHEMA_VERSION, BackendIdentity, Candidate, EffectiveSettings, GenerationRequest,
                                GenerationResult, Guidance, ImageRef, Iteration, SelectionEvent, Unavailable, require)
+from sketchloop.experiments.prompts import (ORIGIN_NOT_RECORDED, PromptOrigin, PromptSuggestionFailure, PromptSuggestionRecord)
 from sketchloop.experiments.records import (
     MISSING_FRAME_AGE_REASON, MISSING_HARDWARE_REASON, MISSING_SETUP_REASON, MISSING_SOURCE_REASON, MISSING_TOTAL_REASON,
     BenchmarkPlan, Environment, ExperimentRecordError, Hardware, RerunLink, RoundFailure, RoundRecord, SessionRecord)
@@ -124,6 +125,58 @@ def effective_from_dict(data: Mapping[str, object]) -> EffectiveSettings:
                              controls=controls)
 
 
+def prompt_origin_to_dict(origin: PromptOrigin | Unavailable) -> dict[str, object]:
+    # An origin that could not be resolved keeps its reason.
+    if isinstance(origin, Unavailable):
+        return {"unavailable": origin.reason}
+
+    return {"kind": origin.kind, "prompt_suggestion": origin.prompt_suggestion}
+
+
+def prompt_origin_from_dict(data: Mapping[str, object] | None) -> PromptOrigin | Unavailable:
+    # Records saved before prompt origins have none, and the unavailable key goes first, since decode_value reads any object.
+    if data is None:
+        return Unavailable(ORIGIN_NOT_RECORDED)
+
+    if "unavailable" in data:
+        return decode_value(data)
+
+    return PromptOrigin(kind=data["kind"], prompt_suggestion=data["prompt_suggestion"])
+
+
+def prompt_suggestion_to_dict(record: PromptSuggestionRecord) -> dict[str, object]:
+    return {
+        "number": record.number,
+        "id": record.id,
+        "status": record.status,
+        "requested_at": record.requested_at.isoformat(),
+        "shown_at": record.shown_at.isoformat() if record.shown_at else None,
+        "suggester": backend_to_dict(record.suggester),
+        "text": record.text,
+        "list_position": record.list_position,
+        "ran_suggester": record.ran_suggester,
+        "suggester_seconds": record.suggester_seconds,
+        "after_capture": record.after_capture,
+        "failure": asdict(record.failure) if record.failure else None,
+    }
+
+
+def prompt_suggestion_from_dict(data: Mapping[str, object]) -> PromptSuggestionRecord:
+    failure = PromptSuggestionFailure(**data["failure"]) if data["failure"] is not None else None
+    shown_at = parse_time(data["shown_at"]) if data["shown_at"] is not None else None
+    return PromptSuggestionRecord(number=data["number"], id=data["id"], status=data["status"],
+                                  requested_at=parse_time(data["requested_at"]), shown_at=shown_at,
+                                  suggester=backend_from_dict(data["suggester"]), text=data["text"],
+                                  list_position=data["list_position"], ran_suggester=data["ran_suggester"],
+                                  suggester_seconds=data["suggester_seconds"], after_capture=data["after_capture"],
+                                  failure=failure)
+
+
+def prompt_suggestions_or_none(data: list[Mapping[str, object]] | None) -> tuple[PromptSuggestionRecord, ...] | None:
+    # Records saved before prompt suggestions were recorded have no list.
+    return None if data is None else tuple(prompt_suggestion_from_dict(item) for item in data)
+
+
 def result_to_dict(result: GenerationResult) -> dict[str, object]:
     """
     Serialize a generation result: backend identity, effective settings, and candidates.
@@ -182,6 +235,7 @@ def round_to_dict(record: RoundRecord) -> dict[str, object]:
         "created_at": selection.created_at.isoformat(),
     } if selection else None
     failure_data = asdict(failure) if failure else None
+    suggestions = record.prompt_suggestions
     return {
         "schema_version": record.schema_version,
         "round": record.number,
@@ -202,6 +256,8 @@ def round_to_dict(record: RoundRecord) -> dict[str, object]:
         "timings_seconds": dict(record.timings_seconds),
         "total_seconds": encode_value(record.total_seconds),
         "evaluation": evaluation if iteration else None,
+        "prompt_suggestions": [prompt_suggestion_to_dict(item) for item in suggestions] if suggestions is not None else None,
+        "prompt_origin": prompt_origin_to_dict(record.prompt_origin),
         "selection": selection_data,
         "failure": failure_data,
     }
@@ -246,7 +302,7 @@ def round_from_dict(data: Mapping[str, object]) -> RoundRecord:
     failure = RoundFailure(**failure_data) if failure_data is not None else None
     steps = tuple(PreprocessingStep(name=step["name"], params=step["params"]) for step in input_data["preprocessing"])
 
-    # Records written before sources, frame ages, or totals were tracked lack them, which is unknown rather than a default.
+    # Records written before sources, frame ages, totals, or prompt records lack them, which is unknown rather than a default.
     source = decode_value(input_data["source"]) if "source" in input_data else Unavailable(MISSING_SOURCE_REASON)
     frame_age = decode_value(input_data.get("frame_age_seconds", {"unavailable": MISSING_FRAME_AGE_REASON}))
     total = decode_value(data.get("total_seconds", {"unavailable": MISSING_TOTAL_REASON}))
@@ -256,7 +312,9 @@ def round_from_dict(data: Mapping[str, object]) -> RoundRecord:
                        rotation=input_data["rotation"], steps=steps, request=request, iteration=iteration,
                        timings_seconds=data["timings_seconds"], total_seconds=total, evaluator=evaluation.get("evaluator"),
                        score_details=evaluation.get("score_details", {}), scores=evaluation.get("scores", {}),
-                       selection=selection, failure=failure)
+                       selection=selection, failure=failure,
+                       prompt_suggestions=prompt_suggestions_or_none(data.get("prompt_suggestions")),
+                       prompt_origin=prompt_origin_from_dict(data.get("prompt_origin")))
 
 
 def hardware_to_dict(hardware: Hardware | Unavailable) -> dict[str, object]:

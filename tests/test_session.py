@@ -23,9 +23,10 @@ from sketchloop.capture import CapturedSketch, CaptureSource, encode_frame, raw_
 from sketchloop.domain import (Candidate, GenerationRequest, Guidance, InvalidRecordError, SketchLoopError, SketchSource,
                                Unavailable, UnsupportedConfigurationError, record_no_selection, select_candidates)
 from sketchloop.evaluation import Evaluator
-from sketchloop.experiments import (FRAME_AGE_NOT_MEASURED_REASON, NOT_STREAMED_REASON, SETUP_NOT_MEASURED_REASON,
-                                    UNKNOWN_SOURCE_REASON, ExperimentNameError, ExperimentNameTakenError, FolderStore,
-                                    MemoryStore, RoundRecord, SessionRecord, StoreError, load_session)
+from sketchloop.experiments import (FRAME_AGE_NOT_MEASURED_REASON, NOT_STREAMED_REASON, OUTSIDE_SESSION_REASON,
+                                    SETUP_NOT_MEASURED_REASON, UNKNOWN_SOURCE_REASON, DrawingStudy, ExperimentNameError,
+                                    ExperimentNameTakenError, FolderStore, MemoryStore, PromptOrigin, PromptOriginKind,
+                                    PromptSuggestionRecord, RoundRecord, SessionRecord, StoreError, StudyCondition, load_session)
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor
 from sketchloop.session import SketchSession
@@ -433,3 +434,53 @@ def test_session_allows_one_open_drawing() -> None:
     assert session.session_record is not None, "The session record must be saved before a drawing"
     assert [drawing.record.number for drawing in session.drawings] == [1, 2], "Drawings must be numbered from 1"
     assert not second.record.suggestions_enabled, "A drawing without a suggester has suggestions off"
+
+
+@pytest.mark.parametrize(("condition", "suggester", "message"), [
+    (StudyCondition.AI, None, "needs a stroke suggester"),
+    (StudyCondition.NO_AI, FakeStrokeSuggester(), "cannot have a stroke suggester"),
+])
+def test_study_drawing_refuses_condition_that_disagrees(condition: StudyCondition, suggester: FakeStrokeSuggester | None,
+                                                        message: str) -> None:
+    store = MemoryStore()
+    session = SketchSession(FakeGenerator(), store)
+
+    # The mismatch is refused before the session or the drawing is saved.
+    with pytest.raises(SketchLoopError, match=message):
+        session.start_drawing(suggester, canvas_width=512, canvas_height=360, save_interval_seconds=2.0,
+                              study=DrawingStudy(condition=condition))
+    assert (store.sessions, store.drawings, session.drawings) == ({}, {}, []), "A refused study drawing must save nothing"
+
+
+def test_session_routes_prompt_suggestions_to_drawing_or_next_round(make_prompt_suggestion: Callable[..., PromptSuggestionRecord]) -> None:  # noqa: E501
+    captured = StillCamera().capture()
+    session = SketchSession(FakeGenerator(), MemoryStore())
+    pending = session.record_prompt_suggestion(make_prompt_suggestion("a chair, concept art", "prompt-a", number=5))
+    first = session.run_round(captured.image, captured.payload, Guidance(prompt="a chair, concept art"), source=SketchSource.FILE,
+                              prompt_suggestion_id="prompt-a")
+    session.run_round(captured.image, captured.payload, Guidance(prompt="a chair, ink"), source=SketchSource.FILE,
+                      prompt_suggestion_id="prompt-a")
+    drawing = session.start_drawing(FakeStrokeSuggester(), canvas_width=512, canvas_height=360, save_interval_seconds=2.0,
+                                    study=DrawingStudy(condition=StudyCondition.AI))
+    in_drawing = session.record_prompt_suggestion(make_prompt_suggestion("a lamp, concept art", "prompt-b"))
+    drawing.finish(None)
+    session.run_round(captured.image, captured.payload, Guidance(prompt="a lamp, concept art"), source=SketchSource.FILE,
+                      prompt_suggestion_id="prompt-b")
+    session.run_round(captured.image, captured.payload, Guidance(prompt="a vase"), source=SketchSource.FILE,
+                      prompt_suggestion_id="from-another-session")
+    records = session.records
+
+    # A suggestion outside a drawing is numbered in the next round's list only, and one in a drawing goes to the drawing.
+    assert (pending.number, pending.after_capture) == (1, None), f"Expected number 1 outside a drawing, got {pending}"
+    assert records[0].prompt_suggestions == (pending,), f"Round 1 must hold the pending suggestion, got {records[0]}"
+    lists = [record.prompt_suggestions for record in records[1:]]
+    assert lists == [(), (), ()], f"Later rounds must hold no suggestions, got {lists}"
+    assert drawing.record.prompt_suggestions == (in_drawing,), f"The drawing must hold its suggestion, got {drawing.record}"
+
+    # Each round's origin is found in its own list, an earlier round, or a drawing, and an unknown ID is unavailable.
+    origins = [record.prompt_origin for record in records]
+    expected = [PromptOrigin(kind=PromptOriginKind.SUGGESTED, prompt_suggestion="prompt-a"),
+                PromptOrigin(kind=PromptOriginKind.EDITED, prompt_suggestion="prompt-a"),
+                PromptOrigin(kind=PromptOriginKind.SUGGESTED, prompt_suggestion="prompt-b"), Unavailable(OUTSIDE_SESSION_REASON)]
+    assert origins == expected, f"Unexpected round origins {origins}"
+    assert first.iteration.request.guidance.prompt == "a chair, concept art", "The round must use the prompt as given"

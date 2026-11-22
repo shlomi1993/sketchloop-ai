@@ -14,8 +14,8 @@ from sketchloop.domain import (Guidance, SketchSource, Unavailable, UnsupportedC
                                select_candidates)
 from sketchloop.evaluation import Evaluator
 from sketchloop.experiments import (MISSING_FRAME_AGE_REASON, MISSING_HARDWARE_REASON, MISSING_SETUP_REASON,
-                                    MISSING_TOTAL_REASON, BenchmarkPlan, ExperimentRecordError, FolderStore, Hardware,
-                                    load_session)
+                                    MISSING_TOTAL_REASON, ORIGIN_NOT_RECORDED, BenchmarkPlan, ExperimentRecordError, FolderStore,
+                                    Hardware, PromptSuggestionRecord, load_session)
 from sketchloop.session import SketchSession
 from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
 
@@ -25,6 +25,7 @@ pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
 
 EXAMPLE_SKETCH = Path(__file__).resolve().parents[2] / "examples" / "sketch-photo.jpg"
+PromptMaker = Callable[..., PromptSuggestionRecord]  # Builds a shown prompt suggestion from its text and ID
 
 
 def run_two_rounds(runs_dir: Path) -> SketchSession:
@@ -298,3 +299,65 @@ def test_invalid_drawing_rejected(tmp_path: Path, sheet_capture: CapturedSketch,
     with pytest.raises(ExperimentRecordError, match=message) as caught:
         load_session(session.folder)
     assert str(caught.value).startswith("drawing-1/drawing.json"), f"The error must name the file, got {caught.value}"
+
+
+def run_prompted_rounds(runs_dir: Path, make_prompt_suggestion: PromptMaker) -> SketchSession:
+    # Show a prompt suggestion outside a drawing, use it unchanged in round 1, and use it edited in round 2.
+    raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
+    session = SketchSession(FakeGenerator(), FolderStore(runs_dir))
+    session.record_prompt_suggestion(make_prompt_suggestion("a chair, concept art", "prompt-a"))
+    session.run_round(raw_sketch, raw_payload, Guidance(prompt="a chair, concept art"), source=SketchSource.FILE,
+                      prompt_suggestion_id="prompt-a")
+    session.run_round(raw_sketch, raw_payload, Guidance(prompt="a chair, ink"), source=SketchSource.FILE,
+                      prompt_suggestion_id="prompt-a")
+    return session
+
+
+def test_round_prompt_fields_round_trip_and_older_rounds_load(tmp_path: Path, make_prompt_suggestion: PromptMaker) -> None:
+    session = run_prompted_rounds(tmp_path, make_prompt_suggestion)
+    saved = load_session(session.folder)
+    round_file = session.folder / "round-1" / "round.json"
+    data = json.loads(round_file.read_text(encoding="utf-8"))
+
+    # Both rounds load with their prompt suggestions and origins, the second naming the first round's suggestion.
+    loaded = [(record.prompt_suggestions, record.prompt_origin) for record in saved.rounds]
+    expected = [(record.prompt_suggestions, record.prompt_origin) for record in session.records]
+    assert loaded == expected and saved.problems == (), f"Prompt fields changed on reload: {loaded}, {saved.problems}"
+    assert saved.rounds[1].prompt_origin.kind == "edited", f"Round 2 must be edited, got {saved.rounds[1].prompt_origin}"
+
+    # The new keys follow the evaluation in round.json.
+    keys = list(data)
+    position = keys.index("evaluation")
+    assert keys[position + 1:position + 3] == ["prompt_suggestions", "prompt_origin"], f"Unexpected key order {keys}"
+
+    # A round saved before prompt records loads with no list and an origin not recorded.
+    del data["prompt_suggestions"], data["prompt_origin"]
+    round_file.write_text(json.dumps(data), encoding="utf-8")
+    older = load_session(session.folder).rounds[0]
+    assert older.prompt_suggestions is None, f"An older round has no prompt suggestion list, got {older.prompt_suggestions}"
+    assert older.prompt_origin == Unavailable(ORIGIN_NOT_RECORDED), f"Expected not recorded, got {older.prompt_origin}"
+
+
+def test_round_origin_naming_an_unknown_suggestion_is_a_problem(tmp_path: Path, make_prompt_suggestion: PromptMaker) -> None:
+    session = run_prompted_rounds(tmp_path, make_prompt_suggestion)
+    round_file = session.folder / "round-2" / "round.json"
+    data = json.loads(round_file.read_text(encoding="utf-8"))
+    data["prompt_origin"]["prompt_suggestion"] = "unknown"
+    round_file.write_text(json.dumps(data), encoding="utf-8")
+    saved = load_session(session.folder)
+
+    # The session still loads, and the unknown ID is one problem line.
+    expected = ("round-2 prompt origin names prompt suggestion unknown, which is not in this session.",)
+    assert saved.problems == expected, f"Expected one problem, got {saved.problems}"
+
+
+def test_round_origin_disagreeing_with_its_own_suggestion_is_refused(tmp_path: Path, make_prompt_suggestion: PromptMaker) -> None:
+    session = run_prompted_rounds(tmp_path, make_prompt_suggestion)
+    round_file = session.folder / "round-1" / "round.json"
+    data = json.loads(round_file.read_text(encoding="utf-8"))
+    data["prompt_origin"]["kind"] = "edited"
+    round_file.write_text(json.dumps(data), encoding="utf-8")
+
+    # The round's own suggestion gives suggested, so the recorded kind is refused.
+    with pytest.raises(ExperimentRecordError, match="recorded as edited, but its prompt and suggestion give suggested"):
+        load_session(session.folder)

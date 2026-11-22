@@ -12,6 +12,7 @@ from typing import Final, TypeVar
 
 from sketchloop.domain import ImageRef
 from sketchloop.experiments.drawings import DRAWING_FILE, DrawingRecord, drawing_from_dict, list_drawing_images
+from sketchloop.experiments.prompts import PromptOrigin, PromptSuggestionStatus
 from sketchloop.experiments.records import ROUND_FILE, SESSION_FILE, ExperimentRecordError, RoundRecord, SavedSession
 from sketchloop.experiments.serialization import round_from_dict, session_from_dict
 
@@ -217,6 +218,19 @@ def load_drawings(folder: Path) -> tuple[list[DrawingRecord], list[str], int]:
     return drawings, problems, matched
 
 
+def find_unknown_prompt_origins(rounds: list[RoundRecord], drawings: list[DrawingRecord]) -> list[str]:
+    # A round's origin may name a suggestion of any round or drawing of the session, so it is checked against all of them.
+    suggestions = [item for record in [*rounds, *drawings] for item in record.prompt_suggestions or ()]
+    known = {item.id for item in suggestions if item.status == PromptSuggestionStatus.SHOWN}
+    problems = []
+    for record in rounds:
+        origin = record.prompt_origin
+        if isinstance(origin, PromptOrigin) and origin.prompt_suggestion is not None and origin.prompt_suggestion not in known:
+            problems.append(f"round-{record.number} prompt origin names prompt suggestion {origin.prompt_suggestion}, which is not in this session.")  # noqa: E501
+
+    return problems
+
+
 def load_session(folder: Path) -> SavedSession:
     """
     Load a session folder's records, failing on structural faults and listing artifact problems.
@@ -234,5 +248,6 @@ def load_session(folder: Path) -> SavedSession:
     session = convert_record(SESSION_FILE, read_json(folder / SESSION_FILE, SESSION_FILE), session_from_dict)
     rounds, round_problems, round_matched = load_rounds(folder)
     drawings, drawing_problems, drawing_matched = load_drawings(folder)
-    return SavedSession(folder=folder, session=session, rounds=tuple(rounds), problems=tuple(round_problems + drawing_problems),
+    problems = round_problems + drawing_problems + find_unknown_prompt_origins(rounds, drawings)
+    return SavedSession(folder=folder, session=session, rounds=tuple(rounds), problems=tuple(problems),
                         checked_files=round_matched + drawing_matched, drawings=tuple(drawings))

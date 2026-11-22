@@ -13,10 +13,13 @@ from typing import Final
 
 from sketchloop.domain import (ColorMode, ControlValue, ImageRef, Rotation, SketchSource, Unavailable, first_line, require,
                                require_duration)
+from sketchloop.experiments.prompts import (ORIGIN_NOT_RECORDED, PromptOrigin, PromptSuggestionRecord, check_prompt_origin,
+                                            check_prompt_suggestions)
 from sketchloop.experiments.provenance import redact_paths
 from sketchloop.experiments.serialization import (backend_from_dict, backend_to_dict, check_schema_version, decode_value,
                                                   effective_from_dict, effective_to_dict, encode_value, image_from_dict,
-                                                  parse_time)
+                                                  parse_time, prompt_origin_from_dict, prompt_origin_to_dict,
+                                                  prompt_suggestion_to_dict, prompt_suggestions_or_none)
 from sketchloop.follow import (ALIGNED_ON_NOT_RECORDED, FILLED_SHARE_NOT_RECORDED, Alignment, CaptureScores, FollowDecision,
                                FollowMethod, FollowRule, PartDecision, PartScores, decide_follow)
 from sketchloop.preprocessing import PreprocessingStep
@@ -26,6 +29,7 @@ from sketchloop.stroke_suggestion import (CANVAS_GRID_PIXELS, PART_COLORS, Strok
 
 DRAWING_FILE: Final = "drawing.json"
 JPEG_QUALITY_NOT_RECORDED: Final = "not recorded in drawings saved before the JPEG quality was"
+FINAL_PROMPT_NOT_RECORDED: Final = "not recorded in drawings saved before final prompts were"
 
 
 class CaptureTrigger(StrEnum):
@@ -73,6 +77,22 @@ class SuggestionStage(StrEnum):
     OVERLAY = "overlay"
     SCORING = "scoring"
     SAVING = "saving"
+
+
+class StudyCondition(StrEnum):
+    AI = "ai"  # Next-stroke and prompt suggestions are offered
+    NO_AI = "no_ai"  # The same page and capture without any AI help
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DrawingStudy:
+    condition: StudyCondition  # Condition the experimenter chose when starting the drawing
+
+    def __post_init__(self) -> None:
+        # Hold a known condition as the enum, so one loaded from JSON text matches a recorded one.
+        conditions = ", ".join(StudyCondition)
+        require(self.condition in list(StudyCondition), f"Study condition must be one of {conditions}, got {self.condition!r}.")
+        object.__setattr__(self, "condition", StudyCondition(self.condition))
 
 
 def is_aware(moment: object) -> bool:
@@ -205,6 +225,7 @@ class SuggestionRecord:
     failure: StageFailure | None  # Why the suggestion failed, None when it was shown
     window: SuggestionWindow | None = None  # How its window ended, None while open, when failed, or in older drawings
     decision: FollowDecision | None = None  # Whether it was followed, decided when its window ended, None until then
+    prompt_origin: PromptOrigin | Unavailable = Unavailable(ORIGIN_NOT_RECORDED)  # How the prompt sent with the press came about
 
     def __post_init__(self) -> None:
         # Number, ID, times, and the baseline capture identify the press.
@@ -214,6 +235,8 @@ class SuggestionRecord:
         object.__setattr__(self, "status", SuggestionStatus(self.status))
         require(is_aware(self.requested_at), f"Suggestion {self.number} requested_at must be timezone-aware.")
         require(is_count(self.baseline_capture, 1), f"Suggestion {self.number} baseline_capture must be an int >= 1.")
+        origin = self.prompt_origin
+        require(isinstance(origin, PromptOrigin | Unavailable), f"Suggestion {self.number} prompt_origin must be an origin or unavailable.")  # noqa: E501
 
         # A shown suggestion has a request, result, overlay, and time shown, and a failed one has only its failure.
         shown = self.status == SuggestionStatus.SHOWN
@@ -289,6 +312,10 @@ class DrawingRecord:
     follow_detector: FollowMethod | None = None  # Follow method and parameters, None with suggestions off or in older drawings
     interval_jpeg_quality: int | Unavailable = Unavailable(JPEG_QUALITY_NOT_RECORDED)  # Quality interval frames are encoded at
     rule: FollowRule | None = None  # Rule deciding suggestions, None with suggestions off or in drawings saved before decisions
+    study: DrawingStudy | None = None  # Condition of a study drawing, None outside study mode and in older drawings
+    prompt_suggestions: tuple[PromptSuggestionRecord, ...] | None = None  # Shown during the drawing, None in older drawings
+    final_prompt: str | Unavailable | None = Unavailable(FINAL_PROMPT_NOT_RECORDED)  # Prompt box text at finish, None if none
+    final_prompt_origin: PromptOrigin | Unavailable | None = Unavailable(ORIGIN_NOT_RECORDED)  # None exactly when final_prompt is
 
     def __post_init__(self) -> None:
         # Identity, times, and the end are consistent.
@@ -324,6 +351,46 @@ class DrawingRecord:
         self._check_suggestions()
         self._check_follow()
         self._check_windows()
+        self._check_study()
+        self._check_prompts()
+
+    def _check_study(self) -> None:
+        # A study drawing's condition agrees with its suggestions, which cover both next-stroke and prompt suggestions.
+        if self.study is None:
+            return
+
+        require(isinstance(self.study, DrawingStudy), f"Drawing study must hold a condition, got {self.study!r}.")
+        condition = self.study.condition
+        state = "on" if condition == StudyCondition.AI else "off"
+        require((condition == StudyCondition.AI) == self.suggestions_enabled, f"A study drawing in condition {condition} has suggestions {state}.")  # noqa: E501
+
+    def _check_prompts(self) -> None:
+        # Prompt suggestions are AI help too, numbered in order, each after a capture of this drawing.
+        if self.prompt_suggestions is not None:
+            object.__setattr__(self, "prompt_suggestions", tuple(self.prompt_suggestions))
+        prompt_suggestions = self.prompt_suggestions or ()
+        has_none = not prompt_suggestions
+        require(self.suggestions_enabled or has_none, "A drawing with suggestions off cannot have prompt suggestions.")
+        check_prompt_suggestions(prompt_suggestions, "Drawing")
+        for prompt_suggestion in prompt_suggestions:
+            number, capture = prompt_suggestion.number, prompt_suggestion.after_capture
+            require(capture is None or capture <= len(self.captures), f"Prompt suggestion {number} after_capture {capture} is not a capture of this drawing.")  # noqa: E501
+
+        # Each stroke suggestion's prompt origin agrees with its prompt and the prompt suggestion it names.
+        for suggestion in self.suggestions:
+            prompt = suggestion.request.prompt if suggestion.request else None
+            label = f"Suggestion {suggestion.number} prompt origin"
+            check_prompt_origin(suggestion.prompt_origin, prompt, suggestion.requested_at, prompt_suggestions, label)
+
+        # The final prompt is recorded when the drawing ends, with an origin exactly when there is a prompt.
+        final_prompt, origin = self.final_prompt, self.final_prompt_origin
+        require(final_prompt is None or isinstance(final_prompt, str | Unavailable), "Drawing final_prompt must be text, unavailable, or null.")  # noqa: E501
+        require(origin is None or isinstance(origin, PromptOrigin | Unavailable), "Drawing final_prompt_origin must be an origin, unavailable, or null.")  # noqa: E501
+        require(self.end is not None or not isinstance(final_prompt, str), "An open drawing has no final prompt.")
+        require((final_prompt is None) == (origin is None), "A drawing has a final prompt origin exactly when it has one.")
+        if isinstance(origin, PromptOrigin):
+            require(isinstance(final_prompt, str), "A final prompt origin needs its final prompt.")
+            check_prompt_origin(origin, final_prompt, self.ended_at, prompt_suggestions, "Final prompt origin")
 
     def _check_captures(self) -> None:
         # Captures are numbered without gaps, and every canvas has the drawing's canvas size.
@@ -780,6 +847,7 @@ def suggestion_to_dict(suggestion: SuggestionRecord) -> dict[str, object]:
         "shown_at": suggestion.shown_at.isoformat() if suggestion.shown_at else None,
         "baseline_capture": suggestion.baseline_capture,
         "request": stroke_request_to_dict(request) if request else None,
+        "prompt_origin": prompt_origin_to_dict(suggestion.prompt_origin),
         "result": stroke_suggestion_to_dict(result, suggestion.part_colors) if result else None,
         "overlay": asdict(overlay) if overlay else None,
         "timings_seconds": dict(suggestion.timings_seconds),
@@ -804,13 +872,27 @@ def suggestion_from_dict(data: Mapping[str, object]) -> SuggestionRecord:
     failure = StageFailure(**data["failure"]) if data["failure"] is not None else None
     shown_at = parse_time(data["shown_at"]) if data["shown_at"] is not None else None
 
-    # Suggestions saved before decisions have no window or decision keys.
+    # Suggestions saved before decisions have no window or decision keys, and those before prompt origins no origin.
     return SuggestionRecord(number=data["number"], id=data["id"], status=data["status"],
                             requested_at=parse_time(data["requested_at"]), shown_at=shown_at,
                             baseline_capture=data["baseline_capture"], request=request, result=result,
                             part_colors=part_colors, overlay=image_or_none(data["overlay"]),
                             timings_seconds=data["timings_seconds"], failure=failure, window=window_from_dict(data.get("window")),
-                            decision=decision_from_dict(data.get("decision")))
+                            decision=decision_from_dict(data.get("decision")),
+                            prompt_origin=prompt_origin_from_dict(data.get("prompt_origin")))
+
+
+def study_from_dict(data: Mapping[str, object] | None) -> DrawingStudy | None:
+    # Drawings outside study mode write null, and drawings saved before study mode have no key.
+    return None if data is None else DrawingStudy(condition=data["condition"])
+
+
+def final_prompt_origin_from_dict(data: Mapping[str, object]) -> PromptOrigin | Unavailable | None:
+    # An open drawing writes null, while a drawing saved before final prompts has no key, which is not recorded.
+    if "final_prompt_origin" in data and data["final_prompt_origin"] is None:
+        return None
+
+    return prompt_origin_from_dict(data.get("final_prompt_origin"))
 
 
 def drawing_to_dict(record: DrawingRecord) -> dict[str, object]:
@@ -823,6 +905,8 @@ def drawing_to_dict(record: DrawingRecord) -> dict[str, object]:
     Returns:
         dict[str, object]: JSON-ready drawing record.
     """
+    prompt_suggestions, origin = record.prompt_suggestions, record.final_prompt_origin
+    prompt_list = None if prompt_suggestions is None else [prompt_suggestion_to_dict(item) for item in prompt_suggestions]
     return {
         "schema_version": record.schema_version,
         "drawing": record.number,
@@ -835,11 +919,15 @@ def drawing_to_dict(record: DrawingRecord) -> dict[str, object]:
         "interval_jpeg_quality": encode_value(record.interval_jpeg_quality),
         "suggestions_enabled": record.suggestions_enabled,
         "suggester": record.suggester,
+        "study": asdict(record.study) if record.study else None,
         "follow_detector": follow_method_to_dict(record.follow_detector) if record.follow_detector else None,
         "rule": rule_to_dict(record.rule) if record.rule else None,
         "captures": [capture_to_dict(capture) for capture in record.captures],
         "suggestions": [suggestion_to_dict(suggestion) for suggestion in record.suggestions],
+        "prompt_suggestions": prompt_list,
         "final_capture": record.final_capture,
+        "final_prompt": encode_value(record.final_prompt),
+        "final_prompt_origin": prompt_origin_to_dict(origin) if origin is not None else None,
     }
 
 
@@ -855,6 +943,7 @@ def drawing_from_dict(data: Mapping[str, object]) -> DrawingRecord:
     """
     check_schema_version(data)
     quality = decode_value(data.get("interval_jpeg_quality", {"unavailable": JPEG_QUALITY_NOT_RECORDED}))
+    final_prompt = decode_value(data.get("final_prompt", {"unavailable": FINAL_PROMPT_NOT_RECORDED}))
     ended_at = parse_time(data["ended_at"]) if data["ended_at"] is not None else None
     canvas = data["canvas"]
     return DrawingRecord(schema_version=data["schema_version"], number=data["drawing"], drawing_id=data["drawing_id"],
@@ -865,7 +954,10 @@ def drawing_from_dict(data: Mapping[str, object]) -> DrawingRecord:
                          suggestions=tuple(suggestion_from_dict(item) for item in data["suggestions"]),
                          final_capture=data["final_capture"],
                          follow_detector=follow_method_from_dict(data.get("follow_detector")),
-                         interval_jpeg_quality=quality, rule=rule_from_dict(data.get("rule")))
+                         interval_jpeg_quality=quality, rule=rule_from_dict(data.get("rule")),
+                         study=study_from_dict(data.get("study")),
+                         prompt_suggestions=prompt_suggestions_or_none(data.get("prompt_suggestions")),
+                         final_prompt=final_prompt, final_prompt_origin=final_prompt_origin_from_dict(data))
 
 
 def list_drawing_images(record: DrawingRecord) -> list[ImageRef]:

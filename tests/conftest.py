@@ -9,13 +9,16 @@ import time
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import CapturedSketch, encode_frame
 from sketchloop.domain import Candidate, GenerationRequest
 from sketchloop.evaluation import Evaluator
+from sketchloop.experiments import PromptSuggestionRecord, PromptSuggestionStatus
 from sketchloop.generation import GenerationOutput
+from sketchloop.suggestion import TemplateSuggester
 
 
 class ConstantEvaluator(Evaluator):
@@ -174,3 +177,17 @@ def provide_part_drawer() -> Callable[[np.ndarray, bytes], np.ndarray]:
     Provide a function that draws a suggested part's mask on the sheet frame, as a person following it would.
     """
     return draw_part_on_sheet
+
+
+def build_prompt_suggestion(text: str, suggestion_id: str = "prompt-1", *, number: int = 1) -> PromptSuggestionRecord:
+    # A shown template suggestion, pressed two seconds ago and shown one second ago, so a press made now comes after it.
+    now = datetime.now(timezone.utc)
+    return PromptSuggestionRecord(number=number, id=suggestion_id, status=PromptSuggestionStatus.SHOWN,
+                                  requested_at=now - timedelta(seconds=2), shown_at=now - timedelta(seconds=1),
+                                  suggester=TemplateSuggester().identity, text=text, list_position=0, ran_suggester=True,
+                                  suggester_seconds=0.01, after_capture=None, failure=None)
+
+
+@pytest.fixture(name="make_prompt_suggestion")
+def provide_prompt_suggestion_maker() -> Callable[..., PromptSuggestionRecord]:
+    return build_prompt_suggestion

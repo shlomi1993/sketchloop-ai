@@ -17,10 +17,12 @@ from pathlib import PurePosixPath
 from typing import Final
 
 from sketchloop.capture import CapturedSketch, InvalidSketchError, encode_frame_jpeg
-from sketchloop.domain import SCHEMA_VERSION, ColorMode, ControlValue, ImageRef, Rotation, SketchLoopError, SketchSource
-from sketchloop.experiments import (CaptureRecord, CaptureTrigger, DrawingEnd, DrawingRecord, ExperimentStore, StoreError,
+from sketchloop.domain import (SCHEMA_VERSION, ColorMode, ControlValue, ImageRef, Rotation, SketchLoopError, SketchSource,
+                               Unavailable)
+from sketchloop.experiments import (OUTSIDE_DRAWING_REASON, CaptureRecord, CaptureTrigger, DrawingEnd, DrawingRecord,
+                                    DrawingStudy, ExperimentStore, PromptOrigin, PromptSuggestionRecord, StoreError,
                                     SuggestionRecord, SuggestionStage, SuggestionStatus, SuggestionWindow, WindowEnd,
-                                    decide_suggestion, describe_stage_failure, resolve_frame_age)
+                                    decide_suggestion, describe_stage_failure, resolve_frame_age, resolve_prompt_origin)
 from sketchloop.follow import (PROVISIONAL_RULE, AlignedStrokeFollowDetector, CaptureScores, FollowDetector,
                                describe_follow_method)
 from sketchloop.preprocessing import PaperCanvas, PreprocessedSketch, decode_grayscale, extract_canvas_strokes, make_paper_canvas
@@ -187,7 +189,7 @@ class GuidedDrawing:
 
     def __init__(self, store: ExperimentStore, session_id: str, number: int, suggester: StrokeSuggester | None, *,
                  canvas_width: int, canvas_height: int, save_interval_seconds: float,
-                 follow_detector: FollowDetector | None = None) -> None:
+                 follow_detector: FollowDetector | None = None, study: DrawingStudy | None = None) -> None:
         self.store = store
         self.session_id = session_id
         self.suggester = suggester
@@ -208,7 +210,8 @@ class GuidedDrawing:
                                      suggester=type(suggester).__name__ if suggester is not None else None, captures=(),
                                      suggestions=(), final_capture=None,
                                      follow_detector=describe_follow_method(self.follow_detector) if suggester else None,
-                                     interval_jpeg_quality=INTERVAL_JPEG_QUALITY, rule=PROVISIONAL_RULE if suggester else None)
+                                     interval_jpeg_quality=INTERVAL_JPEG_QUALITY, rule=PROVISIONAL_RULE if suggester else None,
+                                     study=study, prompt_suggestions=(), final_prompt=None, final_prompt_origin=None)
 
         # Save the empty record now, so the drawing folder exists and loads as not finished if the server stops.
         self._save({})
@@ -255,6 +258,35 @@ class GuidedDrawing:
         # A finished drawing is a closed record, so refuse anything that would change it.
         if not self.is_open:
             raise SketchLoopError(f"Drawing {self._record.number} is finished. Start a new drawing.")
+
+    def _resolve_prompt_origin(self, prompt: str, suggestion_id: str | None, used_at: datetime) -> PromptOrigin | Unavailable:
+        # Look the ID up in this drawing only, so an ID from another drawing or a stale tab is recorded as unavailable.
+        return resolve_prompt_origin(prompt, suggestion_id, self._record.prompt_suggestions, used_at, OUTSIDE_DRAWING_REASON)
+
+    def record_prompt_suggestion(self, record: PromptSuggestionRecord) -> PromptSuggestionRecord:
+        with self._lock:
+            self._require_open()
+            if not self._record.suggestions_enabled:
+                raise SketchLoopError("Suggestions are off in this drawing.")
+
+            # Number it after the earlier ones, note the latest capture, and save it.
+            previous = self._record.prompt_suggestions
+            captures = self._record.captures
+            numbered = replace(record, number=len(previous) + 1, after_capture=captures[-1].number if captures else None)
+            self._record = replace(self._record, prompt_suggestions=(*previous, numbered))
+
+            # Remove it again on a failed save, so the record never says shown for text the page did not show.
+            try:
+                self._save({})
+            except StoreError:
+                self._record = replace(self._record, prompt_suggestions=previous)
+                raise
+
+            return numbered
+
+    def find_prompt_suggestion(self, suggestion_id: str) -> PromptSuggestionRecord | None:
+        # Return the drawing's prompt suggestion with this ID, shown or failed, or None.
+        return next((item for item in self._record.prompt_suggestions if item.id == suggestion_id), None)
 
     def _score_capture(self, canvas: PaperCanvas, seconds_since_start: float, timings: dict[str, float]) -> CaptureScores | None:
         # Score the canvas against the open suggestion's baseline and parts, with both canvases' filled areas hidden.
@@ -410,7 +442,8 @@ class GuidedDrawing:
         return shown, overlay, tuple(mask_payloads)
 
     def suggest(self, captured: CapturedSketch, *, source: SketchSource, rotation: int, prompt: str, seed: int | None = None,
-                controls: Mapping[str, ControlValue] | None = None, frame_age_seconds: float | None = None) -> SuggestionRecord:
+                controls: Mapping[str, ControlValue] | None = None, frame_age_seconds: float | None = None,
+                prompt_suggestion_id: str | None = None) -> SuggestionRecord:
         """
         Capture the frame, suggest next strokes for it, draw their overlay, and save the suggestion, or record why it failed.
 
@@ -423,6 +456,8 @@ class GuidedDrawing:
             controls (Mapping[str, ControlValue] | None, optional): Requested suggester controls, or None for the defaults.
                 Defaults to None.
             frame_age_seconds (float | None, optional): Age of a streamed webcam frame, or None. Defaults to None.
+            prompt_suggestion_id (str | None, optional): ID of the prompt suggestion the page wrote into its prompt box, or
+                None. Defaults to None.
 
         Returns:
             SuggestionRecord: The shown suggestion, possibly with no parts.
@@ -432,14 +467,15 @@ class GuidedDrawing:
             if self.suggester is None:
                 raise SketchLoopError(f"Suggestions are off for drawing {self._record.number}.")
 
-            # Capture the frame at the press, which becomes the suggestion's baseline.
+            # Capture the frame at the press, which becomes the suggestion's baseline, and note how its prompt came about.
             requested_at = datetime.now(timezone.utc)
+            origin = self._resolve_prompt_origin(prompt, prompt_suggestion_id, requested_at)
             capture, canvas, canvas_error = self._take_capture(captured, source, rotation, frame_age_seconds,
                                                                CaptureTrigger.SUGGESTION)
             number = len(self._record.suggestions) + 1
             folder = f"suggestions/suggestion-{number}/"
             draft = partial(SuggestionRecord, number=number, id=uuid.uuid4().hex, requested_at=requested_at,
-                            baseline_capture=capture.number)
+                            baseline_capture=capture.number, prompt_origin=origin)
             failed = partial(draft, status=SuggestionStatus.FAILED, shown_at=None, result=None, part_colors=(), overlay=None)
             timings: dict[str, float] = {SuggestionStage.CANVAS: capture.timings_seconds[SuggestionStage.CANVAS]}
 
@@ -512,7 +548,8 @@ class GuidedDrawing:
             self._lock.release()
 
     def finish(self, captured: CapturedSketch | None, *, source: SketchSource | None = None, rotation: int = Rotation.DEG_000,
-               frame_age_seconds: float | None = None, end: DrawingEnd = DrawingEnd.FINISHED) -> DrawingRecord:
+               frame_age_seconds: float | None = None, end: DrawingEnd = DrawingEnd.FINISHED, prompt: str | None = None,
+               prompt_suggestion_id: str | None = None) -> DrawingRecord:
         """
         End the drawing, after a final capture when a frame is given, and save it, so it refuses any further change.
 
@@ -522,6 +559,9 @@ class GuidedDrawing:
             rotation (int, optional): Degrees to turn the final frame clockwise. Defaults to 0.
             frame_age_seconds (float | None, optional): Age of a streamed webcam frame, or None. Defaults to None.
             end (DrawingEnd, optional): Why the drawing ends. Defaults to finished.
+            prompt (str | None, optional): Prompt box text at finish, or None when no page sent one. Defaults to None.
+            prompt_suggestion_id (str | None, optional): ID of the prompt suggestion the page wrote into its prompt box, or
+                None. Defaults to None.
 
         Returns:
             DrawingRecord: The finished drawing's record.
@@ -537,12 +577,17 @@ class GuidedDrawing:
 
                 final_capture = self._take_capture(captured, source, rotation, frame_age_seconds, CaptureTrigger.FINISH)[0].number
 
-            # End the open suggestion's window with the drawing, deciding it, then save.
+            # Keep the final prompt as given, empty included, unless a new session replaced the drawing.
             ended_at = datetime.now(timezone.utc)
+            final_prompt = prompt if end == DrawingEnd.FINISHED else None
+            origin = None if final_prompt is None else self._resolve_prompt_origin(final_prompt, prompt_suggestion_id, ended_at)
+
+            # End the open suggestion's window with the drawing, deciding it, then save.
             previous = self._find_open_record()
             ended = (self._end_window(previous, WindowEnd(end), ended_at),) if previous else ()
             self._record = replace(self._record, suggestions=self._merge_suggestions(*ended), ended_at=ended_at,
-                                   end=DrawingEnd(end), final_capture=final_capture)
+                                   end=DrawingEnd(end), final_capture=final_capture, final_prompt=final_prompt,
+                                   final_prompt_origin=origin)
 
             # Undo the end and the window on a failed save, so the person can press finish again.
             try:
@@ -550,7 +595,7 @@ class GuidedDrawing:
             except StoreError:
                 restored = (previous,) if previous else ()
                 self._record = replace(self._record, suggestions=self._merge_suggestions(*restored), ended_at=None, end=None,
-                                       final_capture=None)
+                                       final_capture=None, final_prompt=None, final_prompt_origin=None)
                 raise
 
             self._overlay, self._open_suggestion, self._baseline, self._part_masks = None, None, None, ()

@@ -15,9 +15,11 @@ from sketchloop.domain import (SCHEMA_VERSION, GenerationRequest, Guidance, Imag
                                Rotation, SelectionEvent, SketchLoopError, SketchSource, Unavailable, require, require_duration)
 from sketchloop.drawing import GuidedDrawing
 from sketchloop.evaluation import Evaluator, NoOpEvaluator
-from sketchloop.experiments import (SETUP_NOT_MEASURED_REASON, BenchmarkPlan, ExperimentStore, RerunLink, RoundRecord, RoundStage,
-                                    RoundStatus, SessionRecord, StoreError, check_experiment_name, collect_environment,
-                                    describe_failure, require_known_source, resolve_frame_age)
+from sketchloop.experiments import (OUTSIDE_SESSION_REASON, SETUP_NOT_MEASURED_REASON, BenchmarkPlan, DrawingStudy,
+                                    ExperimentStore, PromptSuggestionRecord, RerunLink, RoundRecord, RoundStage, RoundStatus,
+                                    SessionRecord, StoreError, StudyCondition, check_experiment_name, check_prompt_suggestions,
+                                    collect_environment, describe_failure, require_known_source, resolve_frame_age,
+                                    resolve_prompt_origin)
 from sketchloop.follow import FollowDetector
 from sketchloop.generation import GenerationOutput, Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor, StrokePreprocessor
@@ -86,6 +88,7 @@ class SketchSession:
         self.session_record: SessionRecord | None = None
         self.records: list[RoundRecord] = []
         self.drawings: list[GuidedDrawing] = []
+        self._pending_prompt_suggestions: list[PromptSuggestionRecord] = []
         self._started_rounds = 0
         self._evaluator_loaded = False
 
@@ -147,10 +150,16 @@ class SketchSession:
         if type(self.evaluator).load is not Evaluator.load:
             timings[RoundStage.MODEL_LOAD] = timings.get(RoundStage.MODEL_LOAD, 0.0) + load_seconds
 
+    def _list_prompt_suggestions(self, current: tuple[PromptSuggestionRecord, ...]) -> list[PromptSuggestionRecord]:
+        # Every prompt suggestion of the session: the round's own, then earlier rounds' and every drawing's.
+        rounds = [item for record in self.records for item in record.prompt_suggestions or ()]
+        drawings = [item for drawing in self.drawings for item in drawing.record.prompt_suggestions or ()]
+        return [*current, *rounds, *drawings]
+
     def run_round(self, raw_sketch: ImageRef, raw_payload: bytes, guidance: Guidance, *, source: SketchSource | Unavailable,
                   rotation: int = Rotation.DEG_000, use_raw: bool = False, n_candidates: int = 1, seed: int | None = None,
                   reuse: PreprocessedSketch | None = None, capture_seconds: float | None = None,
-                  frame_age_seconds: float | None = None) -> RoundOutcome:
+                  frame_age_seconds: float | None = None, prompt_suggestion_id: str | None = None) -> RoundOutcome:
         """
         Preprocess the sketch, generate and score candidates, save the files and record, and link to the previous round.
 
@@ -169,6 +178,8 @@ class SketchSession:
                 captured for this round. Defaults to None.
             frame_age_seconds (float | None, optional): Age of a streamed webcam frame when the round started, or None.
                 Defaults to None.
+            prompt_suggestion_id (str | None, optional): ID of the prompt suggestion the page wrote into its prompt box, or
+                None. Defaults to None.
 
         Returns:
             RoundOutcome: The round's folder, iteration, timings, total time, and scores.
@@ -182,13 +193,19 @@ class SketchSession:
             require_duration(capture_seconds, "Capture time")
             timings[RoundStage.CAPTURE] = capture_seconds
 
-        # Number the round and fix the fields its record has whether it completes or fails.
+        # Number the round, and take the prompt suggestions shown since the previous one, which only this round records.
         self.ensure_session_record()
         self._started_rounds += 1
         number = self._started_rounds
-        draft = partial(RoundRecord, schema_version=SCHEMA_VERSION, number=number, started_at=datetime.now(timezone.utc),
-                        raw_sketch=raw_sketch, source=source, frame_age_seconds=recorded_frame_age, use_raw=use_raw,
-                        rotation=rotation)
+        started_at = datetime.now(timezone.utc)
+        prompt_suggestions, self._pending_prompt_suggestions = tuple(self._pending_prompt_suggestions), []
+
+        # Note how the prompt came about, then fix the fields the record has whether the round completes or fails.
+        known = self._list_prompt_suggestions(prompt_suggestions)
+        origin = resolve_prompt_origin(guidance.prompt, prompt_suggestion_id, known, started_at, OUTSIDE_SESSION_REASON)
+        draft = partial(RoundRecord, schema_version=SCHEMA_VERSION, number=number, started_at=started_at, raw_sketch=raw_sketch,
+                        source=source, frame_age_seconds=recorded_frame_age, use_raw=use_raw, rotation=rotation,
+                        prompt_suggestions=prompt_suggestions, prompt_origin=origin)
         measure_total = partial(measure_total_seconds, round_started, capture_seconds)
         stage = RoundStage.PREPROCESSING
         steps: tuple[PreprocessingStep, ...] = ()
@@ -265,15 +282,33 @@ class SketchSession:
         self.selections[latest_id] = selection
 
     def start_drawing(self, suggester: StrokeSuggester | None, *, canvas_width: int, canvas_height: int,
-                      save_interval_seconds: float, follow_detector: FollowDetector | None = None) -> GuidedDrawing:
+                      save_interval_seconds: float, follow_detector: FollowDetector | None = None,
+                      study: DrawingStudy | None = None) -> GuidedDrawing:
         # Allow one open drawing at a time, so captures and suggestions always belong to a single drawing.
         if self.drawings and self.drawings[-1].is_open:
             raise SketchLoopError(f"Drawing {self.drawings[-1].record.number} is still open. Finish it before starting another.")
+
+        # A study drawing offers AI help exactly in the AI condition, checked before anything is saved.
+        if study is not None and study.condition == StudyCondition.AI and suggester is None:
+            raise SketchLoopError("A study drawing with AI needs a stroke suggester. Configure one or choose without AI.")
+        if study is not None and study.condition == StudyCondition.NO_AI and suggester is not None:
+            raise SketchLoopError("A study drawing without AI cannot have a stroke suggester. Start it with none.")
 
         # Save the session record first, then number the drawing after the earlier ones.
         self.ensure_session_record()
         drawing = GuidedDrawing(self.store, self.session_id, len(self.drawings) + 1, suggester, canvas_width=canvas_width,
                                 canvas_height=canvas_height, save_interval_seconds=save_interval_seconds,
-                                follow_detector=follow_detector)
+                                follow_detector=follow_detector, study=study)
         self.drawings.append(drawing)
         return drawing
+
+    def record_prompt_suggestion(self, record: PromptSuggestionRecord) -> PromptSuggestionRecord:
+        # The open drawing numbers and saves it, and otherwise it waits in memory for the next round.
+        if self.drawings and self.drawings[-1].is_open:
+            return self.drawings[-1].record_prompt_suggestion(record)
+
+        # Number it after the waiting ones, refusing one pressed before the last, so the next round's record stays valid.
+        numbered = replace(record, number=len(self._pending_prompt_suggestions) + 1, after_capture=None)
+        check_prompt_suggestions((*self._pending_prompt_suggestions, numbered), "Session")
+        self._pending_prompt_suggestions.append(numbered)
+        return numbered

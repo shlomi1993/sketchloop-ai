@@ -10,14 +10,17 @@ import threading
 
 from collections.abc import Callable, Mapping
 from dataclasses import replace
+from datetime import datetime, timedelta
 from typing import Final
 
 from sketchloop.capture import CapturedSketch, InvalidSketchError, encode_frame
 from sketchloop.domain import ColorMode, InvalidRecordError, SketchLoopError, SketchSource, Unavailable
 from sketchloop.drawing import (INTERVAL_JPEG_QUALITY, NO_STROKES_MESSAGE, GuidedDrawing, check_suggestion_output,
                                 compress_interval_frame, parse_hex_color)
-from sketchloop.experiments import (CaptureTrigger, DrawingEnd, DrawingRecord, MemoryStore, StoreError, SuggestionStage,
-                                    SuggestionStatus, WindowEnd, decide_suggestion, drawing_from_dict, drawing_to_dict)
+from sketchloop.experiments import (FINAL_PROMPT_NOT_RECORDED, ORIGIN_NOT_RECORDED, OUTSIDE_DRAWING_REASON, CaptureTrigger,
+                                    DrawingEnd, DrawingRecord, DrawingStudy, MemoryStore, PromptOrigin, PromptOriginKind,
+                                    PromptSuggestionRecord, StoreError, StudyCondition, SuggestionStage, SuggestionStatus,
+                                    WindowEnd, decide_suggestion, drawing_from_dict, drawing_to_dict)
 from sketchloop.follow import NO_USABLE_CAPTURE_REASON, PROVISIONAL_RULE, FollowResult, FollowRule
 from sketchloop.preprocessing import make_paper_canvas
 from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester, encode_png
@@ -29,6 +32,8 @@ SESSION_ID: Final = "session"
 CANVAS_SIZE: Final = (512, 360)
 PartDrawer = Callable[[np.ndarray, bytes], np.ndarray]  # Draws a part's mask on a sheet frame
 OUT_OF_MEMORY: Final = "Next-stroke suggestion failed: out of memory. Free memory and retry."
+SUGGESTED_PROMPT: Final = "the sketched object, product design render, studio lighting, white background"
+PromptMaker = Callable[..., PromptSuggestionRecord]  # Builds a shown prompt suggestion from its text and ID
 
 
 class FailingSuggester(FakeStrokeSuggester):
@@ -644,3 +649,173 @@ def test_drawing_saved_before_decisions_loads(sheet_capture: CapturedSketch) -> 
     suggestion = loaded.suggestions[0]
     assert loaded.rule is None and suggestion.window is None and suggestion.decision is None, f"Unexpected {suggestion}"
     assert decide_suggestion(loaded, suggestion, PROVISIONAL_RULE).parts, "An older drawing can still be decided from its scores"
+
+
+
+def start_study_drawing(store: MemoryStore, condition: StudyCondition) -> GuidedDrawing:
+    # A study drawing with the fake suggester in the AI condition and none without AI.
+    suggester = FakeStrokeSuggester() if condition == StudyCondition.AI else None
+    return GuidedDrawing(store, SESSION_ID, 1, suggester, canvas_width=CANVAS_SIZE[0], canvas_height=CANVAS_SIZE[1],
+                         save_interval_seconds=2.0, study=DrawingStudy(condition=condition))
+
+
+def test_no_ai_drawing_refuses_all_ai_help(sheet_capture: CapturedSketch, make_prompt_suggestion: PromptMaker) -> None:
+    store = MemoryStore()
+    drawing = start_study_drawing(store, StudyCondition.NO_AI)
+    saved = store.drawings[(SESSION_ID, 1)]
+
+    # The saved record has the condition, suggestions off, no suggester, and an empty prompt suggestion list.
+    assert saved.study == DrawingStudy(condition=StudyCondition.NO_AI), f"Expected the no-AI condition, got {saved.study}"
+    assert not saved.suggestions_enabled and saved.suggester is None, f"Expected no AI help, got {saved}"
+    assert saved.prompt_suggestions == () and saved.final_prompt is None, f"Expected an empty open drawing, got {saved}"
+
+    # Both kinds of suggestion are refused, and nothing is recorded.
+    with pytest.raises(SketchLoopError, match="Suggestions are off"):
+        suggest(drawing, sheet_capture)
+    with pytest.raises(SketchLoopError, match="Suggestions are off in this drawing."):
+        drawing.record_prompt_suggestion(make_prompt_suggestion(SUGGESTED_PROMPT))
+    assert store.drawings[(SESSION_ID, 1)].prompt_suggestions == (), "A refused prompt suggestion must not be recorded"
+
+
+def test_prompt_suggestions_link_to_stroke_suggestions(sheet_capture: CapturedSketch, make_prompt_suggestion: PromptMaker) -> None:  # noqa: E501
+    store = MemoryStore()
+    drawing = start_study_drawing(store, StudyCondition.AI)
+    first = drawing.record_prompt_suggestion(make_prompt_suggestion(SUGGESTED_PROMPT, "prompt-a", number=9))
+    drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
+    second = drawing.record_prompt_suggestion(make_prompt_suggestion(SUGGESTED_PROMPT, "prompt-b"))
+    same = drawing.suggest(sheet_capture, source=SketchSource.UPLOAD, rotation=0, prompt=f" {SUGGESTED_PROMPT}",
+                           prompt_suggestion_id="prompt-a")
+    edited = drawing.suggest(sheet_capture, source=SketchSource.UPLOAD, rotation=0, prompt="a lamp, product design render",
+                             prompt_suggestion_id="prompt-b")
+    stale = drawing.suggest(sheet_capture, source=SketchSource.UPLOAD, rotation=0, prompt="a lamp",
+                            prompt_suggestion_id="from-another-drawing")
+    typed = drawing.suggest(sheet_capture, source=SketchSource.UPLOAD, rotation=0, prompt="a lamp")
+
+    # The drawing numbers each prompt suggestion and records the latest capture when it was shown.
+    assert (first.number, first.after_capture) == (1, None), f"Expected number 1 before any capture, got {first}"
+    assert (second.number, second.after_capture) == (2, 1), f"Expected number 2 after capture 1, got {second}"
+    assert drawing.find_prompt_suggestion("prompt-b") == second and drawing.find_prompt_suggestion("x") is None, "Bad lookup"
+
+    # The same text is suggested, a changed text edited, an unknown ID unavailable, and no ID typed, and every press is shown.
+    origins = [suggestion.prompt_origin for suggestion in (same, edited, stale, typed)]
+    expected = [PromptOrigin(kind=PromptOriginKind.SUGGESTED, prompt_suggestion="prompt-a"),
+                PromptOrigin(kind=PromptOriginKind.EDITED, prompt_suggestion="prompt-b"), Unavailable(OUTSIDE_DRAWING_REASON),
+                PromptOrigin(kind=PromptOriginKind.TYPED, prompt_suggestion=None)]
+    assert origins == expected, f"Unexpected prompt origins {origins}"
+    assert stale.status == SuggestionStatus.SHOWN, "An unknown prompt suggestion ID must not block the press"
+
+    # The saved record holds both prompt suggestions and loads back unchanged from JSON.
+    record = store.drawings[(SESSION_ID, 1)]
+    assert record.prompt_suggestions == (first, second), f"Expected both prompt suggestions, got {record.prompt_suggestions}"
+    data = json.loads(json.dumps(drawing_to_dict(record), allow_nan=False))
+    assert drawing_from_dict(data) == record, "drawing.json with prompt suggestions must load back unchanged"
+    assert data["suggestions"][0]["prompt_origin"] == {"kind": "suggested", "prompt_suggestion": "prompt-a"}, "Bad JSON origin"
+
+
+def test_failed_prompt_suggestion_save_leaves_no_entry(make_prompt_suggestion: PromptMaker) -> None:
+    store = FlakyDrawingStore()
+    drawing = GuidedDrawing(store, SESSION_ID, 1, FakeStrokeSuggester(), canvas_width=CANVAS_SIZE[0],
+                            canvas_height=CANVAS_SIZE[1], save_interval_seconds=2.0)
+    store.failures_left = 1
+    with pytest.raises(StoreError, match="No space left"):
+        drawing.record_prompt_suggestion(make_prompt_suggestion(SUGGESTED_PROMPT))
+
+    # Neither the drawing in memory nor the saved record holds the suggestion the page never showed.
+    assert drawing.record.prompt_suggestions == (), f"The entry must be removed again, got {drawing.record.prompt_suggestions}"
+    assert store.drawings[(SESSION_ID, 1)].prompt_suggestions == (), "The store must not hold the unsaved entry"
+
+
+@pytest.mark.parametrize(("prompt", "suggestion_id", "end", "expected_prompt", "expected_origin"), [
+    ("a sports car, low and wide", "prompt-a", DrawingEnd.FINISHED, "a sports car, low and wide",
+     PromptOrigin(kind=PromptOriginKind.EDITED, prompt_suggestion="prompt-a")),
+    ("", "prompt-a", DrawingEnd.FINISHED, "", PromptOrigin(kind=PromptOriginKind.TYPED, prompt_suggestion=None)),
+    ("a car", "prompt-a", DrawingEnd.NEW_SESSION, None, None),
+    (None, None, DrawingEnd.FINISHED, None, None),
+], ids=["edited", "empty", "new-session", "without-page"])
+def test_drawing_records_final_prompt(make_prompt_suggestion: PromptMaker, prompt: str | None, suggestion_id: str | None,
+                                      end: DrawingEnd, expected_prompt: str | None,
+                                      expected_origin: PromptOrigin | None) -> None:
+    store = MemoryStore()
+    drawing = start_study_drawing(store, StudyCondition.AI)
+    drawing.record_prompt_suggestion(make_prompt_suggestion(SUGGESTED_PROMPT, "prompt-a"))
+    record = drawing.finish(None, end=end, prompt=prompt, prompt_suggestion_id=suggestion_id)
+
+    # The final prompt and its origin are recorded as given at finish, and none when a new session ended the drawing.
+    assert record.final_prompt == expected_prompt, f"Expected final prompt {expected_prompt!r}, got {record.final_prompt!r}"
+    assert record.final_prompt_origin == expected_origin, f"Expected origin {expected_origin}, got {record.final_prompt_origin}"
+    assert drawing_from_dict(json.loads(json.dumps(drawing_to_dict(record)))) == record, "The finished drawing must load back"
+
+
+def test_drawing_saved_before_study_fields_loads(sheet_capture: CapturedSketch) -> None:
+    drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
+    suggest(drawing, sheet_capture)
+    data = drawing_to_dict(drawing.finish(None))
+    for key in ("study", "prompt_suggestions", "final_prompt", "final_prompt_origin"):
+        del data[key]
+    del data["suggestions"][0]["prompt_origin"]
+    loaded = drawing_from_dict(data)
+
+    # The older drawing has no condition or prompt suggestion list, and its final prompt and origins are not recorded.
+    assert loaded.study is None and loaded.prompt_suggestions is None, f"Expected no study fields, got {loaded}"
+    assert loaded.final_prompt == Unavailable(FINAL_PROMPT_NOT_RECORDED), f"Unexpected final prompt {loaded.final_prompt}"
+    not_recorded = Unavailable(ORIGIN_NOT_RECORDED)
+    origins = (loaded.final_prompt_origin, loaded.suggestions[0].prompt_origin)
+    assert origins == (not_recorded, not_recorded), f"Expected origins not recorded, got {origins}"
+
+
+def break_study_record(data: dict[str, object], case: str) -> None:
+    # Change a saved AI drawing with two prompt suggestions, a linked stroke suggestion, and a final prompt in the named way.
+    first, second = data["prompt_suggestions"]
+    if case == "condition-disagrees":
+        data["study"] = {"condition": "no_ai"}
+    elif case == "prompt-suggestions-while-off":
+        data["study"], data["suggestions_enabled"], data["suggester"] = None, False, None
+        data["suggestions"], data["follow_detector"], data["rule"] = [], None, None
+        data["final_prompt_origin"] = {"kind": "typed", "prompt_suggestion": None}
+    elif case == "number-gap":
+        second["number"] = 3
+    elif case == "duplicate-id":
+        second["id"] = first["id"]
+        data["final_prompt_origin"]["prompt_suggestion"] = first["id"]
+    elif case == "capture-beyond":
+        second["after_capture"] = 99
+    elif case == "kind-disagrees":
+        data["suggestions"][0]["prompt_origin"]["kind"] = "edited"
+    elif case == "shown-after-use":
+        pressed = datetime.fromisoformat(data["suggestions"][0]["requested_at"]) - timedelta(hours=1)
+        data["suggestions"][0]["requested_at"] = pressed.isoformat()
+    elif case == "unknown-id":
+        data["final_prompt_origin"]["prompt_suggestion"] = "unknown"
+    elif case == "open-with-final-prompt":
+        data["ended_at"], data["end"], data["final_capture"] = None, None, None
+        data["suggestions"][0]["window"], data["suggestions"][0]["decision"] = None, None
+    elif case == "origin-without-prompt":
+        data["final_prompt"] = None
+
+
+@pytest.mark.parametrize(("case", "message"), [
+    ("condition-disagrees", "condition no_ai has suggestions off"),
+    ("prompt-suggestions-while-off", "suggestions off cannot have prompt suggestions"),
+    ("number-gap", "prompt suggestion numbers must run from 1"),
+    ("duplicate-id", "prompt suggestion IDs must be unique"),
+    ("capture-beyond", "after_capture 99 is not a capture"),
+    ("kind-disagrees", "recorded as edited, but its prompt and suggestion give suggested"),
+    ("shown-after-use", "shown after its prompt was used"),
+    ("unknown-id", "not a shown one of its record"),
+    ("open-with-final-prompt", "open drawing has no final prompt"),
+    ("origin-without-prompt", "final prompt origin exactly when it has one"),
+])
+def test_drawing_with_inconsistent_study_fields_is_refused(sheet_capture: CapturedSketch, make_prompt_suggestion: PromptMaker,
+                                                           case: str, message: str) -> None:
+    drawing = start_study_drawing(MemoryStore(), StudyCondition.AI)
+    drawing.record_prompt_suggestion(make_prompt_suggestion(SUGGESTED_PROMPT, "prompt-a"))
+    drawing.suggest(sheet_capture, source=SketchSource.UPLOAD, rotation=0, prompt=SUGGESTED_PROMPT,
+                    prompt_suggestion_id="prompt-a")
+    drawing.record_prompt_suggestion(make_prompt_suggestion("a lamp, concept art", "prompt-b"))
+    record = drawing.finish(None, prompt="a lamp, concept art", prompt_suggestion_id="prompt-b")
+    data = json.loads(json.dumps(drawing_to_dict(record)))
+    break_study_record(data, case)
+
+    # The record names the broken rule.
+    with pytest.raises(InvalidRecordError, match=message):
+        drawing_from_dict(data)

@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Final
 from sketchloop.domain import (
     GenerationRequest, ImageRef, Iteration, SelectionEvent, SketchLoopError, SketchSource, Unavailable, require,
     require_duration)
+from sketchloop.experiments.prompts import (ORIGIN_NOT_RECORDED, PromptOrigin, PromptSuggestionRecord, check_prompt_origin,
+                                            check_prompt_suggestions)
 from sketchloop.preprocessing import PreprocessingStep
 
 # Drawing records build on these records, so the loaded session names their type only for type checkers.
@@ -256,6 +258,8 @@ class RoundRecord:
     scores: Mapping[str, float]  # Score by candidate ID
     selection: SelectionEvent | None  # The person's choice, None when not recorded
     failure: RoundFailure | None  # Why the round failed, None when complete
+    prompt_suggestions: tuple[PromptSuggestionRecord, ...] | None = None  # Shown outside any drawing since the previous round
+    prompt_origin: PromptOrigin | Unavailable = Unavailable(ORIGIN_NOT_RECORDED)  # How the round's prompt came about
 
     def __post_init__(self) -> None:
         # A complete round has an iteration built from its request, and a failed one has only the failure.
@@ -291,6 +295,24 @@ class RoundRecord:
         object.__setattr__(self, "timings_seconds", MappingProxyType(dict(self.timings_seconds)))
         object.__setattr__(self, "scores", MappingProxyType(dict(self.scores)))
         object.__setattr__(self, "score_details", MappingProxyType(dict(self.score_details)))
+        self._check_prompts()
+
+    def _check_prompts(self) -> None:
+        # Suggestions shown outside a drawing are numbered in order and follow no capture.
+        if self.prompt_suggestions is not None:
+            object.__setattr__(self, "prompt_suggestions", tuple(self.prompt_suggestions))
+        suggestions = self.prompt_suggestions or ()
+        check_prompt_suggestions(suggestions, f"Round {self.number}")
+        outside_drawing = all(item.after_capture is None for item in suggestions)
+        require(outside_drawing, f"Round {self.number} prompt suggestions were shown outside drawings, so follow no capture.")
+
+        # The origin may name a suggestion of an earlier round or a drawing, so only one in this round's list is checked here.
+        origin = self.prompt_origin
+        valid_origin = isinstance(origin, PromptOrigin | Unavailable)
+        require(valid_origin, f"Round {self.number} prompt_origin must be an origin or unavailable, got {origin!r}.")
+        if isinstance(origin, PromptOrigin) and origin.prompt_suggestion in {item.id for item in suggestions}:
+            prompt = self.request.guidance.prompt if self.request else None
+            check_prompt_origin(origin, prompt, self.started_at, suggestions, f"Round {self.number} prompt origin")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

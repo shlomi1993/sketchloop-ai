@@ -12,8 +12,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Final
 
-from sketchloop.backends.diffusers import ModelSource, TorchDevice, select_device
-from sketchloop.domain import SketchLoopError, first_line
+from sketchloop.backends.diffusers import ModelSource, TorchDevice, local_revision, select_device
+from sketchloop.domain import BackendIdentity, ExecutionKind, SketchLoopError, Unavailable, first_line
 
 
 # Pinned in the prompt suggestion research note, with only the configs, tokenizer, and safetensors weights.
@@ -112,6 +112,11 @@ class PromptSuggester(ABC):
         """
         ...
 
+    @property
+    @abstractmethod
+    def identity(self) -> BackendIdentity:
+        ...  # Adapter, version, execution kind, and model ID with revision or unavailable
+
     def warm_up(self) -> None:
         """
         Load any model ahead of the first suggestion, which suggesters without a model skip.
@@ -122,6 +127,16 @@ class TemplateSuggester(PromptSuggester):
     """
     Suggests the fixed style templates without looking at the sketch, so suggestions work with no model.
     """
+
+    # Bump the version whenever the templates change, since the same sketch would then give other text.
+    ADAPTER_NAME: Final = "sketchloop.prompt-templates"
+    ADAPTER_VERSION: Final = "1"
+
+    @property
+    def identity(self) -> BackendIdentity:
+        # A real suggester that always works, so it runs in process rather than as a fake.
+        return BackendIdentity(adapter=self.ADAPTER_NAME, adapter_version=self.ADAPTER_VERSION,
+                               execution=ExecutionKind.IN_PROCESS, model_id=Unavailable("fixed style templates, no model"))
 
     def suggest(self, sketch_payload: bytes) -> tuple[str, ...]:
         """
@@ -134,6 +149,10 @@ class FlorenceSuggester(PromptSuggester):
     """
     Names the sketched object with a local Florence-2 caption and fills the style templates with it.
     """
+
+    # Bump the version whenever the templates, framing prefixes, or caption settings change.
+    ADAPTER_NAME: Final = "sketchloop.florence-prompts"
+    ADAPTER_VERSION: Final = "1"
 
     def __init__(self, models_dir: Path = Path("models"), *, captioner: Callable[[bytes], str] | None = None) -> None:
         self._model_folder = models_dir / FLORENCE_MODEL.folder
@@ -171,6 +190,13 @@ class FlorenceSuggester(PromptSuggester):
             return processor.post_process_generation(text, task=CAPTION_TASK, image_size=image.size)[CAPTION_TASK]
 
         return caption
+
+    @property
+    def identity(self) -> BackendIdentity:
+        # Name the model with the revision its local folder was downloaded at, as the stroke suggester does.
+        model_id = f"{FLORENCE_MODEL.repo_id}@{local_revision(self._model_folder)}"
+        return BackendIdentity(adapter=self.ADAPTER_NAME, adapter_version=self.ADAPTER_VERSION,
+                               execution=ExecutionKind.IN_PROCESS, model_id=model_id)
 
     def warm_up(self) -> None:
         """
