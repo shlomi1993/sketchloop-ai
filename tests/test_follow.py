@@ -12,9 +12,10 @@ from typing import Final
 from sketchloop.domain import InvalidRecordError, Unavailable
 from sketchloop.follow import (ALIGNED_STROKES_METHOD, IMPLAUSIBLE_WARP_REASON, NO_PARTS_REASON, NO_USABLE_CAPTURE_REASON,
                                NOT_CONVERGED_REASON, NOTHING_NEW_REASON, PART_OCCLUDED_REASON, PROVISIONAL_RULE,
-                               AlignedStrokeFollowDetector, Alignment, CaptureScores, FollowDecision, FollowResult, FollowRule,
-                               PartDecision, PartScores, decide_follow, describe_follow_method, find_implausible_warp,
-                               find_occluders)
+                               AlignedStrokeFollowDetector, Alignment, AlignmentRegion, CaptureScores, FollowDecision,
+                               FollowResult, FollowRule, PartDecision, PartScores, align_to_baseline, choose_alignment_pixels,
+                               decide_follow, describe_follow_method, find_implausible_warp, find_occluders, make_darkness_map)
+from sketchloop.preprocessing import LOCAL_STROKE_CONTRAST
 
 
 CANVAS_SIZE: Final = (512, 360)
@@ -68,14 +69,21 @@ def photograph(canvas: np.ndarray, motion: np.ndarray, *, uneven_light: bool = F
     return cv2.imencode(".png", cv2.imdecode(jpeg, cv2.IMREAD_GRAYSCALE))[1].tobytes()
 
 
-def measure_alignment_error(alignment: Alignment, motion: np.ndarray) -> float:
+def measure_warp_error(capture_to_baseline: np.ndarray, motion: np.ndarray) -> float:
     """
     Return the largest distance in pixels between baseline points and their capture points mapped back by the warp.
     """
     baseline_points = np.array(CHECK_POINTS, dtype=np.float64)
     capture_points = baseline_points @ motion[:, :2].T + motion[:, 2]
-    mapped = cv2.perspectiveTransform(capture_points[None], np.array(alignment.warp))[0]
+    mapped = cv2.perspectiveTransform(capture_points[None], capture_to_baseline)[0]
     return float(np.linalg.norm(mapped - baseline_points, axis=1).max())
+
+
+def measure_alignment_error(alignment: Alignment, motion: np.ndarray) -> float:
+    """
+    Return the largest distance in pixels between baseline points and their capture points mapped back by the alignment.
+    """
+    return measure_warp_error(np.array(alignment.warp), motion)
 
 
 @pytest.fixture
@@ -177,7 +185,8 @@ def test_detector_describes_its_method() -> None:
 
     # The name and version identify the method, and the thresholds include the ECC settings and stroke contrast.
     assert (method.name, method.version) == ALIGNED_STROKES_METHOD, f"Unexpected method {method}"
-    expected = {"stroke_contrast", "ecc_iterations", "ecc_epsilon", "occluder_contrast", "baseline_grow_pixels"}
+    expected = {"stroke_contrast", "ecc_iterations", "ecc_epsilon", "ecc_stroke_reach_pixels", "min_ecc_stroke_pixels",
+                "occluder_contrast", "baseline_grow_pixels"}
     assert expected <= set(method.params), f"Missing parameters {sorted(expected - set(method.params))}"
 
 
@@ -206,6 +215,8 @@ def build_part_scores(**changes: object) -> PartScores:
     (lambda: Alignment(converged=False, correlation=Unavailable("x"), warp=IDENTITY, occluded_share=0.0), "has no warp"),
     (lambda: Alignment(converged=False, correlation=Unavailable("x"), warp=None, occluded_share=0.1, filled_share=0.2),
      "filled_share must be at most"),
+    (lambda: Alignment(converged=True, correlation=0.8, warp=IDENTITY, occluded_share=0.0, aligned_on="everywhere"),
+     "aligned_on must be one of baseline_strokes, whole_canvas"),
     (lambda: CaptureScores(suggestion=1, seconds_since_shown=1.0, new_stroke_pixels=None, parts=(),
                            alignment=Alignment(converged=True, correlation=0.8, warp=IDENTITY, occluded_share=0.0)),
      "needs new_stroke_pixels"),
@@ -409,6 +420,95 @@ def test_part_mask_of_another_size_is_refused(baseline_canvas: bytes) -> None:
         AlignedStrokeFollowDetector().score(baseline_canvas, baseline_canvas, [small])
 
 
+def draw_hatching(canvas: np.ndarray) -> None:
+    """
+    Hatch the lower right of the canvas, a new drawing away from the existing strokes.
+    """
+    for offset in range(0, 80, 8):
+        cv2.line(canvas, (380 + offset, 250), (420 + offset, 345), 40, 3)
+
+
+def decode_canvas(payload: bytes) -> np.ndarray:
+    """
+    Decode a PNG canvas into a grayscale array.
+    """
+    return cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+
+
+def test_new_strokes_away_from_the_drawing_do_not_drag_the_alignment(baseline_canvas: bytes) -> None:
+    """
+    Hatching drawn away from the drawing, with a small camera shift and turn, aligns within 1 px, while whole-canvas ECC drifts.
+    """
+    motion = make_camera_motion((-4, 3), -1.0)
+    capture = draw_canvas()
+    draw_hatching(capture)
+    capture_canvas = photograph(capture, motion, seed=13)
+    alignment, new_stroke_pixels, parts = AlignedStrokeFollowDetector().score(baseline_canvas, capture_canvas, [draw_part_mask()])
+
+    # ECC on the whole canvas, as version 2 aligned, is pulled more than 2 px off the camera motion by the hatching.
+    everywhere = np.ones(CANVAS_SIZE[::-1], dtype=bool)
+    darkness = [make_darkness_map(decode_canvas(canvas)) for canvas in (baseline_canvas, capture_canvas)]
+    _, whole_canvas_warp = align_to_baseline(*darkness, everywhere, everywhere)
+    whole_canvas_error = measure_warp_error(np.linalg.inv(whole_canvas_warp), motion)
+    assert whole_canvas_error > 2.0, f"Expected whole-canvas ECC dragged by the hatching, got {whole_canvas_error:.2f} px"
+
+    # Aligning near the baseline's strokes recovers the motion, records the region, and scores the hatching as new.
+    assert alignment.converged and alignment.aligned_on == AlignmentRegion.BASELINE_STROKES, f"Unexpected alignment {alignment}"
+    error = measure_alignment_error(alignment, motion)
+    assert error < 1.0, f"Warp misses the baseline by {error:.2f} px"
+    assert new_stroke_pixels > 1000 and len(parts) == 1, f"Expected the hatching counted and scored, got {new_stroke_pixels}"
+
+
+@pytest.mark.parametrize("draw_baseline", [
+    lambda canvas: None,
+    lambda canvas: cv2.line(canvas, (240, 170), (270, 180), 40, 3),
+])
+def test_baseline_with_few_strokes_aligns_on_the_whole_canvas(draw_baseline: Callable[[np.ndarray], object]) -> None:
+    """
+    A blank baseline or one with a single dash has too few strokes to align on, so ECC uses the whole canvas and says so.
+    """
+    baseline = np.full(CANVAS_SIZE[::-1], PAPER_LEVEL, dtype=np.uint8)
+    draw_baseline(baseline)
+    capture = baseline.copy()
+    draw_followed(capture)
+    baseline_canvas = photograph(baseline, make_camera_motion((0, 0), 0), seed=14)
+    capture_canvas = photograph(capture, make_camera_motion((2, 1), 0.0), seed=15)
+    alignment, _ = AlignedStrokeFollowDetector().align(baseline_canvas, capture_canvas)
+
+    # The fallback region is recorded whether or not ECC then converged.
+    assert alignment.aligned_on == AlignmentRegion.WHOLE_CANVAS, f"Expected the whole-canvas fallback, got {alignment}"
+
+
+def test_alignment_pixels_skip_hidden_areas_and_new_strokes() -> None:
+    """
+    ECC uses baseline pixels near its visible strokes and capture pixels away from new strokes, never a hidden pixel.
+    """
+    baseline, capture = draw_canvas(), draw_canvas()
+    draw_hatching(capture)
+    hidden = np.zeros(CANVAS_SIZE[::-1], dtype=bool)
+    hidden[90:240, 140:220] = True
+    capture_darkness = make_darkness_map(capture)
+    region, baseline_pixels, capture_pixels = choose_alignment_pixels(make_darkness_map(baseline), capture_darkness, ~hidden,
+                                                                      ~hidden)
+
+    # Mark the hatching's strokes, the pixels of it darker than their local paper.
+    hatching = np.zeros(CANVAS_SIZE[::-1], dtype=np.uint8)
+    draw_hatching(hatching)
+    hatching = (hatching > 0) & (capture_darkness > LOCAL_STROKE_CONTRAST)
+
+    # Neither mask includes a hidden pixel, such as a hand or a filled-in rim.
+    assert region == AlignmentRegion.BASELINE_STROKES, f"Expected to align near the strokes, got {region}"
+    assert not (baseline_pixels & hidden).any() and not (capture_pixels & hidden).any(), "Hidden pixels must not steer ECC"
+
+    # The baseline mask covers the box's visible edge and leaves out bare paper and where the hatching is drawn.
+    assert baseline_pixels[100, 300] and not baseline_pixels[20, 480], "Expected the mask near the strokes only"
+    assert not (baseline_pixels & hatching).any(), "The hatching area is far from the baseline strokes"
+
+    # The capture mask keeps the old strokes and leaves out the new hatching's strokes.
+    assert hatching.sum() > 500 and capture_pixels[100, 300], f"Expected hatching strokes, got {hatching.sum()} pixels"
+    assert not (capture_pixels & hatching).any(), "New strokes must not steer ECC"
+
+
 # The capture-to-baseline warp ECC reported for a webcam frame with a hand reaching in from the edge, a wrong solution.
 BOGUS_WARP: Final = ((0.535, 0.021, 127.787), (0.331, 1.462, -164.789), (-0.001, 0.002, 1.0))
 
@@ -434,7 +534,7 @@ def test_implausible_warps_are_refused(correlation: float, baseline_to_capture: 
 
 def test_scaled_capture_is_recorded_as_not_converged(baseline_canvas: bytes) -> None:
     """
-    A capture whose canvas is shrunk, as when the paper outline changes, aligns only by an implausible warp, recorded as failed.
+    A capture whose canvas is shrunk, as when the paper outline changes, does not align, which is recorded as failed.
     """
     shrink = cv2.getRotationMatrix2D((CANVAS_SIZE[0] / 2, CANVAS_SIZE[1] / 2), 0.0, 0.85)
     capture = photograph(draw_canvas(), shrink, seed=11)
@@ -443,7 +543,7 @@ def test_scaled_capture_is_recorded_as_not_converged(baseline_canvas: bytes) -> 
     # The alignment failed with a reason, and nothing was counted or scored.
     assert not alignment.converged and alignment.warp is None, f"Expected a refused alignment, got {alignment}"
     reason = alignment.correlation.reason
-    assert reason.startswith(IMPLAUSIBLE_WARP_REASON) and "corner moves" in reason, f"Unexpected reason {reason}"
+    assert reason.startswith((IMPLAUSIBLE_WARP_REASON, NOT_CONVERGED_REASON)), f"Unexpected reason {reason}"
     assert new_stroke_pixels is None and parts == (), f"A refused alignment scores nothing, got {new_stroke_pixels} and {parts}"
 
 

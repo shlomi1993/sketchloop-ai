@@ -177,7 +177,7 @@ def test_show_prints_a_finished_drawing(tmp_path: Path, capsys: pytest.CaptureFi
     # The drawing names its state, captures, final drawing, suggester, fake warning, and rule.
     assert "Drawing 1: finished after 0 s, 4 captures, canvas 512x360, final drawing captures/capture-0004.png" in output, output
     assert "Suggester: FakeStrokeSuggester, sketchloop.fake-strokes" in output, f"Missing suggester in {output}"
-    assert "follow method aligned-strokes 2" in output and "FAKE SUGGESTER" in output, f"Missing method or warning {output}"
+    assert "follow method aligned-strokes 3" in output and "FAKE SUGGESTER" in output, f"Missing method or warning {output}"
     assert "Rule: coverage_16 >= 0.35 and precision_16 >= 0.4" in output, f"Missing rule in {output}"
 
     # Suggestion 1 keeps its typed prompt and its recorded decision, and the failed press names its stage.

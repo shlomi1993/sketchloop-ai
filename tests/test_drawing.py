@@ -368,7 +368,7 @@ def test_drawing_interval_captures_are_jpeg_and_aligned(sheet_frame: np.ndarray,
 
 def test_drawing_without_part_scores_loads(sheet_capture: CapturedSketch) -> None:
     """
-    A drawing.json saved before part scores, filled masks and shares, and the JPEG quality loads them as not recorded.
+    A drawing.json saved before part scores, filled masks and shares, aligned regions, and JPEG quality loads them as unrecorded.
     """
     drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
     suggest(drawing, sheet_capture)
@@ -379,6 +379,7 @@ def test_drawing_without_part_scores_loads(sheet_capture: CapturedSketch) -> Non
         del capture["filled"]
     del data["captures"][1]["follow"]["parts"]
     del data["captures"][1]["follow"]["alignment"]["filled_share"]
+    del data["captures"][1]["follow"]["alignment"]["aligned_on"]
     loaded = drawing_from_dict(data)
 
     # The quality is unavailable with a reason, and the masks and part scores are absent.
@@ -387,6 +388,7 @@ def test_drawing_without_part_scores_loads(sheet_capture: CapturedSketch) -> Non
     follow = loaded.captures[1].follow
     assert follow.parts is None and follow.alignment.converged, f"Expected an alignment without part scores, got {follow}"
     assert isinstance(follow.alignment.filled_share, Unavailable), f"Expected no filled share, got {follow.alignment}"
+    assert isinstance(follow.alignment.aligned_on, Unavailable), f"Expected no aligned region, got {follow.alignment}"
 
 
 def test_drawing_part_scores_must_match_the_suggestion(sheet_capture: CapturedSketch) -> None:

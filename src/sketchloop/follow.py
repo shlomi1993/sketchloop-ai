@@ -18,7 +18,7 @@ from sketchloop.preprocessing import LOCAL_STROKE_CONTRAST, decode_grayscale, fi
 from sketchloop.stroke_suggestion import is_count
 
 
-ALIGNED_STROKES_METHOD: Final = ("aligned-strokes", "2")  # Detector name and version, bumped whenever its results change
+ALIGNED_STROKES_METHOD: Final = ("aligned-strokes", "3")  # Detector name and version, bumped whenever its results change
 DARKNESS_MEDIAN_PIXELS: Final = 31  # Window of the local paper level that darkness is measured against
 DARKNESS_BLUR_SIGMA: Final = 2.0  # Blur of the darkness map, which smooths camera noise and widens ECC's reach
 PAPER_LEVEL_DILATE_PIXELS: Final = 101  # Window of the local maximum taken as the paper level when finding occluders
@@ -30,6 +30,10 @@ OCCLUDER_GROW_PIXELS: Final = 10  # Margin added around each occluder, which cov
 ECC_ITERATIONS: Final = 100
 ECC_EPSILON: Final = 1e-5
 ECC_GAUSSIAN_PIXELS: Final = 5  # Gaussian filter size ECC applies to both darkness maps
+ECC_STROKE_REACH_PIXELS: Final = 16  # ECC aligns only this near baseline strokes, so a new stroke elsewhere cannot drag it
+ECC_NEW_STROKE_DISTANCE_PIXELS: Final = 12  # Capture strokes farther than this from every baseline stroke are new to ECC
+ECC_NEW_STROKE_MARGIN_PIXELS: Final = 8  # New strokes and this margin around them are left out of ECC
+MIN_ECC_STROKE_PIXELS: Final = 1000  # With fewer visible baseline stroke pixels, about a 90 px line, ECC uses the whole canvas
 BASELINE_GROW_PIXELS: Final = 4  # Baseline strokes are grown by this much, so a slightly misaligned old stroke is not new
 MIN_NEW_STROKE_SPECK_PIXELS: Final = 20  # New-stroke specks smaller than this are noise
 MIN_ECC_CORRELATION: Final = 0.4  # A lower ECC correlation is not a usable alignment, though ECC converged
@@ -44,6 +48,7 @@ NO_NEW_STROKES_REASON: Final = "no new strokes"
 NO_NEW_STROKES_NEAR_REASON: Final = "no new strokes near the part"
 PART_OCCLUDED_REASON: Final = "the whole part is occluded"
 FILLED_SHARE_NOT_RECORDED: Final = "not recorded in captures aligned before the filled share was"
+ALIGNED_ON_NOT_RECORDED: Final = "not recorded in captures aligned before the region was"
 NO_USABLE_CAPTURE_REASON: Final = "no usable capture"
 NOTHING_NEW_REASON: Final = "nothing new drawn"
 NO_PARTS_REASON: Final = "no parts suggested"
@@ -76,6 +81,14 @@ def freeze_warp(warp: object) -> tuple[tuple[float, float, float], ...] | None:
     return tuple(tuple(float(value) for value in row) for row in warp)
 
 
+class AlignmentRegion(StrEnum):
+    """
+    Which pixels of the baseline canvas ECC aligned on.
+    """
+    BASELINE_STROKES = "baseline_strokes"
+    WHOLE_CANVAS = "whole_canvas"
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Alignment:
     """
@@ -86,6 +99,7 @@ class Alignment:
     warp: tuple[tuple[float, float, float], ...] | None  # 3x3 homography from capture to baseline pixels, None without one
     occluded_share: float  # Share of the capture's canvas masked as an occluder, such as a hand, or filled in rather than seen
     filled_share: float | Unavailable = Unavailable(FILLED_SHARE_NOT_RECORDED)  # Part of occluded_share filled in, as the rim is
+    aligned_on: AlignmentRegion | Unavailable = Unavailable(ALIGNED_ON_NOT_RECORDED)  # Baseline pixels ECC aligned on
 
     def __post_init__(self) -> None:
         # A converged alignment has a finite correlation and a finite 3x3 warp, and a failed one has neither.
@@ -106,6 +120,12 @@ class Alignment:
             check_unit_share(self.filled_share, "Alignment filled_share")
             filled, occluded = self.filled_share, self.occluded_share
             require(filled <= occluded, f"Alignment filled_share must be at most occluded_share, got {filled} > {occluded}.")
+
+        # The region ECC aligned on is a known one, or unavailable in older records.
+        if not isinstance(self.aligned_on, Unavailable):
+            region, known = self.aligned_on, ", ".join(AlignmentRegion)
+            require(region in list(AlignmentRegion), f"Alignment aligned_on must be one of {known}, got {region!r}.")
+            object.__setattr__(self, "aligned_on", AlignmentRegion(region))
 
 
 def freeze_tolerance_scores(scores: Mapping[int, float | Unavailable], label: str) -> Mapping[int, float | Unavailable]:
@@ -282,6 +302,40 @@ def find_occluders(gray: np.ndarray) -> np.ndarray:
     kept = [label for label in range(1, count) if stats[label, cv2.CC_STAT_AREA] > min_area]
     blobs = np.isin(labels, kept).astype(np.uint8)
     return cv2.dilate(blobs, make_ellipse(OCCLUDER_GROW_PIXELS)) > 0
+
+
+def grow_mask(mask: np.ndarray, radius_pixels: int) -> np.ndarray:
+    """
+    Grow a boolean mask by the radius.
+    """
+    return cv2.dilate(mask.astype(np.uint8), make_ellipse(radius_pixels)) > 0
+
+
+def choose_alignment_pixels(baseline_darkness: np.ndarray, capture_darkness: np.ndarray, baseline_visible: np.ndarray,
+                            capture_visible: np.ndarray) -> tuple[AlignmentRegion, np.ndarray, np.ndarray]:
+    """
+    Choose the pixels ECC aligns on: near the baseline's visible strokes and away from the capture's new ones, if it has enough.
+
+    Args:
+        baseline_darkness (np.ndarray): Darkness map of the baseline canvas.
+        capture_darkness (np.ndarray): Darkness map of the capture's canvas, before alignment.
+        baseline_visible (np.ndarray): Boolean mask of baseline pixels nothing hides.
+        capture_visible (np.ndarray): Boolean mask of capture pixels nothing hides.
+
+    Returns:
+        tuple[AlignmentRegion, np.ndarray, np.ndarray]: Which region was chosen, and the baseline and capture masks ECC uses.
+    """
+    # Too few baseline strokes cannot hold a homography, so the whole visible canvas is used instead.
+    baseline_strokes = (baseline_darkness > LOCAL_STROKE_CONTRAST) & baseline_visible
+    if baseline_strokes.sum() < MIN_ECC_STROKE_PIXELS:
+        return AlignmentRegion.WHOLE_CANVAS, baseline_visible, capture_visible
+
+    # New strokes appear away from the old ones, since the corners already align within a few px, so they are left out.
+    baseline_region = grow_mask(baseline_strokes, ECC_STROKE_REACH_PIXELS) & baseline_visible
+    capture_strokes = capture_darkness > LOCAL_STROKE_CONTRAST
+    new_strokes = capture_strokes & ~grow_mask(baseline_strokes, ECC_NEW_STROKE_DISTANCE_PIXELS)
+    capture_region = capture_visible & ~grow_mask(new_strokes, ECC_NEW_STROKE_MARGIN_PIXELS)
+    return AlignmentRegion.BASELINE_STROKES, baseline_region, capture_region
 
 
 def align_to_baseline(baseline_darkness: np.ndarray, capture_darkness: np.ndarray, baseline_valid: np.ndarray,
@@ -467,6 +521,10 @@ class AlignedStrokeFollowDetector(FollowDetector):
             "ecc_iterations": ECC_ITERATIONS,
             "ecc_epsilon": ECC_EPSILON,
             "ecc_gaussian_pixels": ECC_GAUSSIAN_PIXELS,
+            "ecc_stroke_reach_pixels": ECC_STROKE_REACH_PIXELS,
+            "ecc_new_stroke_distance_pixels": ECC_NEW_STROKE_DISTANCE_PIXELS,
+            "ecc_new_stroke_margin_pixels": ECC_NEW_STROKE_MARGIN_PIXELS,
+            "min_ecc_stroke_pixels": MIN_ECC_STROKE_PIXELS,
             "baseline_grow_pixels": BASELINE_GROW_PIXELS,
             "min_new_stroke_speck_pixels": MIN_NEW_STROKE_SPECK_PIXELS,
             "min_ecc_correlation": MIN_ECC_CORRELATION,
@@ -489,13 +547,13 @@ class AlignedStrokeFollowDetector(FollowDetector):
         parts = [decode_mask(mask, baseline.shape, f"Part {index} mask") for index, mask in enumerate(part_masks)]
         capture_filled_mask = decode_mask(capture_filled, baseline.shape, "Capture filled mask")
 
-        # Hide occluders and filled areas in both canvases, so neither a hand nor a filled-in edge steers the alignment.
+        # Hide occluders and filled areas in both canvases, and align near baseline strokes so no new stroke steers ECC either.
         baseline_hidden = find_occluders(baseline) | decode_mask(baseline_filled, baseline.shape, "Baseline filled mask")
         capture_hidden = find_occluders(capture) | capture_filled_mask
         occluded_share, filled_share = float(capture_hidden.mean()), float(capture_filled_mask.mean())
-        baseline_darkness = make_darkness_map(baseline)
-        correlation, baseline_to_capture = align_to_baseline(baseline_darkness, make_darkness_map(capture), ~baseline_hidden,
-                                                             ~capture_hidden)
+        baseline_darkness, capture_darkness = make_darkness_map(baseline), make_darkness_map(capture)
+        aligned_on, *regions = choose_alignment_pixels(baseline_darkness, capture_darkness, ~baseline_hidden, ~capture_hidden)
+        correlation, baseline_to_capture = align_to_baseline(baseline_darkness, capture_darkness, *regions)
 
         # Refuse a failed, implausible, or singular warp, recording why.
         height, width = baseline.shape
@@ -507,7 +565,7 @@ class AlignedStrokeFollowDetector(FollowDetector):
             failure = Unavailable(f"{NOT_CONVERGED_REASON}: singular warp")
         if failure is not None:
             alignment = Alignment(converged=False, correlation=failure, warp=None, occluded_share=occluded_share,
-                                  filled_share=filled_share)
+                                  filled_share=filled_share, aligned_on=aligned_on)
             return alignment, None, ()
 
         # Warp the capture into the baseline frame, repeating its border so the edge does not look like a stroke.
@@ -524,7 +582,7 @@ class AlignedStrokeFollowDetector(FollowDetector):
         new_strokes = find_new_strokes(baseline_darkness, make_darkness_map(aligned), hidden)
         scores = tuple(score_part(index, part, new_strokes, hidden) for index, part in enumerate(parts))
         alignment = Alignment(converged=True, correlation=correlation, warp=warp, occluded_share=occluded_share,
-                              filled_share=filled_share)
+                              filled_share=filled_share, aligned_on=aligned_on)
         return alignment, int(new_strokes.sum()), scores
 
 

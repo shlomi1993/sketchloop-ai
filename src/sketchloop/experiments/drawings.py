@@ -17,8 +17,8 @@ from sketchloop.experiments.provenance import redact_paths
 from sketchloop.experiments.serialization import (backend_from_dict, backend_to_dict, check_schema_version, decode_value,
                                                   effective_from_dict, effective_to_dict, encode_value, image_from_dict,
                                                   parse_time)
-from sketchloop.follow import (FILLED_SHARE_NOT_RECORDED, Alignment, CaptureScores, FollowDecision, FollowMethod, FollowRule,
-                               PartDecision, PartScores, decide_follow)
+from sketchloop.follow import (ALIGNED_ON_NOT_RECORDED, FILLED_SHARE_NOT_RECORDED, Alignment, CaptureScores, FollowDecision,
+                               FollowMethod, FollowRule, PartDecision, PartScores, decide_follow)
 from sketchloop.preprocessing import PreprocessingStep
 from sketchloop.stroke_suggestion import (CANVAS_GRID_PIXELS, PART_COLORS, StrokeSuggestion, StrokeSuggestionRequest,
                                           SuggestedPart, is_count)
@@ -490,6 +490,7 @@ def alignment_to_dict(alignment: Alignment) -> dict[str, object]:
         "warp": [list(row) for row in alignment.warp] if alignment.warp is not None else None,
         "occluded_share": alignment.occluded_share,
         "filled_share": encode_value(alignment.filled_share),
+        "aligned_on": encode_value(alignment.aligned_on),
     }
 
 
@@ -545,12 +546,13 @@ def capture_scores_from_dict(data: Mapping[str, object]) -> CaptureScores:
     """
     Rebuild a capture's scores through their validating constructors.
     """
-    # Alignments saved before the filled share have no filled_share key.
+    # Alignments saved before the filled share or the aligned region have no filled_share or aligned_on key.
     alignment_data = data["alignment"]
     filled_share = decode_value(alignment_data.get("filled_share", {"unavailable": FILLED_SHARE_NOT_RECORDED}))
+    aligned_on = decode_value(alignment_data.get("aligned_on", {"unavailable": ALIGNED_ON_NOT_RECORDED}))
     alignment = Alignment(converged=alignment_data["converged"], correlation=decode_value(alignment_data["correlation"]),
                           warp=alignment_data["warp"], occluded_share=alignment_data["occluded_share"],
-                          filled_share=filled_share)
+                          filled_share=filled_share, aligned_on=aligned_on)
 
     # Scores saved before per-part scoring have no parts key.
     parts = data.get("parts")
