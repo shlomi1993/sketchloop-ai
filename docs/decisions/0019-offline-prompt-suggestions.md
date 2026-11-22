@@ -1,6 +1,6 @@
 # ADR 0019: Offline style prompt suggestions from the sketch
 
-Status: accepted, amended in the UI session (Florence-2-base, suggestions on request only, chosen with the backend)
+Status: accepted, amended in the UI session (Florence-2-base, suggestions on request only, chosen with the backend) and in T10 (chosen in settings, with records)
 
 ## Context
 
@@ -24,3 +24,5 @@ A cloud vision model would give richer suggestions but was rejected by the owner
 The page gains a suggestion step and a second local model with its own download, memory use, and load time, which must be measured like T08 stages. Default checks stay offline through a fake suggester. The record change adds fields within schema version 1 that older rounds load as unavailable. The model choice, its quality on pencil sketches, and its memory cost are unverified until the research note and a measured run.
 
 The UI session implemented this decision with three changes. The [research note](../research/prompt-suggestion-models.md) chose Florence-2-base (MIT, about 463 MB), which names the sketched object, and the page fills five style templates with it, since a captioning model describes the drawing rather than proposing a style. The page first wrote a suggestion automatically whenever the drawing changed, but camera noise, a hand passing over the paper, and the wait for a still frame made that unreliable and hard to follow, so the owner reverted it, and a suggestion is now written only when the person presses "Suggest a prompt". The suggester is chosen with the backend, Florence-2 next to diffusers and the templates next to the fake, rather than through the settings file, and the round does not yet record the suggester or the suggestion. The model loads and captions a blank image when the page starts, so the first suggestion takes about 0.3 s on the M2 Pro instead of about 6 s.
+
+Amended in T10 ([ADR 0026](0026-study-mode-condition-and-blinded-export.md)): the prompt suggester is now chosen in a `[prompt_suggester]` settings table, with `name` set to `templates`, the default, which needs no model, or `florence`, rather than following the image backend. The study page hides generation, so tying the suggester to the backend would have forced a real backend into the study's settings only to get Florence-2 prompts, and the two choices are independent. The same amendment adds the records this decision asked for: every suggestion with the suggester's identity, and whether each used prompt was typed, suggested, or an edited suggestion.
