@@ -5,6 +5,7 @@ Tests of what the show subcommand prints for current, older, and benchmark sessi
 import json
 import numpy as np
 import pytest
+import re
 
 from collections.abc import Callable
 from pathlib import Path
@@ -174,16 +175,19 @@ def test_show_prints_a_finished_drawing(tmp_path: Path, capsys: pytest.CaptureFi
     assert "Experiment: participant1_car" in output, f"Missing experiment name in {output}"
     assert "Round 1 (complete)" in output and "Prompt: chair" in output, "The round must still be printed"
 
-    # The drawing names its state, captures, final drawing, suggester, fake warning, and rule.
-    assert "Drawing 1: finished after 0 s, 4 captures, canvas 512x360, final drawing captures/capture-0004.png" in output, output
+    # The drawing names its state, captures, final drawing, suggester, fake warning, and rule, with any elapsed time.
+    drawing_line = r"Drawing 1: finished after \d+ s, 4 captures, canvas 512x360, final drawing captures/capture-0004\.png"
+    assert re.search(drawing_line, output), f"Missing drawing line in {output}"
     assert "Suggester: FakeStrokeSuggester, sketchloop.fake-strokes" in output, f"Missing suggester in {output}"
     assert "follow method aligned-strokes 3" in output and "FAKE SUGGESTER" in output, f"Missing method or warning {output}"
     assert "Rule: coverage_16 >= 0.35 and precision_16 >= 0.4" in output, f"Missing rule in {output}"
 
     # Suggestion 1 keeps its typed prompt and its recorded decision, and the failed press names its stage.
-    assert 'Suggestion 1 at +00:00: "a [bold]car", 2 parts, seed' in output, f"Missing suggestion 1 in {output}"
-    assert "followed: part 1 followed, part 2 not followed. Window 0 s, 3 captures, ended by finished." in output, output
-    assert "Suggestion 2 at +00:00: (empty), failed during generation: StrokeSuggestionError" in output, output
+    assert re.search(r'Suggestion 1 at \+\d\d:\d\d: "a \[bold\]car", 2 parts, seed', output), f"Missing suggestion 1 in {output}"
+    window_line = r"followed: part 1 followed, part 2 not followed\. Window \d+ s, 3 captures, ended by finished\."
+    assert re.search(window_line, output), f"Missing decision line in {output}"
+    failed_line = r"Suggestion 2 at \+\d\d:\d\d: \(empty\), failed during generation: StrokeSuggestionError"
+    assert re.search(failed_line, output), f"Missing failed press in {output}"
     assert "computed by show" not in output, "A finished drawing's decisions are recorded, not computed"
 
     # Every drawing file matches its checksum.
