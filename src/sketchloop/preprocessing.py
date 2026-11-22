@@ -279,13 +279,14 @@ def straighten_tilt(gray: np.ndarray, scale: float) -> tuple[np.ndarray, float]:
     return straightened, round(tilt, 1)
 
 
-def isolate_paper(gray: np.ndarray, scale: float) -> tuple[np.ndarray, np.ndarray, dict[str, ControlValue]]:
+def isolate_paper(gray: np.ndarray, scale: float, keep_warped_sheet: bool = False) -> tuple[np.ndarray, np.ndarray, dict[str, ControlValue]]:  # noqa: E501
     """
     Straighten the paper by its corners or, when some are hidden, by its edges, then whiten everything outside its outline.
 
     Args:
         gray (np.ndarray): Grayscale image.
         scale (float): Ratio of the image's long side to the reference long side.
+        keep_warped_sheet (bool, optional): Take a sheet warped by its corners whole. Defaults to False.
 
     Returns:
         tuple[np.ndarray, np.ndarray, dict[str, ControlValue]]: The paper-only image, the paper mask, and the parameters used.
@@ -297,10 +298,14 @@ def isolate_paper(gray: np.ndarray, scale: float) -> tuple[np.ndarray, np.ndarra
         flattened, tilt = straighten_tilt(flattened, scale)
         params |= {"tilt_degrees": tilt, "width": flattened.shape[1], "height": flattened.shape[0]}
 
+    # A sheet warped by its corners fills the image, so when asked, take it whole rather than its brightest region.
+    whole_sheet = keep_warped_sheet and bool(params["corners_found"])
+    outline = np.full_like(flattened, 255) if whole_sheet else find_paper_mask(flattened, scale)
+
     # Shrink the outline, also from the frame edge, so the paper's own edge is not mistaken for a stroke.
     erode_size = odd_kernel_size(PAPER_ERODE_PIXELS, scale)
     kernel = np.ones((erode_size, erode_size), np.uint8)
-    paper_mask = cv2.erode(find_paper_mask(flattened, scale), kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0)
+    paper_mask = cv2.erode(outline, kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0)
     paper_found = bool(paper_mask.any())
     if not paper_found:
         paper_mask = np.full_like(flattened, 255)
@@ -555,6 +560,19 @@ def preprocess_minimally(payload: bytes, rotation: int = Rotation.DEG_000) -> Pr
     return PreprocessedSketch(image=image, payload=processed, steps=steps)
 
 
+def fill_outside_paper(paper_only: np.ndarray, paper_mask: np.ndarray, blur_size: int) -> np.ndarray:
+    outside = paper_mask == 0
+    if not outside.any() or outside.all():
+        return paper_only
+
+    # Copy each outside pixel from its nearest paper pixel, which OpenCV numbers in raster order.
+    _, nearest = cv2.distanceTransformWithLabels(outside.astype(np.uint8), cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_PIXEL)
+    extended = paper_only[~outside][nearest - 1]
+
+    # Smooth the copies with the median, so a stroke touching the paper's edge is not drawn out across the border.
+    return np.where(outside, cv2.medianBlur(extended, blur_size), paper_only).astype(np.uint8)
+
+
 def crop_to_paper(paper_only: np.ndarray, paper_mask: np.ndarray) -> tuple[np.ndarray, dict[str, ControlValue]]:
     left, top, width, height = cv2.boundingRect(paper_mask)
     params: dict[str, ControlValue] = {"x": left, "y": top, "width": width, "height": height}
@@ -590,7 +608,13 @@ def make_paper_canvas(payload: bytes, rotation: int, width: int, height: int) ->
 
     # Keep the whole sheet, warped by its corners when all are visible, without dropping any stroke on it.
     pixel_scale = max(rotated.shape) / REFERENCE_LONG_SIDE_PIXELS
-    paper_only, paper_mask, paper_params = isolate_paper(rotated, pixel_scale)
+    paper_only, paper_mask, paper_params = isolate_paper(rotated, pixel_scale, keep_warped_sheet=True)
+
+    # Fill outside the sheet with the paper's own level, since a white border makes the paper beside it look like strokes.
+    blur_size = odd_kernel_size(PAPER_BLUR_PIXELS, pixel_scale)
+    paper_only = fill_outside_paper(paper_only, paper_mask, blur_size)
+    whole_sheet = bool(paper_params["corners_found"])
+    paper_params |= {"whole_warped_sheet": whole_sheet, "outside_fill": "nearest_paper", "outside_blur_pixels": blur_size}
     steps.append(PreprocessingStep(name="isolate_paper", params=paper_params))
 
     # Without corners the sheet is not warped, so cut it out by the paper's box instead.
@@ -609,7 +633,7 @@ def extract_canvas_strokes(canvas_payload: bytes) -> PreprocessedSketch:
     gray = decode_grayscale(canvas_payload)
     pixel_scale = max(gray.shape) / REFERENCE_LONG_SIDE_PIXELS
 
-    # Mark pixels darker than the local paper anywhere on the canvas, which is white outside the sheet.
+    # Mark pixels darker than the local paper anywhere on the canvas, which has the paper's level outside the sheet.
     blur_size = odd_kernel_size(PAPER_BLUR_PIXELS, pixel_scale)
     darker = mark_darker_pixels(gray, np.full_like(gray, 255), blur_size)
 

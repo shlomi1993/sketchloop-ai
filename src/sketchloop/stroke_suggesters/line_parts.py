@@ -25,6 +25,8 @@ class LinePartParams:
     long_line_grow_pixels: int = 3  # Diameter the lines grow by before the search, so a line slanting a pixel stays whole
     long_line_max_near_share: float = 0.5  # A long line with more of its length near existing strokes continues them and stays
     long_line_band_pixels: int = 9  # Width of the band removed along each long line
+    border_line_share: float = 0.2  # A loose line from the canvas border this share of the longer side long is a sheet edge
+    border_pixels: int = 6  # Line ends, and straight parts wholly, this close to a canvas edge are on the border
 
 
 def list_extraction_settings(params: LinePartParams) -> dict[str, ControlValue]:
@@ -60,14 +62,48 @@ def decode_canvas(request: StrokeSuggestionRequest, canvas_payload: bytes) -> np
     return gray
 
 
+def find_straight_segments(grown_lines: np.ndarray, min_length: int, params: LinePartParams) -> list[list[int]]:
+    max_gap = round(params.long_line_gap_share * max(grown_lines.shape))
+    found = cv2.HoughLinesP(grown_lines, 1, np.pi / 180, threshold=round(params.long_line_vote_share * min_length),
+                            minLineLength=min_length, maxLineGap=max_gap)
+    return [] if found is None else found.reshape(-1, 4).tolist()
+
+
+def is_on_canvas_border(x: int, y: int, canvas_shape: tuple[int, ...], border_pixels: int) -> bool:
+    height, width = canvas_shape
+    return x <= border_pixels or y <= border_pixels or x >= width - 1 - border_pixels or y >= height - 1 - border_pixels
+
+
+def mark_attached_lines(grown_lines: np.ndarray, near_existing: np.ndarray) -> np.ndarray:
+    # Label the connected lines and keep those that reach the existing strokes.
+    _, labels = cv2.connectedComponents(grown_lines, connectivity=8)
+    attached = np.unique(labels[near_existing & (grown_lines > 0)])
+    return np.isin(labels, attached[attached > 0])
+
+
+def is_loose_border_line(segment: list[int], attached_lines: np.ndarray, params: LinePartParams) -> bool:
+    # A segment with neither end on the canvas border is not a border line.
+    start_x, start_y, end_x, end_y = segment
+    shape = attached_lines.shape
+    if not any(is_on_canvas_border(x, y, shape, params.border_pixels) for x, y in ((start_x, start_y), (end_x, end_y))):
+        return False
+
+    # It is loose when its line does not connect to the existing strokes, since a leg running off the canvas starts at them.
+    on_segment = np.zeros(shape, dtype=np.uint8)
+    cv2.line(on_segment, (start_x, start_y), (end_x, end_y), 255, 1)
+    return not (attached_lines & (on_segment > 0)).any()
+
+
 def mark_long_lines(lines: np.ndarray, near_existing: np.ndarray, params: LinePartParams) -> np.ndarray:
     # Search the slightly grown lines for straight segments that are long relative to the canvas.
     longer_side = max(lines.shape)
-    min_length = round(params.long_line_share * longer_side)
     grown = cv2.dilate(lines, make_ellipse(params.long_line_grow_pixels))
-    found = cv2.HoughLinesP(grown, 1, np.pi / 180, threshold=round(params.long_line_vote_share * min_length),
-                            minLineLength=min_length, maxLineGap=round(params.long_line_gap_share * longer_side))
-    segments = [] if found is None else found.reshape(-1, 4).tolist()
+    segments = find_straight_segments(grown, round(params.long_line_share * longer_side), params)
+
+    # Shorter segments from the canvas border that do not reach the drawing are the edges of a pictured sheet or panel.
+    attached = mark_attached_lines(grown, near_existing)
+    border_segments = find_straight_segments(grown, round(params.border_line_share * longer_side), params)
+    segments += [segment for segment in border_segments if is_loose_border_line(segment, attached, params)]
 
     # Mark a band along each segment mostly away from the existing strokes, since one mostly along them continues them.
     band = np.zeros_like(lines)
@@ -89,7 +125,7 @@ def extract_new_lines(line_drawing_gray: np.ndarray, canvas_strokes: np.ndarray,
     # Lines on or near the existing strokes are the model redrawing them, so only the rest are new.
     near_existing = cv2.dilate(canvas_strokes, make_ellipse(params.existing_stroke_kernel_pixels)) > 0
 
-    # Long straight lines across the whole drawing are ruled paper, floors, or horizons, so they are not new either.
+    # Long straight lines are ruled paper, floors, or horizons, and loose ones from the border are sheet edges, so not new.
     long_lines = mark_long_lines(np.where(is_line, 255, 0).astype(np.uint8), near_existing, params)
     return np.where(is_line & ~near_existing & ~long_lines, 255, 0).astype(np.uint8)
 
@@ -107,9 +143,14 @@ def is_frame_line(part: np.ndarray, params: LinePartParams) -> bool:
     if width > params.max_straight_width_ratio * length:
         return False
 
-    # It is a frame line when it also spans most of the canvas in either direction.
-    _, _, box_width, box_height = cv2.boundingRect(part)
+    # It is a frame line when it also lies along one canvas edge, as a pictured sheet's edge does.
+    left, top, box_width, box_height = cv2.boundingRect(part)
     canvas_height, canvas_width = part.shape
+    band = params.border_pixels
+    if top + box_height <= band or left + box_width <= band or top >= canvas_height - band or left >= canvas_width - band:
+        return True
+
+    # It is also one when it spans most of the canvas in either direction.
     share = params.min_straight_span_share
     return box_width >= share * canvas_width or box_height >= share * canvas_height
 

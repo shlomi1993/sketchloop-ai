@@ -165,6 +165,35 @@ def test_group_parts_keeps_edge_parts_and_drops_frame_lines() -> None:
     assert not covered[10:21, 10:500].any(), "The frame line must be dropped"
 
 
+def test_extract_new_lines_drops_loose_lines_from_the_border() -> None:
+    """
+    Loose straight lines from the canvas border or along it are dropped as sheet edges, unlike legs and short lines.
+    """
+    line_drawing = make_blank()
+    cv2.rectangle(line_drawing, (150, 100), (350, 200), 0, 3)
+    cv2.line(line_drawing, (40, 0), (40, 175), 0, 3)
+    cv2.line(line_drawing, (0, 300), (168, 300), 0, 3)
+    cv2.line(line_drawing, (500, 359), (500, 300), 0, 3)
+    cv2.line(line_drawing, (330, 203), (330, 359), 0, 3)
+    cv2.line(line_drawing, (420, 40), (420, 215), 0, 3)
+    cv2.line(line_drawing, (300, 1), (380, 1), 0, 3)
+
+    parts = group_parts(extract_new_lines(line_drawing, draw_existing_strokes(), LinePartParams()), LinePartParams(), 4)
+    boxes = sorted(cv2.boundingRect(part) for part in parts)
+
+    # The vertical line from the top border, the horizontal one from the left border, and the one along the top are dropped.
+    covered = np.bitwise_or.reduce(np.stack(parts), axis=0) if parts else np.zeros(CANVAS_SHAPE, dtype=np.uint8)
+    assert not covered[:180, 30:51].any(), f"The loose line from the top border must be dropped, got boxes {boxes}"
+    assert not covered[290:311, :175].any(), f"The loose line from the left border must be dropped, got boxes {boxes}"
+    assert not covered[:6, 295:385].any(), f"The short line along the top edge must be dropped, got boxes {boxes}"
+
+    # The leg from the drawing to the bottom border, the short line at the border, and the free inner line remain whole.
+    assert len(parts) == 3, f"Expected the leg, the short line, and the inner line, got boxes {boxes}"
+    assert boxes[0][0] <= 330 and boxes[0][1] + boxes[0][3] == 360, f"The leg must reach the bottom border, got {boxes[0]}"
+    assert boxes[1][1] <= 40 and boxes[1][1] + boxes[1][3] >= 215, f"The free inner line must be whole, got {boxes[1]}"
+    assert boxes[2][0] >= 497 and boxes[2][1] <= 300, f"The short line at the border must stay, got {boxes[2]}"
+
+
 @pytest.mark.parametrize("max_parts", [1, 2, 4])
 def test_group_parts_returns_at_most_max_parts(max_parts: int) -> None:
     """
@@ -205,4 +234,5 @@ def test_extraction_settings_are_prefixed() -> None:
     # Each field appears once with its default.
     assert settings["extract_line_contrast"] == 40 and settings["extract_min_part_pixels"] == 150, f"Got {settings}"
     assert settings["extract_long_line_share"] == 0.4, f"The long-line filter must be recorded, got {settings}"
+    assert settings["extract_border_line_share"] == 0.2, f"The border-line filter must be recorded, got {settings}"
     assert all(name.startswith("extract_") for name in settings), f"Every name must start with extract_, got {list(settings)}"

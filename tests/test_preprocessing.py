@@ -281,3 +281,72 @@ def test_canvas_strokes_keep_strokes_far_from_the_drawing() -> None:
     # The generation preprocessing drops that stroke as too far from the main drawing.
     dropped = preprocess_sketch(photo).steps[3].params["dropped_strokes"]
     assert dropped >= 1, f"Generation preprocessing must drop the far stroke, dropped {dropped}"
+
+
+# A blank sheet's corners as photographed on a table, level and skewed.
+BLANK_SHEET_CORNERS = {
+    "untilted": [(100, 50), (700, 50), (700, 550), (100, 550)],
+    "tilted": [(150, 110), (660, 80), (690, 480), (120, 500)],
+}
+
+
+def photograph_lit_sheet(corners: list[tuple[int, int]], draw_strokes: bool) -> bytes:
+    """
+    Photograph an A4 sheet, lit brighter on the left, on the given corners of a darker noisy table, encoded as JPEG.
+    """
+    width, height = SHEET_SIZE
+    sheet = np.tile(np.linspace(225, 195, width), (height, 1)).astype(np.uint8)
+
+    # Strokes in the middle, in the lower left corner, and on the dimmer right side.
+    if draw_strokes:
+        cv2.rectangle(sheet, (250, 180), (450, 300), 50, 4)
+        cv2.line(sheet, (90, 400), (150, 400), 50, 4)
+        cv2.line(sheet, (560, 120), (640, 120), 60, 4)
+
+    # Warp the sheet onto the table, add camera noise, and compress it as a webcam would.
+    source = np.array([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]], dtype=np.float32)
+    transform = cv2.getPerspectiveTransform(source, np.array(corners, dtype=np.float32))
+    photo = cv2.warpPerspective(sheet, transform, (800, 600), borderValue=90).astype(np.float64)
+    noisy = np.clip(photo + np.random.default_rng(0).normal(0, 2, photo.shape), 0, 255).astype(np.uint8)
+    return cv2.imencode(".jpg", noisy, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
+
+
+@pytest.mark.parametrize("corners", BLANK_SHEET_CORNERS.values(), ids=BLANK_SHEET_CORNERS.keys())
+def test_blank_sheet_on_a_table_has_no_canvas_strokes(corners: list[tuple[int, int]]) -> None:
+    """
+    A blank sheet on a darker table gives a canvas without stroke pixels, also at the sheet's corners and edges.
+    """
+    canvas = make_paper_canvas(photograph_lit_sheet(corners, draw_strokes=False), 0, *CANVAS_SIZE)
+    strokes = extract_canvas_strokes(canvas.payload)
+    mask = decode_stroke_mask(strokes.payload)
+
+    # No pixel is marked, and the steps record that no stroke was kept.
+    assert not mask.any(), f"A blank sheet must have no strokes, got {int(mask.sum())} pixels"
+    assert strokes.steps[0].params["kept_strokes"] == 0, f"No stroke may be kept, got {dict(strokes.steps[0].params)}"
+
+    # The whole warped sheet was used, with the area outside it filled at the paper's level.
+    paper = canvas.steps[2].params
+    filled = paper["whole_warped_sheet"] and paper["outside_fill"] == "nearest_paper"
+    assert filled, f"Expected the whole warped sheet with a paper-level fill, got {dict(paper)}"
+
+
+@pytest.mark.parametrize("corners", BLANK_SHEET_CORNERS.values(), ids=BLANK_SHEET_CORNERS.keys())
+def test_strokes_on_a_lit_sheet_are_kept_without_border_marks(corners: list[tuple[int, int]]) -> None:
+    """
+    Strokes on the same lit sheet are kept, including one on the dimmer side, and nothing is marked along the canvas border.
+    """
+    canvas = make_paper_canvas(photograph_lit_sheet(corners, draw_strokes=True), 0, *CANVAS_SIZE)
+    mask = decode_stroke_mask(extract_canvas_strokes(canvas.payload).payload)
+    scale_x, scale_y = CANVAS_SIZE[0] / SHEET_SIZE[0], CANVAS_SIZE[1] / SHEET_SIZE[1]
+    stroke_boxes = {"rectangle": (250, 180, 450, 300), "far line": (90, 390, 150, 410), "dim side line": (560, 110, 640, 130)}
+
+    # Each drawn stroke has marked pixels around its place on the canvas.
+    for name, (left, top, right, bottom) in stroke_boxes.items():
+        region = mask[round(top * scale_y):round(bottom * scale_y), round(left * scale_x):round(right * scale_x)]
+        assert region.any(), f"The {name} must be kept"
+
+    # Nothing is marked within 10 px of the canvas border, where the table or a white fill would show.
+    inner = np.zeros_like(mask)
+    inner[10:-10, 10:-10] = True
+    border_pixels = int((mask & ~inner).sum())
+    assert border_pixels == 0, f"No strokes may be marked along the border, got {border_pixels} pixels"
