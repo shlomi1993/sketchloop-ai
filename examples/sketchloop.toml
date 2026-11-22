@@ -35,7 +35,7 @@ candidates = 4
 candidates = 1
 capture_interval_seconds = 0.5
 
-[stroke_suggester]  # next-stroke suggestions for guided sketching, which the page does not use yet
+[stroke_suggester]  # next-stroke suggestions for guided sketching on the page
 name = "fake"  # fake, which draws test shapes, or controlnet, which draws new parts with SD 1.5 from the models folder
 
 [stroke_suggester.controlnet]

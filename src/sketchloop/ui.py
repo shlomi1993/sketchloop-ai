@@ -1,5 +1,5 @@
 """
-The Gradio browser page, a thin layer over AppController for webcam or upload rounds.
+The Gradio browser page, a thin layer over AppController for webcam or upload rounds and guided drawings.
 """
 
 import cv2
@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, TypeAlias
 
-from sketchloop.app import AppController, HistoryRow, RoundView
+from sketchloop.app import NO_FRAME_MESSAGE, AppController, DrawingView, HistoryRow, RoundView, SuggestionView
 from sketchloop.domain import ControlValue, Rotation, SketchLoopError, SketchSource
 from sketchloop.generation import ControlKind, ControlSpec
 
@@ -39,7 +39,21 @@ NEW_SESSION_STATUS: Final = "New session started. Its folder is created with the
 FAKE_BACKEND_PREFIX: Final = "**Fake backend:** these images are deterministic noise, not output from a real model."
 PROGRESS_MESSAGE: Final = "Generating. The first round also loads the model."
 SHARED_SESSION_NOTE: Final = "All browser tabs share one session, and reloading keeps it."
-STALE_FRAME_MESSAGE: Final = "The webcam stopped sending frames. Restart it, then generate."
+STALE_FRAME_MESSAGE: Final = "The webcam stopped sending frames. Restart it and try again."
+
+# Guided drawing texts. Nothing on the page names a task or goal, since the system is never told one.
+EXPERIMENT_NAME_HINT: Final = "Use a code such as participant1_car. Never use a real name."
+NO_DRAWING_STATUS: Final = "For next-stroke suggestions, enter a name under **Experiment** and press **Start drawing**."
+FAKE_SUGGESTER_PREFIX: Final = "**Fake suggester:** these are test shapes, not AI suggestions."
+FINISH_FIRST_MESSAGE: Final = "Finish the current drawing first."
+SUGGESTING_STATUS: Final = "Suggesting next strokes, usually a few seconds."
+PLAIN_PREVIEW_LABEL: Final = "Sketch the model will receive"
+OPEN_DRAWING_LABEL: Final = "Your sketch"
+GUIDED_PREVIEW_LABEL: Final = "Your sketch with suggested strokes"
+
+# Sketch view heights in pixels, taller while a drawing is open so the suggested strokes read at a glance.
+PLAIN_PREVIEW_HEIGHT: Final = 320
+GUIDED_PREVIEW_HEIGHT: Final = 440
 
 # The largest seed the page accepts, so seed plus candidate index stays within every backend's random generator.
 MAX_SEED: Final = 2**31 - 1
@@ -55,6 +69,9 @@ THEME: Final = gr.themes.Default(primary_hue="indigo", neutral_hue="slate", radi
 
 # Gallery, sketch, picks, iteration ID, and status.
 RoundOutputs: TypeAlias = tuple[list[tuple[str, str]], str | None, gr.CheckboxGroup, str | None, str]
+
+# Drawing status, Suggest next strokes, Finish drawing, Start a new session, the name box, and the sketch view's style.
+DrawingOutputs: TypeAlias = tuple[str, gr.Button, gr.Button, gr.Button, gr.Textbox, gr.Image]
 
 
 def describe_round_status(view: RoundView) -> str:
@@ -103,6 +120,94 @@ def pick_rotation(choice: str, use_raw: bool) -> int:
     Pick the rotation the page offers, 0 for the raw sketch, which skips preprocessing and so cannot be turned.
     """
     return Rotation.DEG_000 if use_raw else DEFAULT_ROTATION_BY_SOURCE[choice]
+
+
+def can_start_drawing(name: str | None, is_open: bool) -> bool:
+    """
+    Tell whether an experiment name was typed and no drawing is open, so a drawing can start.
+    """
+    return bool((name or "").strip()) and not is_open
+
+
+def is_drawing_open(view: DrawingView | None) -> bool:
+    """
+    Tell whether a drawing is open and so takes suggestions.
+    """
+    return view is not None and view.is_open
+
+
+def count_suggestions(count: int) -> str:
+    """
+    Say a suggestion count in words, such as "1 suggestion" or "3 suggestions".
+    """
+    return f"{count} suggestion" if count == 1 else f"{count} suggestions"
+
+
+def describe_drawing_status(view: DrawingView | None, suggestion: SuggestionView | None = None) -> str:
+    """
+    Name the experiment and the drawing's state, with the latest suggestion's line and a fake-suggester warning.
+
+    Args:
+        view (DrawingView | None): The latest drawing, or None before the first.
+        suggestion (SuggestionView | None, optional): The suggestion just shown, if any. Defaults to None.
+
+    Returns:
+        str: One status line for the drawing controls.
+    """
+    if view is None:
+        return NO_DRAWING_STATUS
+
+    drawing = f"Experiment {view.experiment}, drawing {view.number}" if view.experiment else f"Drawing {view.number}"
+    if not view.is_open:
+        return f"{drawing} is finished with {count_suggestions(view.suggestion_count)}. Start a new experiment to draw again."
+
+    # Show the suggestion just made, warning first when it is fake, or the latest one after a reload.
+    if suggestion is not None:
+        status = f"{drawing}. {suggestion.status}"
+        return f"{FAKE_SUGGESTER_PREFIX} {status}" if suggestion.is_fake else status
+
+    if view.suggestion_lines:
+        return f"{drawing}. {view.suggestion_lines[-1]}"
+
+    return f"{drawing} is open. Draw on paper and press **Suggest next strokes** whenever you want ideas."
+
+
+def style_sketch_view(view: DrawingView | None, **update: object) -> gr.Image:
+    """
+    Label, widen, and heighten the sketch view while a drawing is open, naming the suggestions once there are any.
+    """
+    if is_drawing_open(view):
+        label = GUIDED_PREVIEW_LABEL if view.suggestion_count else OPEN_DRAWING_LABEL
+        return gr.Image(label=label, height=GUIDED_PREVIEW_HEIGHT, elem_classes=["guided"], **update)
+
+    return gr.Image(label=PLAIN_PREVIEW_LABEL, height=PLAIN_PREVIEW_HEIGHT, elem_classes=[], **update)
+
+
+def build_drawing_outputs(view: DrawingView | None, *, clear_name: bool = False) -> DrawingOutputs:
+    """
+    Turn the latest drawing into its status, the drawing buttons, the name box, and the sketch view's style.
+
+    Args:
+        view (DrawingView | None): The latest drawing, or None before the first.
+        clear_name (bool, optional): Empty the name box, as after a start. Defaults to False.
+
+    Returns:
+        DrawingOutputs: Values for the drawing components.
+    """
+    # While a drawing is open, lock the name box and Start a new session, so nothing ends the drawing by accident.
+    is_open = is_drawing_open(view)
+    name_update = {"value": ""} if clear_name else {}
+    name_box = gr.Textbox(info=FINISH_FIRST_MESSAGE if is_open else EXPERIMENT_NAME_HINT, interactive=not is_open, **name_update)
+    return (describe_drawing_status(view), gr.Button(interactive=is_open), gr.Button(interactive=is_open),
+            gr.Button(interactive=not is_open), name_box, style_sketch_view(view))
+
+
+def decode_preview(payload: bytes) -> np.ndarray:
+    """
+    Decode encoded preview bytes into an RGB image for display.
+    """
+    image = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
+    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
 
 def build_history_table(rows: Sequence[HistoryRow]) -> list[list[str | int]]:
@@ -188,6 +293,18 @@ class ChooseCard:
     record: gr.Button  # Records the choice
     new_session: gr.Button  # Starts a new session
     round_state: gr.State  # Iteration ID of the shown round
+    drawing_status: gr.Markdown  # Experiment, drawing state, and the latest suggestion
+    suggest_strokes: gr.Button  # Suggests next strokes for the open drawing
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExperimentCard:
+    """
+    Experimenter controls, away from the participant's buttons: the experiment name, Start drawing, and Finish drawing.
+    """
+    name: gr.Textbox  # Experiment name, which also names the session folder
+    start: gr.Button  # Starts a named experiment and its drawing
+    finish: gr.Button  # Finishes the open drawing with the current sketch as its final capture
 
 
 class SketchPage:
@@ -288,9 +405,9 @@ class SketchPage:
         return None if upload_path is None else Path(upload_path)
 
     def show_sketch_preview(self, choice: str, upload_path: str | None, rotation_degrees: int,
-                            use_raw: bool) -> np.ndarray | None:
+                            use_raw: bool) -> np.ndarray | dict | None:
         """
-        Show the current webcam frame or upload as the generator would receive it, preprocessed unless raw.
+        Show the current sketch with the open drawing's suggestion, or as the generator would receive it otherwise.
 
         Args:
             choice (str): Chosen sketch source.
@@ -299,16 +416,19 @@ class SketchPage:
             use_raw (bool): Whether to skip preprocessing and rotation.
 
         Returns:
-            np.ndarray | None: The preview in RGB order, or None when there is no usable sketch yet.
+            np.ndarray | dict | None: The preview in RGB order, a skip that keeps the last guided preview, or None when
+                there is no usable sketch yet.
         """
-        # Decode the preview bytes for display, in RGB order.
-        payload = self.controller.preview_sketch(self.pick_current_sketch(choice, upload_path), int(rotation_degrees or 0),
-                                                 use_raw)
-        if payload is None:
-            return None
+        sketch = self.pick_current_sketch(choice, upload_path)
+        rotation = int(rotation_degrees or 0)
 
-        image = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
-        return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # While a drawing is open, show the paper with the suggestion's overlay, keeping the last one when the paper is hidden.
+        guided = self.controller.preview_guided_sketch(sketch, rotation)
+        if guided is None and is_drawing_open(self.controller.latest_drawing()):
+            return gr.skip()
+
+        payload = guided or self.controller.preview_sketch(sketch, rotation, use_raw)
+        return None if payload is None else decode_preview(payload)
 
     def refresh_webcam_preview(self, choice: str, upload_path: str | None, rotation_degrees: int,
                                use_raw: bool) -> np.ndarray | dict | None:
@@ -339,6 +459,19 @@ class SketchPage:
         except (SketchLoopError, OSError) as error:
             raise gr.Error(str(error)) from error
 
+    def take_sketch(self, choice: str, upload_path: str | None) -> tuple[Path | np.ndarray | None, float | None]:
+        """
+        Return the chosen source's sketch and a webcam frame's age, refusing a frame from before the stream stopped.
+        """
+        if SketchSource(choice) != SketchSource.WEBCAM:
+            return None if upload_path is None else Path(upload_path), None
+
+        fresh_frame = self.take_fresh_frame()
+        if fresh_frame is None and self.latest_frame is not None:
+            raise gr.Error(STALE_FRAME_MESSAGE)
+
+        return fresh_frame or (None, None)
+
     def run_generation(self, choice: str, upload_path: str | None, prompt_text: str, candidate_count: float,
                        seed: str | float | None, rotation_degrees: int, use_raw: bool, *control_values: float,
                        progress: gr.Progress = gr.Progress(track_tqdm=True)) -> RoundOutputs:
@@ -362,14 +495,7 @@ class SketchPage:
         # Pick the sketch for the chosen source, refusing a webcam frame from before the stream stopped.
         progress(None, desc=PROGRESS_MESSAGE)
         source = SketchSource(choice)
-        sketch: Path | np.ndarray | None = None if upload_path is None else Path(upload_path)
-        frame_age_seconds = None
-        if source == SketchSource.WEBCAM:
-            fresh_frame = self.take_fresh_frame()
-            if fresh_frame is None and self.latest_frame is not None:
-                raise gr.Error(STALE_FRAME_MESSAGE)
-
-            sketch, frame_age_seconds = fresh_frame or (None, None)
+        sketch, frame_age_seconds = self.take_sketch(choice, upload_path)
 
         # Generate with the chosen controls, showing any error.
         controls = read_control_values(self.controller.slider_controls, control_values)
@@ -401,18 +527,130 @@ class SketchPage:
 
         return describe_round_status(view)
 
+    def clear_rounds(self, status: str) -> tuple[object, ...]:
+        """
+        Clear the round display of a replaced session, keeping the sketch view, and show the new session's history.
+        """
+        gallery, _, picks, iteration_id, status = build_round_outputs(None, status)
+        return gallery, picks, iteration_id, status, build_history_table(self.controller.list_history())
+
     def start_session(self) -> tuple[object, ...]:
         """
-        Start a new session and clear the round display and history.
+        Start a new session, which ends an open drawing, and clear the round display and history.
         """
         self.controller.start_new_session()
-        return *build_round_outputs(None, NEW_SESSION_STATUS), build_history_table(self.controller.list_history())
+        return *self.clear_rounds(NEW_SESSION_STATUS), *build_drawing_outputs(self.controller.latest_drawing())
 
     def restore_view(self) -> tuple[object, ...]:
         """
-        Show the latest round and the history, as on page load.
+        Show the latest round, the history, and the latest drawing, as on page load.
         """
-        return *build_round_outputs(self.controller.latest_round()), build_history_table(self.controller.list_history())
+        gallery, sketch_path, picks, iteration_id, status = build_round_outputs(self.controller.latest_round())
+        drawing = self.controller.latest_drawing()
+        *drawing_controls, _ = build_drawing_outputs(drawing)
+        return (gallery, style_sketch_view(drawing, value=sketch_path), picks, iteration_id, status,
+                build_history_table(self.controller.list_history()), *drawing_controls)
+
+    def start_drawing(self, name: str | None) -> tuple[object, ...]:
+        """
+        Start a named experiment with its first drawing, clearing the name, the prompt, the upload, and the previous rounds.
+
+        Args:
+            name (str | None): Experiment name as typed.
+
+        Returns:
+            tuple[object, ...]: The drawing outputs, Start drawing, the cleared prompt and upload, and the cleared rounds.
+        """
+        # Never end an open drawing by starting another, even from a second tab.
+        if is_drawing_open(self.controller.latest_drawing()):
+            raise gr.Error(FINISH_FIRST_MESSAGE)
+
+        # An invalid or taken name is refused with one line, and the current session stays.
+        try:
+            view = self.controller.start_drawing(name or "")
+        except (SketchLoopError, OSError) as error:
+            raise gr.Error(str(error)) from error
+
+        # Clear the name, and the previous participant's prompt and upload, so nothing carries over to this drawing.
+        cleared_inputs = (gr.Button(interactive=False), gr.Textbox(value=""), gr.Image(value=None))
+        return *build_drawing_outputs(view, clear_name=True), *cleared_inputs, *self.clear_rounds(NO_ROUNDS_STATUS)
+
+    def show_suggesting(self) -> tuple[str, gr.Button]:
+        """
+        Say that a suggestion is running and disable its button until it ends.
+        """
+        return SUGGESTING_STATUS, gr.Button(interactive=False)
+
+    def suggest_next_strokes(self, choice: str, upload_path: str | None, prompt_text: str | None,
+                             rotation_degrees: int) -> tuple[str, gr.Image]:
+        """
+        Suggest next strokes for the open drawing from the current sketch and the prompt as typed, and show the overlay.
+
+        Args:
+            choice (str): Chosen sketch source.
+            upload_path (str | None): Uploaded sketch file, if any.
+            prompt_text (str | None): Prompt box text, sent exactly as typed, possibly empty.
+            rotation_degrees (int): Degrees to turn the sketch clockwise.
+
+        Returns:
+            tuple[str, gr.Image]: The drawing status and the sketch view with the guided preview.
+        """
+        # Suggest from the chosen source, refusing a webcam frame from before the stream stopped.
+        sketch, frame_age_seconds = self.take_sketch(choice, upload_path)
+        try:
+            suggestion = self.controller.suggest_strokes(sketch, SketchSource(choice), prompt_text or "",
+                                                         rotation=int(rotation_degrees or 0), frame_age_seconds=frame_age_seconds)
+        except (SketchLoopError, OSError) as error:
+            raise gr.Error(str(error)) from error
+
+        # Show the overlay at once rather than at the next timer tick, naming the suggested strokes in the label.
+        view = self.controller.latest_drawing()
+        preview = self.show_sketch_preview(choice, upload_path, rotation_degrees, False)
+        sketch_view = style_sketch_view(view, value=preview) if isinstance(preview, np.ndarray) else style_sketch_view(view)
+        return describe_drawing_status(view, suggestion), sketch_view
+
+    def finish_drawing(self, choice: str, upload_path: str | None, rotation_degrees: int) -> DrawingOutputs:
+        """
+        Finish the open drawing, keeping the current sketch as its final capture.
+
+        Args:
+            choice (str): Chosen sketch source.
+            upload_path (str | None): Uploaded sketch file, if any.
+            rotation_degrees (int): Degrees to turn the sketch clockwise.
+
+        Returns:
+            DrawingOutputs: Values for the drawing components.
+        """
+        # Refuse a stopped or missing webcam frame, so the drawing never ends without its final capture.
+        sketch, frame_age_seconds = self.take_sketch(choice, upload_path)
+        if sketch is None:
+            raise gr.Error(NO_FRAME_MESSAGE)
+
+        try:
+            view = self.controller.finish_drawing(sketch, SketchSource(choice), rotation=int(rotation_degrees or 0),
+                                                  frame_age_seconds=frame_age_seconds)
+        except (SketchLoopError, OSError) as error:
+            raise gr.Error(str(error)) from error
+
+        return build_drawing_outputs(view)
+
+    def show_drawing_status(self) -> str:
+        """
+        Show the latest drawing's status, such as a failed suggestion's line, in place of the waiting line.
+        """
+        return describe_drawing_status(self.controller.latest_drawing())
+
+    def update_suggest_button(self) -> gr.Button:
+        """
+        Enable Suggest next strokes again while a drawing is open.
+        """
+        return gr.Button(interactive=is_drawing_open(self.controller.latest_drawing()))
+
+    def update_start_button(self, name: str | None) -> gr.Button:
+        """
+        Enable Start drawing once an experiment name is typed, unless a drawing is open.
+        """
+        return gr.Button(interactive=can_start_drawing(name, is_drawing_open(self.controller.latest_drawing())))
 
     def show_history(self) -> list[list[str | int]]:
         """
@@ -425,7 +663,8 @@ class SketchPage:
         Show the title, the backend, and the shared-session note.
         """
         gr.Markdown(f"# SketchLoop\nSketch on paper, explore AI alternatives, and choose your direction.\n\n"
-                    f"{self.controller.describe_backend()} {SHARED_SESSION_NOTE}", elem_id="header")
+                    f"{self.controller.describe_backend()} {self.controller.describe_stroke_suggester()} {SHARED_SESSION_NOTE}",
+                    elem_id="header")
 
     def _build_sketch_card(self) -> SketchCard:
         """
@@ -481,10 +720,16 @@ class SketchPage:
             gr.Markdown("### 3 · Choose", elem_classes="step-title")
             status = gr.Markdown(NO_ROUNDS_STATUS, elem_id="status")
 
-            # The received sketch beside the candidates.
+            # Suggest next strokes beside its status, right above the preview that shows the suggestion.
+            with gr.Row(equal_height=True):
+                drawing_status = gr.Markdown(describe_drawing_status(None), elem_id="drawing-status")
+                suggest_strokes = gr.Button("Suggest next strokes", variant="primary", interactive=False, scale=0,
+                                            min_width=240, elem_id="suggest-strokes")
+
+            # The received sketch, or the guided preview while a drawing is open, beside the candidates.
             with gr.Row(equal_height=False):
-                sketch_view = gr.Image(label="Sketch the model will receive", interactive=False, type="filepath", scale=1,
-                                       height=320)
+                sketch_view = gr.Image(label=PLAIN_PREVIEW_LABEL, interactive=False, type="filepath", scale=1,
+                                       height=PLAIN_PREVIEW_HEIGHT, elem_id="sketch-view")
                 gallery = gr.Gallery(label="Candidates", interactive=False, format="png", columns=4, height=320,
                                      object_fit="contain", scale=3)
             picks = gr.CheckboxGroup(label="Candidates you choose")
@@ -495,7 +740,20 @@ class SketchPage:
                 new_session = gr.Button("Start a new session", variant="secondary")
 
         return ChooseCard(status=status, sketch_view=sketch_view, gallery=gallery, picks=picks, record=record,
-                          new_session=new_session, round_state=gr.State(None))
+                          new_session=new_session, round_state=gr.State(None), drawing_status=drawing_status,
+                          suggest_strokes=suggest_strokes)
+
+    def _build_experiment_card(self) -> ExperimentCard:
+        """
+        Lay out the experimenter's name box with its hint, Start drawing, and Finish drawing, below the participant's steps.
+        """
+        with gr.Accordion("Experiment", open=True, elem_id="experiment"):
+            with gr.Row(equal_height=True):
+                name = gr.Textbox(label="Experiment name", info=EXPERIMENT_NAME_HINT, max_lines=1, scale=3)
+                start = gr.Button("Start drawing", interactive=False, scale=1)
+                finish = gr.Button("Finish drawing", interactive=False, scale=1)
+
+        return ExperimentCard(name=name, start=start, finish=finish)
 
     def _build_history(self) -> gr.Dataframe:
         """
@@ -543,9 +801,9 @@ class SketchPage:
         frame_timer.tick(self.refresh_webcam_preview, preview_inputs, [choose.sketch_view], show_progress="hidden")
 
     def _wire_session_events(self, app: gr.Blocks, sketch: SketchCard, direction: DirectionCard, choose: ChooseCard,
-                             history: gr.Dataframe) -> None:
+                             history: gr.Dataframe, experiment: ExperimentCard) -> None:
         """
-        Wire Generate, the choice, the new session, and the page load.
+        Wire Generate, the choice, the new session, the guided drawing buttons, and the page load.
 
         Args:
             app (gr.Blocks): The page being built.
@@ -553,6 +811,7 @@ class SketchPage:
             direction (DirectionCard): Step 2 components.
             choose (ChooseCard): Step 3 components.
             history (gr.Dataframe): Session history table.
+            experiment (ExperimentCard): Experimenter controls.
         """
         # The round display, and the inputs Generate reads.
         round_outputs = [choose.gallery, choose.sketch_view, choose.picks, choose.round_state, choose.status]
@@ -564,16 +823,39 @@ class SketchPage:
                                  concurrency_limit=1).then(self.show_history, None, [history])
         choose.record.click(self.save_selection, [choose.round_state, choose.picks], [choose.status],
                             concurrency_id="session", concurrency_limit=1).then(self.show_history, None, [history])
-        choose.new_session.click(self.start_session, None, [*round_outputs, history], concurrency_id="session",
+        cleared_rounds = [choose.gallery, choose.picks, choose.round_state, choose.status, history]
+        drawing_outputs = [choose.drawing_status, choose.suggest_strokes, experiment.finish, choose.new_session, experiment.name,
+                           choose.sketch_view]
+        choose.new_session.click(self.start_session, None, [*cleared_rounds, *drawing_outputs], concurrency_id="session",
                                  concurrency_limit=1)
+
+        # Start and finish drawings in the session queue, leaving errors to the one-line message so the name box stays readable.
+        start_outputs = [*drawing_outputs, experiment.start, direction.prompt, sketch.upload, *cleared_rounds]
+        for event in (experiment.start.click, experiment.name.submit):
+            event(self.start_drawing, [experiment.name], start_outputs, concurrency_id="session", concurrency_limit=1,
+                  show_progress="hidden")
+        experiment.name.change(self.update_start_button, [experiment.name], [experiment.start], show_progress="hidden")
+        sketch_inputs = [sketch.source, sketch.upload]
+        experiment.finish.click(self.finish_drawing, [*sketch_inputs, sketch.rotation], drawing_outputs, concurrency_id="session",
+                                concurrency_limit=1, show_progress="hidden")
+
+        # Say at once that a suggestion is running, with a small timer, then show it or the failure line, and re-enable it.
+        status = choose.drawing_status
+        waiting = choose.suggest_strokes.click(self.show_suggesting, None, [status, choose.suggest_strokes], queue=False,
+                                               show_progress="hidden")
+        suggesting = waiting.then(self.suggest_next_strokes, [*sketch_inputs, direction.prompt, sketch.rotation],
+                                  [status, choose.sketch_view], concurrency_id="session", concurrency_limit=1,
+                                  show_progress="minimal", show_progress_on=[status])
+        suggesting.then(self.update_suggest_button, None, [choose.suggest_strokes], show_progress="hidden")
+        suggesting.failure(self.show_drawing_status, None, [status], show_progress="hidden")
 
         # Write a suggested style on request, one model call at a time.
         suggest_inputs = [sketch.source, sketch.upload, sketch.rotation, sketch.raw]
         direction.suggest.click(self.suggest_another, suggest_inputs, [direction.prompt], concurrency_id="suggest",
                                 concurrency_limit=1)
 
-        # Restore the latest round on load, even during a slow round.
-        app.load(self.restore_view, None, [*round_outputs, history])
+        # Restore the latest round and drawing on load, even during a slow round.
+        app.load(self.restore_view, None, [*round_outputs, history, *drawing_outputs[:-1]])
 
     def build(self) -> gr.Blocks:
         """
@@ -582,16 +864,17 @@ class SketchPage:
         with gr.Blocks(title="SketchLoop", analytics_enabled=False, delete_cache=(3600, 3600)) as app:
             self._build_header()
 
-            # Steps 1 and 2 side by side at equal height, then step 3 and the history.
+            # Steps 1 and 2 side by side at equal height, then step 3, then the experimenter's controls and the history.
             with gr.Row(equal_height=True):
                 sketch = self._build_sketch_card()
                 direction = self._build_direction_card()
             choose = self._build_choose_card()
+            experiment = self._build_experiment_card()
             history = self._build_history()
 
             # Wire the events inside the Blocks context.
             self._wire_input_events(sketch, direction)
-            self._wire_session_events(app, sketch, direction, choose, history)
+            self._wire_session_events(app, sketch, direction, choose, history, experiment)
             self._wire_preview_events(sketch, choose)
 
         return app

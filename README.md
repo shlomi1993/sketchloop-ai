@@ -86,6 +86,8 @@ Run `sketchloop`, which is short for `sketchloop ui`. The page is served on 127.
 
 The page lists the current session's history, and **New session** starts a fresh session with the model still loaded. All browser tabs share one session, and reloading the page keeps it.
 
+**Guided drawing:** under **Experiment**, type a code such as `participant1_car`, never a real name, and press **Start drawing**. The code names the session folder, as in `runs/participant1_car/`. While the drawing is open, **Suggest next strokes** sends the current sketch and the prompt box text as typed, even when empty, and the sketch view shows the live paper with the suggested parts in color. **Finish drawing** keeps the current sketch as the final drawing. The stroke suggester is set under `[stroke_suggester]` in the settings, and the fake one draws labeled test shapes.
+
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--backend` | `fake` | `fake`, `diffusers` for ControlNet scribble, or `t2i-adapter` for the T2I-Adapter sketch model |

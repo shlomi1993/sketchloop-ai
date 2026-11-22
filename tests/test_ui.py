@@ -10,10 +10,10 @@ import socket
 
 from pathlib import Path
 
-from sketchloop.app import NO_SKETCH_MESSAGE, AppController
+from sketchloop.app import NO_FRAME_MESSAGE, NO_NEW_STROKES_MESSAGE, NO_SKETCH_MESSAGE, AppController, DrawingView, SuggestionView
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.domain import Rotation, Unavailable
-from sketchloop.experiments import NOT_STREAMED_REASON, FolderStore, load_session
+from sketchloop.experiments import EXPERIMENT_NAME_RULE, NOT_STREAMED_REASON, FolderStore, load_session
 
 
 @pytest.fixture
@@ -143,3 +143,150 @@ def test_generation_records_webcam_frame_age(controller: AppController, tmp_path
     page.run_generation("upload", str(upload_path), "lamp", 1, 7, 0, False, progress=lambda *args, **kwargs: None)
     upload_age = load_session(controller.session.folder).rounds[1].frame_age_seconds
     assert upload_age == Unavailable(NOT_STREAMED_REASON), f"Expected the not-streamed reason, got {upload_age}"
+
+
+def make_drawing_view(*, is_open: bool, suggestion_lines: tuple[str, ...] = ()) -> DrawingView:
+    """
+    Build a drawing view of experiment p1 with the given state and suggestion lines.
+    """
+    return DrawingView(number=1, experiment="p1", is_open=is_open, capture_count=1, suggestion_count=len(suggestion_lines),
+                       suggestion_lines=suggestion_lines)
+
+
+def make_suggestion_view(*, status: str, is_fake: bool) -> SuggestionView:
+    """
+    Build a suggestion view with the given status line and fake flag.
+    """
+    return SuggestionView(drawing=1, number=1, part_count=2, colors=("#e6194b", "#3cb44b"), is_fake=is_fake,
+                          generation_seconds=0.1, status=status)
+
+
+@pytest.mark.usefixtures("no_network")
+def test_drawing_status_and_buttons_follow_the_drawing() -> None:
+    """
+    Start drawing waits for a name and no open drawing, the drawing buttons follow the drawing, and the status names each state.
+    """
+    from sketchloop import ui
+
+    open_view = make_drawing_view(is_open=True)
+
+    # Start drawing is enabled only for a name that is not blank, and never while a drawing is open.
+    readiness = [ui.can_start_drawing("p1", False), ui.can_start_drawing("  ", False), ui.can_start_drawing(None, False),
+                 ui.can_start_drawing("p1", True)]
+    assert readiness == [True, False, False, False], f"Unexpected Start drawing readiness {readiness}"
+
+    # Without an open drawing, Suggest and Finish are disabled, while a new session and a new name are allowed.
+    for view in (None, make_drawing_view(is_open=False)):
+        status, suggest, finish, new_session, name_box, _ = ui.build_drawing_outputs(view)
+        assert suggest.interactive is False and finish.interactive is False, f"Buttons must be disabled for {view}"
+        assert new_session.interactive is True and name_box.interactive is True, f"New session must be allowed for {view}"
+    assert ui.build_drawing_outputs(None)[0] == ui.NO_DRAWING_STATUS, "No drawing must show how to start one"
+
+    # An open drawing enables Suggest and Finish, locks a new session and the name box, and names the experiment.
+    status, suggest, finish, new_session, name_box, sketch_view = ui.build_drawing_outputs(open_view)
+    assert suggest.interactive is True and finish.interactive is True, "An open drawing must enable Suggest and Finish"
+    assert new_session.interactive is False, "Start a new session must be disabled while a drawing is open"
+    assert name_box.interactive is False and name_box.info == ui.FINISH_FIRST_MESSAGE, "The name box must say to finish first"
+    assert "p1" in status and "drawing 1" in status, f"The status must name the experiment and drawing, got {status!r}"
+
+    # The open drawing's preview is taller, and its label names suggested strokes only once there are some.
+    with_suggestion = ui.style_sketch_view(make_drawing_view(is_open=True, suggestion_lines=("Suggestion 1: 2 parts",)))
+    assert sketch_view.height == ui.GUIDED_PREVIEW_HEIGHT, f"Expected a taller guided preview, got {sketch_view.height}"
+    labels = [sketch_view.label, with_suggestion.label]
+    assert labels == [ui.OPEN_DRAWING_LABEL, ui.GUIDED_PREVIEW_LABEL], f"Unexpected preview labels {labels}"
+
+    # A suggestion's line follows, a fake one is labeled, and the no-new-strokes message is passed through.
+    fake = ui.describe_drawing_status(open_view, make_suggestion_view(status="Suggestion 1: 2 parts in 0.1 s", is_fake=True))
+    empty = ui.describe_drawing_status(open_view, make_suggestion_view(status=NO_NEW_STROKES_MESSAGE, is_fake=False))
+    assert fake.startswith(ui.FAKE_SUGGESTER_PREFIX) and fake.endswith("Suggestion 1: 2 parts in 0.1 s"), f"Bad {fake!r}"
+    assert empty.endswith(NO_NEW_STROKES_MESSAGE) and ui.FAKE_SUGGESTER_PREFIX not in empty, f"Bad {empty!r}"
+
+    # After a reload the latest suggestion line is shown, and a finished drawing says how many suggestions it had.
+    restored = ui.describe_drawing_status(make_drawing_view(is_open=True, suggestion_lines=("Suggestion 1: 2 parts",)))
+    finished = ui.describe_drawing_status(make_drawing_view(is_open=False, suggestion_lines=("Suggestion 1: 2 parts",)))
+    assert restored.endswith("Suggestion 1: 2 parts"), f"A reload must show the latest suggestion, got {restored!r}"
+    assert "finished" in finished and "1 suggestion" in finished, f"Unexpected finished status {finished!r}"
+
+
+@pytest.mark.usefixtures("no_network")
+def test_page_starts_suggests_and_finishes_a_drawing(controller: AppController, sheet_frame: np.ndarray,
+                                                     tmp_path: Path) -> None:
+    """
+    The page handlers start a named drawing, suggest from the webcam frame with an empty prompt, show the overlay, and finish.
+    """
+    import gradio
+
+    from sketchloop import ui
+
+    page = ui.SketchPage(controller, default_candidates=1, default_seed=None)
+
+    # An invalid name is refused with the naming rule, and nothing is started.
+    with pytest.raises(gradio.Error, match=re.escape(EXPERIMENT_NAME_RULE)):
+        page.start_drawing("has space")
+    assert controller.latest_drawing() is None, "An invalid name must not start a drawing"
+
+    # A valid name starts the drawing, enables Suggest, and clears the name, prompt, and upload so nothing carries over.
+    started = page.start_drawing(" participant1_car ")
+    status, suggest, finish, new_session, name_box, sketch_view, start_button, prompt_box, upload_box, *_ = started
+    assert name_box.value == "" and start_button.interactive is False, "Starting must clear the name and disable Start"
+    assert prompt_box.value == "" and upload_box.value is None, "Starting must clear the previous prompt and upload"
+    assert suggest.interactive is True and "participant1_car" in status, f"Unexpected start status {status!r}"
+    assert (tmp_path / "runs" / "participant1_car").is_dir(), "The experiment's folder must be named after it"
+
+    # While the drawing is open, Start drawing stays disabled and a second start is refused.
+    assert page.update_start_button("p2").interactive is False, "Start drawing must stay disabled while a drawing is open"
+    with pytest.raises(gradio.Error, match=re.escape(ui.FINISH_FIRST_MESSAGE)):
+        page.start_drawing("p2")
+
+    # Finishing without a webcam frame is refused, so the drawing never ends without its final capture.
+    with pytest.raises(gradio.Error, match=re.escape(NO_FRAME_MESSAGE)):
+        page.finish_drawing("webcam", None, 0)
+    assert controller.latest_drawing().is_open, "A refused finish must leave the drawing open"
+
+    # Suggest uses the empty prompt as typed and shows the fake suggestion's status and the canvas-sized overlay preview.
+    page.keep_frame(np.ascontiguousarray(sheet_frame[:, :, ::-1]), "webcam", None, "")
+    waiting, disabled = page.show_suggesting()
+    assert waiting == ui.SUGGESTING_STATUS and disabled.interactive is False, "A running suggestion must say so and lock"
+    status, sketch_view = page.suggest_next_strokes("webcam", None, "", 0)
+    assert status.startswith(ui.FAKE_SUGGESTER_PREFIX) and "Suggestion 1: 2 parts" in status, f"Bad status {status!r}"
+    assert sketch_view.label == ui.GUIDED_PREVIEW_LABEL and sketch_view.value, f"Bad sketch view {sketch_view.label!r}"
+    recorded_prompt = controller.session.drawings[0].record.suggestions[0].request.prompt
+    assert recorded_prompt == "", f"The empty prompt must be sent as typed, got {recorded_prompt!r}"
+
+    # The timer shows the guided preview while the drawing is open.
+    refreshed = page.refresh_webcam_preview("webcam", None, 0, False)
+    assert refreshed.shape[:2] == (360, 512), f"The timer must show the guided preview, got {refreshed.shape}"
+
+    # After the suggestion its button is enabled again, and a failure would show the drawing's own status line.
+    assert page.update_suggest_button().interactive is True, "Suggest must be enabled again while the drawing is open"
+    assert page.show_drawing_status().endswith("Suggestion 1: 2 parts"), "The status must fall back to the latest suggestion"
+
+    # Finish keeps the frame as the final capture, disables Suggest and Finish, and allows a new session again.
+    status, suggest, finish, new_session, *_ = page.finish_drawing("webcam", None, 0)
+    assert suggest.interactive is False and finish.interactive is False, "A finished drawing must disable its buttons"
+    assert new_session.interactive is True, "A finished drawing must allow a new session"
+    assert "finished" in status and controller.session.drawings[0].record.final_capture is not None, f"Bad finish {status!r}"
+
+
+@pytest.mark.usefixtures("no_network")
+def test_page_has_experiment_controls_and_no_goal(controller: AppController) -> None:
+    """
+    The built page has the experiment name with its privacy hint and the drawing buttons, and nothing names a goal or task.
+    """
+    import gradio
+
+    from sketchloop import ui
+
+    app = ui.SketchPage(controller, default_candidates=1, default_seed=None).build()
+    labels = [str(getattr(block, "label", "") or "") for block in app.blocks.values()]
+    buttons = [block.value for block in app.blocks.values() if isinstance(block, gradio.Button)]
+    hints = [block.info for block in app.blocks.values() if isinstance(block, gradio.Textbox)]
+
+    # The experimenter names the experiment with a code, and the participant has the drawing buttons.
+    assert "Experiment name" in labels and ui.EXPERIMENT_NAME_HINT in hints, f"Missing the name box or its hint in {labels}"
+    missing = {"Start drawing", "Suggest next strokes", "Finish drawing"} - set(buttons)
+    assert not missing, f"Missing buttons {missing}"
+
+    # No component asks for a goal or a task, since the system is never told one.
+    named = [label for label in labels if re.search(r"\b(goal|task)\b", label, re.IGNORECASE)]
+    assert not named, f"The page must not name a goal or task, found {named}"

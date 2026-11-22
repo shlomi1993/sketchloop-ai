@@ -5,8 +5,14 @@
 .step-title h3 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-accent); margin: 0; }
 .card { background: var(--block-background-fill); border: 1px solid var(--border-color-primary); }
 .card { border-radius: 16px; padding: 16px; }
-#generate { min-height: 56px; font-size: 1.1rem; }
-#status { padding: 12px 16px; border-radius: 12px; background: var(--background-fill-secondary); }
+#generate, #suggest-strokes { min-height: 56px; font-size: 1.1rem; }
+#status, #drawing-status { padding: 12px 16px; border-radius: 12px; background: var(--background-fill-secondary); }
+
+/* Widen the sketch view while a drawing is open, so suggested strokes read at a glance. ui.py sets the class. */
+#sketch-view.guided { flex-grow: 2 !important; }
+
+/* Keep the waiting line readable, since Gradio fades pending outputs. Recheck the class after Gradio upgrades. */
+#drawing-status .pending { opacity: 1 !important; }
 
 /* Turn only the live preview, not the saved frame. ui.py sets the class from the rotation setting. */
 #webcam video { transition: transform 0.2s ease; }
