@@ -46,6 +46,7 @@ FRAME_EDGE_PIXELS: Final = 3
 # Bare file names of the paper-frame canvas and its strokes, placed by the caller.
 CANVAS_FILE: Final = "canvas.png"
 CANVAS_STROKES_FILE: Final = "strokes.png"
+CANVAS_FILLED_FILE: Final = "canvas-filled.png"
 
 # OpenCV rotation codes by clockwise angle in degrees.
 ROTATE_CODES: Final = {
@@ -84,6 +85,8 @@ class PaperCanvas:
     image: ImageRef  # Grayscale paper frame at the canvas size, path "canvas.png" until the caller places it
     payload: bytes  # PNG bytes of the image
     steps: tuple[PreprocessingStep, ...]  # grayscale, rotate, isolate_paper, crop_to_paper when used, resize_to_canvas
+    filled: ImageRef  # Mode L mask at the canvas size, 255 where the canvas was filled in rather than seen on the paper
+    filled_payload: bytes  # PNG bytes of the filled mask
 
 
 def odd_kernel_size(reference_pixels: int, scale: float) -> int:
@@ -560,6 +563,19 @@ def preprocess_minimally(payload: bytes, rotation: int = Rotation.DEG_000) -> Pr
     return PreprocessedSketch(image=image, payload=processed, steps=steps)
 
 
+def find_skeleton(mask: np.ndarray) -> np.ndarray:
+    # Peel the mask with repeated erosions, keeping what each opening removes, which is OpenCV's morphological skeleton.
+    kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+    remaining = mask.copy()
+    skeleton = np.zeros_like(mask)
+    while cv2.countNonZero(remaining):
+        eroded = cv2.erode(remaining, kernel)
+        skeleton |= cv2.subtract(remaining, cv2.dilate(eroded, kernel))
+        remaining = eroded
+
+    return skeleton
+
+
 def fill_outside_paper(paper_only: np.ndarray, paper_mask: np.ndarray, blur_size: int) -> np.ndarray:
     outside = paper_mask == 0
     if not outside.any() or outside.all():
@@ -611,7 +627,9 @@ def make_paper_canvas(payload: bytes, rotation: int, width: int, height: int) ->
     paper_only, paper_mask, paper_params = isolate_paper(rotated, pixel_scale, keep_warped_sheet=True)
 
     # Fill outside the sheet with the paper's own level, since a white border makes the paper beside it look like strokes.
+    # The filled area, such as a hand reaching in from the frame edge, is kept as a mask, so it is known to be unseen.
     blur_size = odd_kernel_size(PAPER_BLUR_PIXELS, pixel_scale)
+    filled = np.where(paper_mask == 0, 255, 0).astype(np.uint8)
     paper_only = fill_outside_paper(paper_only, paper_mask, blur_size)
     whole_sheet = bool(paper_params["corners_found"])
     paper_params |= {"whole_warped_sheet": whole_sheet, "outside_fill": "nearest_paper", "outside_blur_pixels": blur_size}
@@ -620,13 +638,21 @@ def make_paper_canvas(payload: bytes, rotation: int, width: int, height: int) ->
     # Without corners the sheet is not warped, so cut it out by the paper's box instead.
     if not paper_params["corners_found"]:
         paper_only, crop_params = crop_to_paper(paper_only, paper_mask)
+        left, top = crop_params["x"], crop_params["y"]
+        filled = filled[top:top + paper_only.shape[0], left:left + paper_only.shape[1]]
         steps.append(PreprocessingStep(name="crop_to_paper", params=crop_params))
 
     # Stretch to the fixed canvas, so every capture of a drawing shares one frame.
     resized, resize_params = resize_to_canvas(paper_only, width, height)
     steps.append(PreprocessingStep(name="resize_to_canvas", params=resize_params))
     image, canvas_payload = encode_grayscale_png(resized, CANVAS_FILE, "Paper canvas cannot be encoded as PNG. Capture again.")
-    return PaperCanvas(image=image, payload=canvas_payload, steps=tuple(steps))
+
+    # A canvas pixel that is even partly filled is marked, since part of it was not seen.
+    filled_canvas = np.where(resize_to_canvas(filled, width, height)[0] > 0, 255, 0).astype(np.uint8)
+    message = "Paper canvas mask cannot be encoded as PNG. Capture again."
+    filled_image, filled_payload = encode_grayscale_png(filled_canvas, CANVAS_FILLED_FILE, message)
+    return PaperCanvas(image=image, payload=canvas_payload, steps=tuple(steps), filled=filled_image,
+                       filled_payload=filled_payload)
 
 
 def extract_canvas_strokes(canvas_payload: bytes) -> PreprocessedSketch:

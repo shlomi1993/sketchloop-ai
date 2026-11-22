@@ -258,7 +258,7 @@ def test_drawing_loads_and_reports_changed_mask(tmp_path: Path, sheet_capture: C
 
     # The drawing loads unchanged with every file matching.
     assert saved.drawings == (record,) and saved.problems == (), f"Expected the drawing unchanged, got {saved.problems}"
-    assert saved.checked_files == len(record.captures) * 2 + 5, f"Unexpected checked file count {saved.checked_files}"
+    assert saved.checked_files == len(record.captures) * 3 + 5, f"Unexpected checked file count {saved.checked_files}"
 
     # A missing interval frame, a changed mask, and an interrupted drawing are listed as problems, not errors.
     expected = ("drawing-1/captures/capture-0002-raw.jpg is missing.",
@@ -278,6 +278,10 @@ def test_drawing_loads_and_reports_changed_mask(tmp_path: Path, sheet_capture: C
     (lambda data: data["captures"][0].update(follow=data["captures"][1]["follow"]), "not the one open when it was taken"),
     (lambda data: data.update(follow_detector=None), "follow scores but no follow method"),
     (lambda data: data["captures"][1]["follow"]["alignment"].update(warp=None), "3x3 warp"),
+    (lambda data: data["captures"][1]["follow"]["parts"].pop(), "parts, not suggestion 1's"),
+    (lambda data: data["captures"][1]["follow"]["parts"][0].update(new_pixels_near=5), "precision exactly when new strokes"),
+    (lambda data: data["captures"][1]["filled"].update(width=64), "filled mask must be L, canvas-sized"),
+    (lambda data: data.update(interval_jpeg_quality=0), "interval_jpeg_quality must be an int from 1 to 100"),
 ])
 def test_invalid_drawing_rejected(tmp_path: Path, sheet_capture: CapturedSketch, edit: Callable[[dict], None],
                                   message: str) -> None:

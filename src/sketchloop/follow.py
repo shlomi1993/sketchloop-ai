@@ -1,5 +1,5 @@
 """
-Follow detection: align each later capture of a drawing to a suggestion's baseline canvas and find the new strokes.
+Follow detection: align each later capture of a drawing to a suggestion's baseline canvas and score its new strokes per part.
 """
 
 import cv2
@@ -9,14 +9,15 @@ import numpy as np
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 from sketchloop.domain import ControlValue, Unavailable, freeze_controls, require, require_duration
-from sketchloop.preprocessing import LOCAL_STROKE_CONTRAST, decode_grayscale
+from sketchloop.preprocessing import LOCAL_STROKE_CONTRAST, decode_grayscale, find_skeleton
 from sketchloop.stroke_suggestion import is_count
 
 
-ALIGNED_STROKES_METHOD: Final = ("aligned-strokes", "1")  # Detector name and version, bumped whenever its results change
+ALIGNED_STROKES_METHOD: Final = ("aligned-strokes", "2")  # Detector name and version, bumped whenever its results change
 DARKNESS_MEDIAN_PIXELS: Final = 31  # Window of the local paper level that darkness is measured against
 DARKNESS_BLUR_SIGMA: Final = 2.0  # Blur of the darkness map, which smooths camera noise and widens ECC's reach
 PAPER_LEVEL_DILATE_PIXELS: Final = 101  # Window of the local maximum taken as the paper level when finding occluders
@@ -30,7 +31,17 @@ ECC_EPSILON: Final = 1e-5
 ECC_GAUSSIAN_PIXELS: Final = 5  # Gaussian filter size ECC applies to both darkness maps
 BASELINE_GROW_PIXELS: Final = 4  # Baseline strokes are grown by this much, so a slightly misaligned old stroke is not new
 MIN_NEW_STROKE_SPECK_PIXELS: Final = 20  # New-stroke specks smaller than this are noise
+MIN_ECC_CORRELATION: Final = 0.4  # A lower ECC correlation is not a usable alignment, though ECC converged
+MAX_CORNER_SHIFT_PIXELS: Final = 32  # A warp that moves any canvas corner farther than this is not a plausible camera shift
+TOLERANCES_PIXELS: Final = (4, 8, 16, 24)  # Distances at which coverage and precision are measured
+PART_REACH_PIXELS: Final = 32  # A part's box is grown by this much to find the new strokes near it
+CHAMFER_CAP_PIXELS: Final = 64  # Distances in the chamfer means are capped at this
+SCORE_DECIMALS: Final = 4  # Shares and distances are rounded to this many decimals, which keeps drawing.json small
 NOT_CONVERGED_REASON: Final = "ECC did not converge"
+IMPLAUSIBLE_WARP_REASON: Final = "ECC converged to an implausible warp"
+NO_NEW_STROKES_REASON: Final = "no new strokes"
+NO_NEW_STROKES_NEAR_REASON: Final = "no new strokes near the part"
+PART_OCCLUDED_REASON: Final = "the whole part is occluded"
 
 
 def is_finite_number(value: object) -> bool:
@@ -68,7 +79,7 @@ class Alignment:
     converged: bool  # Whether ECC converged
     correlation: float | Unavailable  # ECC correlation, unavailable with the reason when ECC did not converge
     warp: tuple[tuple[float, float, float], ...] | None  # 3x3 homography from capture to baseline pixels, None without one
-    occluded_share: float  # Share of the capture's canvas masked as an occluder, such as a hand
+    occluded_share: float  # Share of the capture's canvas masked as an occluder, such as a hand, or filled in rather than seen
 
     def __post_init__(self) -> None:
         # A converged alignment has a finite correlation and a finite 3x3 warp, and a failed one has neither.
@@ -85,6 +96,48 @@ class Alignment:
         check_unit_share(self.occluded_share, "Alignment occluded_share")
 
 
+def freeze_tolerance_scores(scores: Mapping[int, float | Unavailable], label: str) -> Mapping[int, float | Unavailable]:
+    require(isinstance(scores, Mapping) and bool(scores), f"{label} needs a score for at least one tolerance.")
+    for tolerance, value in scores.items():
+        require(is_count(tolerance, 1), f"{label} tolerance must be an int >= 1, got {tolerance!r}.")
+        if not isinstance(value, Unavailable):
+            check_unit_share(value, f"{label} at {tolerance} px")
+
+    return MappingProxyType(dict(scores))
+
+
+def is_distance(value: object) -> bool:
+    return isinstance(value, Unavailable) or (is_finite_number(value) and value >= 0)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PartScores:
+    part: int  # Part index
+    occluded_share: float  # Share of the part's mask pixels under an occluder or a filled area
+    new_pixels_near: int  # New-stroke pixels inside the part's box grown by PART_REACH_PIXELS
+    coverage: Mapping[int, float | Unavailable]  # Share of the part's visible skeleton within t px of new strokes, by t
+    precision: Mapping[int, float | Unavailable]  # Share of the new strokes near the part within t px of it, by t
+    chamfer_part_to_new: float | Unavailable  # Mean distance from the visible skeleton to the new strokes, capped
+    chamfer_new_to_part: float | Unavailable  # Mean distance from the new strokes near the part to it, capped
+
+    def __post_init__(self) -> None:
+        # The part, its occluded share, and the nearby new pixels are plain counts and shares.
+        require(is_count(self.part, 0), f"Scored part must be an int >= 0, got {self.part!r}.")
+        check_unit_share(self.occluded_share, f"Part {self.part} occluded_share")
+        require(is_count(self.new_pixels_near, 0), f"Part {self.part} new_pixels_near must be an int >= 0.")
+
+        # Coverage and precision share their tolerances, and precision exists exactly when new strokes are near.
+        object.__setattr__(self, "coverage", freeze_tolerance_scores(self.coverage, f"Part {self.part} coverage"))
+        object.__setattr__(self, "precision", freeze_tolerance_scores(self.precision, f"Part {self.part} precision"))
+        same = set(self.coverage) == set(self.precision)
+        require(same, f"Part {self.part} coverage and precision must have the same tolerances.")
+        near = self.new_pixels_near > 0
+        measured = [not isinstance(value, Unavailable) for value in (*self.precision.values(), self.chamfer_new_to_part)]
+        require(all(flag == near for flag in measured), f"Part {self.part} has precision exactly when new strokes are near it.")
+        distances = (self.chamfer_part_to_new, self.chamfer_new_to_part)
+        require(all(is_distance(value) for value in distances), f"Part {self.part} chamfer distances must be >= 0 or unknown.")
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CaptureScores:
     """
@@ -94,6 +147,7 @@ class CaptureScores:
     seconds_since_shown: float  # Seconds from when the suggestion was shown to the capture
     alignment: Alignment  # Alignment to the suggestion's baseline canvas
     new_stroke_pixels: int | None  # New-stroke pixels on the whole canvas, None when alignment failed
+    parts: tuple[PartScores, ...] | None  # One per part in index order, empty when alignment failed, None in older records
 
     def __post_init__(self) -> None:
         # The suggestion and time place the capture in a window, and new strokes are counted only after an alignment.
@@ -105,6 +159,13 @@ class CaptureScores:
             require(is_count(pixels, 0), f"An aligned capture needs new_stroke_pixels as an int >= 0, got {pixels!r}.")
         else:
             require(pixels is None, f"A capture that did not align has no new_stroke_pixels, got {pixels!r}.")
+
+        # Parts are scored in index order, and only after an alignment.
+        if self.parts is not None:
+            object.__setattr__(self, "parts", tuple(self.parts))
+            indexes = [part.part if isinstance(part, PartScores) else None for part in self.parts]
+            require(indexes == list(range(len(indexes))), f"Part scores must be PartScores numbered from 0, got {indexes}.")
+            require(self.alignment.converged or not self.parts, "A capture that did not align has no part scores.")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -144,18 +205,17 @@ class FollowDetector(ABC):
         ...
 
     @abstractmethod
-    def align(self, baseline_canvas: bytes, capture_canvas: bytes) -> tuple[Alignment, int | None]:
-        """
-        Align a capture's canvas to the baseline canvas and count the new-stroke pixels, never raising for a failed alignment.
-
-        Args:
-            baseline_canvas (bytes): PNG of the suggestion's baseline canvas.
-            capture_canvas (bytes): PNG of the capture's canvas, the same size.
-
-        Returns:
-            tuple[Alignment, int | None]: The alignment, and the new-stroke pixels or None when alignment failed.
-        """
+    def score(self, baseline_canvas: bytes, capture_canvas: bytes, part_masks: Sequence[bytes], *,
+              baseline_filled: bytes | None = None,
+              capture_filled: bytes | None = None) -> tuple[Alignment, int | None, tuple[PartScores, ...]]:
         ...
+
+    def align(self, baseline_canvas: bytes, capture_canvas: bytes, *, baseline_filled: bytes | None = None,
+              capture_filled: bytes | None = None) -> tuple[Alignment, int | None]:
+        # Aligning is scoring without parts.
+        alignment, new_stroke_pixels, _ = self.score(baseline_canvas, capture_canvas, (), baseline_filled=baseline_filled,
+                                                     capture_filled=capture_filled)
+        return alignment, new_stroke_pixels
 
 
 def describe_follow_method(detector: FollowDetector) -> FollowMethod:
@@ -288,6 +348,83 @@ def find_new_strokes(baseline_darkness: np.ndarray, aligned_darkness: np.ndarray
     return np.isin(labels, kept)
 
 
+def decode_mask(payload: bytes | None, shape: tuple[int, ...], label: str) -> np.ndarray:
+    # Read a PNG mask as true where it is nonzero, refusing one of another size, and treat no mask as all false.
+    if payload is None:
+        return np.zeros(shape, dtype=bool)
+
+    mask = decode_grayscale(payload)
+    if mask.shape != shape:
+        raise ValueError(f"{label} is {mask.shape[1]}x{mask.shape[0]}, not the baseline's {shape[1]}x{shape[0]}.")
+
+    return mask > 0
+
+
+def find_implausible_warp(correlation: float, baseline_to_capture: np.ndarray, width: int, height: int) -> Unavailable | None:
+    # Map the canvas corners, which must stay in front of the camera and move no farther than a camera shift.
+    corners = np.array([[0, 0, 1], [width - 1, 0, 1], [width - 1, height - 1, 1], [0, height - 1, 1]], dtype=np.float64)
+    mapped = corners @ baseline_to_capture.astype(np.float64).T
+    if (mapped[:, 2] <= 0).any():
+        return Unavailable(f"{IMPLAUSIBLE_WARP_REASON}: correlation {correlation:.3f}, the canvas folds over")
+
+    shift = float(np.linalg.norm(mapped[:, :2] / mapped[:, 2:] - corners[:, :2], axis=1).max())
+    if correlation < MIN_ECC_CORRELATION or shift > MAX_CORNER_SHIFT_PIXELS:
+        return Unavailable(f"{IMPLAUSIBLE_WARP_REASON}: correlation {correlation:.3f} (at least {MIN_ECC_CORRELATION} needed), a corner moves {shift:.1f} px (at most {MAX_CORNER_SHIFT_PIXELS})")  # noqa: E501
+
+    return None
+
+
+def measure_distance_to(mask: np.ndarray) -> np.ndarray:
+    # Euclidean distance from every pixel to the nearest true pixel of the mask, very large when the mask is empty.
+    return cv2.distanceTransform(np.where(mask, 0, 255).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+
+
+def grow_box(mask: np.ndarray, reach_pixels: int) -> np.ndarray:
+    # Mark the mask's bounding box grown by the reach on every side, clipped to the canvas.
+    left, top, width, height = cv2.boundingRect(mask.astype(np.uint8))
+    box = np.zeros_like(mask)
+    box[max(0, top - reach_pixels):top + height + reach_pixels, max(0, left - reach_pixels):left + width + reach_pixels] = True
+    return box
+
+
+def measure_shares(distances: np.ndarray) -> dict[int, float]:
+    # Share of the distances within each tolerance.
+    return {tolerance: round(float((distances <= tolerance).mean()), SCORE_DECIMALS) for tolerance in TOLERANCES_PIXELS}
+
+
+def measure_chamfer(distances: np.ndarray) -> float:
+    # Mean of the distances, each capped so one far pixel cannot dominate.
+    return round(float(np.minimum(distances, CHAMFER_CAP_PIXELS).mean()), SCORE_DECIMALS)
+
+
+def score_part(index: int, part: np.ndarray, new_strokes: np.ndarray, hidden: np.ndarray) -> PartScores:
+    # Measure how much of the part is hidden, and which new strokes lie near it.
+    occluded_share = round(float((part & hidden).sum() / max(1, part.sum())), SCORE_DECIMALS)
+    near = new_strokes & grow_box(part, PART_REACH_PIXELS)
+    new_pixels_near = int(near.sum())
+
+    # Coverage asks how much of the visible part has new strokes nearby, unknown when all of it is hidden.
+    visible_skeleton = (find_skeleton(part.astype(np.uint8)) > 0) & ~hidden
+    if visible_skeleton.any():
+        to_new = measure_distance_to(new_strokes)[visible_skeleton]
+        coverage = measure_shares(to_new)
+        part_to_new = measure_chamfer(to_new) if new_strokes.any() else Unavailable(NO_NEW_STROKES_REASON)
+    else:
+        coverage = {tolerance: Unavailable(PART_OCCLUDED_REASON) for tolerance in TOLERANCES_PIXELS}
+        part_to_new = Unavailable(PART_OCCLUDED_REASON)
+
+    # Precision asks how much of the new drawing near the part lies on it, unknown when nothing new is near.
+    if new_pixels_near:
+        to_part = measure_distance_to(part)[near]
+        precision, new_to_part = measure_shares(to_part), measure_chamfer(to_part)
+    else:
+        precision = {tolerance: Unavailable(NO_NEW_STROKES_NEAR_REASON) for tolerance in TOLERANCES_PIXELS}
+        new_to_part = Unavailable(NO_NEW_STROKES_NEAR_REASON)
+
+    return PartScores(part=index, occluded_share=occluded_share, new_pixels_near=new_pixels_near, coverage=coverage,
+                      precision=precision, chamfer_part_to_new=part_to_new, chamfer_new_to_part=new_to_part)
+
+
 class AlignedStrokeFollowDetector(FollowDetector):
     """
     Follow detector that aligns captures to the baseline with ECC on darkness maps and finds new strokes, OpenCV only.
@@ -320,33 +457,57 @@ class AlignedStrokeFollowDetector(FollowDetector):
             "ecc_gaussian_pixels": ECC_GAUSSIAN_PIXELS,
             "baseline_grow_pixels": BASELINE_GROW_PIXELS,
             "min_new_stroke_speck_pixels": MIN_NEW_STROKE_SPECK_PIXELS,
+            "min_ecc_correlation": MIN_ECC_CORRELATION,
+            "max_corner_shift_pixels": MAX_CORNER_SHIFT_PIXELS,
+            "filled_is_occluded": True,
+            "tolerances_pixels": " ".join(str(tolerance) for tolerance in TOLERANCES_PIXELS),
+            "part_reach_pixels": PART_REACH_PIXELS,
+            "chamfer_cap_pixels": CHAMFER_CAP_PIXELS,
+            "skeleton": "morphological",
+            "score_decimals": SCORE_DECIMALS,
         }
 
-    def align(self, baseline_canvas: bytes, capture_canvas: bytes) -> tuple[Alignment, int | None]:
-        """
-        Align a capture's canvas to the baseline canvas with occluders masked, and count the new strokes.
-        """
+    def score(self, baseline_canvas: bytes, capture_canvas: bytes, part_masks: Sequence[bytes], *,
+              baseline_filled: bytes | None = None,
+              capture_filled: bytes | None = None) -> tuple[Alignment, int | None, tuple[PartScores, ...]]:
         baseline, capture = decode_grayscale(baseline_canvas), decode_grayscale(capture_canvas)
         if baseline.shape != capture.shape:
             raise ValueError(f"Capture canvas is {capture.shape[1]}x{capture.shape[0]}, not the baseline's {baseline.shape[1]}x{baseline.shape[0]}.")  # noqa: E501
 
-        # Mask occluders in both canvases, so a hand neither steers the alignment nor counts as strokes.
-        baseline_occluders, capture_occluders = find_occluders(baseline), find_occluders(capture)
-        occluded_share = float(capture_occluders.mean())
+        parts = [decode_mask(mask, baseline.shape, f"Part {index} mask") for index, mask in enumerate(part_masks)]
+        capture_filled_mask = decode_mask(capture_filled, baseline.shape, "Capture filled mask")
+
+        # Hide occluders and filled areas in both canvases, so neither a hand nor a filled-in edge steers the alignment.
+        baseline_hidden = find_occluders(baseline) | decode_mask(baseline_filled, baseline.shape, "Baseline filled mask")
+        capture_hidden = find_occluders(capture) | capture_filled_mask
+        occluded_share = float(capture_hidden.mean())
         baseline_darkness = make_darkness_map(baseline)
-        correlation, baseline_to_capture = align_to_baseline(baseline_darkness, make_darkness_map(capture), ~baseline_occluders,
-                                                             ~capture_occluders)
-        warp = invert_warp(baseline_to_capture) if baseline_to_capture is not None else None
-        if warp is None:
-            singular = Unavailable(f"{NOT_CONVERGED_REASON}: singular warp")
-            reason = correlation if isinstance(correlation, Unavailable) else singular
-            return Alignment(converged=False, correlation=reason, warp=None, occluded_share=occluded_share), None
+        correlation, baseline_to_capture = align_to_baseline(baseline_darkness, make_darkness_map(capture), ~baseline_hidden,
+                                                             ~capture_hidden)
+
+        # Refuse a failed, implausible, or singular warp, recording why.
+        height, width = baseline.shape
+        failure = correlation if isinstance(correlation, Unavailable) else None
+        if failure is None:
+            failure = find_implausible_warp(correlation, baseline_to_capture, width, height)
+        warp = invert_warp(baseline_to_capture) if failure is None else None
+        if failure is None and warp is None:
+            failure = Unavailable(f"{NOT_CONVERGED_REASON}: singular warp")
+        if failure is not None:
+            return Alignment(converged=False, correlation=failure, warp=None, occluded_share=occluded_share), None, ()
 
         # Warp the capture into the baseline frame, repeating its border so the edge does not look like a stroke.
-        height, width = baseline.shape
         flags = cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP
         aligned = cv2.warpPerspective(capture, baseline_to_capture, (width, height), flags=flags, borderMode=cv2.BORDER_REPLICATE)
-        occluders = baseline_occluders | find_occluders(aligned)
-        new_strokes = find_new_strokes(baseline_darkness, make_darkness_map(aligned), occluders)
+
+        # The capture's filled area moves with it, and pixels the capture did not cover at all are unseen too.
+        filled_flags = cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP
+        aligned_filled = cv2.warpPerspective(capture_filled_mask.astype(np.uint8), baseline_to_capture, (width, height),
+                                             flags=filled_flags, borderMode=cv2.BORDER_CONSTANT, borderValue=1) > 0
+        hidden = baseline_hidden | find_occluders(aligned) | aligned_filled
+
+        # Find the new strokes on the pixels nothing hides, then score each part against them.
+        new_strokes = find_new_strokes(baseline_darkness, make_darkness_map(aligned), hidden)
+        scores = tuple(score_part(index, part, new_strokes, hidden) for index, part in enumerate(parts))
         alignment = Alignment(converged=True, correlation=correlation, warp=warp, occluded_share=occluded_share)
-        return alignment, int(new_strokes.sum())
+        return alignment, int(new_strokes.sum()), scores

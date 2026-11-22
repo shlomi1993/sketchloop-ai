@@ -37,12 +37,13 @@ INTERVAL_JPEG_QUALITY: Final = 90  # JPEG quality of interval captures' raw fram
 JPEG_MEDIA_TYPE: Final = "image/jpeg"
 
 
-def name_capture_files(number: int, raw_path: str) -> tuple[str, str]:
+def name_capture_files(number: int, raw_path: str) -> tuple[str, str, str]:
     """
-    Name a capture's raw file, keeping its extension, and its canvas file, under captures/ in the drawing folder.
+    Name a capture's raw file, keeping its extension, its canvas file, and its filled mask, under captures/ in the drawing folder.
     """
     suffix = PurePosixPath(raw_path).suffix.lower() or ".png"
-    return f"captures/capture-{number:04d}-raw{suffix}", f"captures/capture-{number:04d}.png"
+    stem = f"captures/capture-{number:04d}"
+    return f"{stem}-raw{suffix}", f"{stem}.png", f"{stem}-filled.png"
 
 
 def compress_interval_frame(captured: CapturedSketch) -> CapturedSketch:
@@ -195,7 +196,8 @@ class GuidedDrawing:
         self._pending_files: dict[str, bytes] = {}
         self._overlay: np.ndarray | None = None
         self._open_suggestion: SuggestionRecord | None = None
-        self._baseline_canvas: bytes | None = None
+        self._baseline: PaperCanvas | None = None
+        self._part_masks: tuple[bytes, ...] = ()
         self._shown_since_start = 0.0
         self._loaded_suggester: StrokeSuggester | None = None
         self._record = DrawingRecord(schema_version=SCHEMA_VERSION, number=number, drawing_id=uuid.uuid4().hex,
@@ -204,7 +206,8 @@ class GuidedDrawing:
                                      suggestions_enabled=suggester is not None,
                                      suggester=type(suggester).__name__ if suggester is not None else None, captures=(),
                                      suggestions=(), final_capture=None,
-                                     follow_detector=describe_follow_method(self.follow_detector) if suggester else None)
+                                     follow_detector=describe_follow_method(self.follow_detector) if suggester else None,
+                                     interval_jpeg_quality=INTERVAL_JPEG_QUALITY)
 
         # Save the empty record now, so the drawing folder exists and loads as not finished if the server stops.
         self._save({})
@@ -253,16 +256,19 @@ class GuidedDrawing:
             raise SketchLoopError(f"Drawing {self._record.number} is finished. Start a new drawing.")
 
     def _score_capture(self, canvas: PaperCanvas, seconds_since_start: float, timings: dict[str, float]) -> CaptureScores | None:
-        # Align the canvas to the open suggestion's baseline, which the detector records rather than raises when it fails.
-        if self._open_suggestion is None or self._baseline_canvas is None:
+        # Score the canvas against the open suggestion's baseline and parts, with both canvases' filled areas hidden.
+        # The detector records a failed alignment rather than raising.
+        if self._open_suggestion is None or self._baseline is None:
             return None
 
         started = time.perf_counter()
-        alignment, new_stroke_pixels = self.follow_detector.align(self._baseline_canvas, canvas.payload)
+        alignment, new_stroke_pixels, parts = self.follow_detector.score(
+            self._baseline.payload, canvas.payload, self._part_masks, baseline_filled=self._baseline.filled_payload,
+            capture_filled=canvas.filled_payload)
         timings[SuggestionStage.SCORING] = time.perf_counter() - started
         seconds_since_shown = seconds_since_start - self._shown_since_start
         return CaptureScores(suggestion=self._open_suggestion.number, seconds_since_shown=seconds_since_shown,
-                             alignment=alignment, new_stroke_pixels=new_stroke_pixels)
+                             alignment=alignment, new_stroke_pixels=new_stroke_pixels, parts=parts)
 
     def _take_capture(self, captured: CapturedSketch, source: SketchSource, rotation: int, frame_age_seconds: float | None,
                       trigger: CaptureTrigger) -> tuple[CaptureRecord, PaperCanvas | None, Exception | None]:
@@ -274,7 +280,7 @@ class GuidedDrawing:
 
         # Make the paper-frame canvas, keeping a failure in the record rather than losing the frame.
         number = len(self._record.captures) + 1
-        raw_path, canvas_path = name_capture_files(number, captured.image.path)
+        raw_path, canvas_path, filled_path = name_capture_files(number, captured.image.path)
         started = time.perf_counter()
         canvas, error = None, None
         try:
@@ -285,13 +291,14 @@ class GuidedDrawing:
         follow = self._score_capture(canvas, seconds_since_start, timings) if canvas else None
 
         # Add the capture to the record, and its files to the next save.
-        files = {raw_path: captured.payload} | ({canvas_path: canvas.payload} if canvas else {})
+        canvas_files = {canvas_path: canvas.payload, filled_path: canvas.filled_payload} if canvas else {}
+        files = {raw_path: captured.payload} | canvas_files
         capture = CaptureRecord(number=number, trigger=trigger, at=at, seconds_since_start=seconds_since_start, source=source,
                                 frame_age_seconds=frame_age, rotation=rotation, raw=replace(captured.image, path=raw_path),
                                 canvas=replace(canvas.image, path=canvas_path) if canvas else None,
                                 steps=canvas.steps if canvas else (), timings_seconds=timings,
                                 failure=describe_stage_failure(SuggestionStage.CANVAS, error) if error else None,
-                                follow=follow)
+                                follow=follow, filled=replace(canvas.filled, path=filled_path) if canvas else None)
         self._record = replace(self._record, captures=(*self._record.captures, capture))
         self._pending_files |= files
         return capture, canvas, error
@@ -338,7 +345,7 @@ class GuidedDrawing:
 
     def _show_suggestion(self, draft: Callable[..., SuggestionRecord], failed: Callable[..., SuggestionRecord],
                          request: StrokeSuggestionRequest, strokes: PreprocessedSketch, folder: str,
-                         timings: dict[str, float]) -> tuple[SuggestionRecord, np.ndarray]:
+                         timings: dict[str, float]) -> tuple[SuggestionRecord, np.ndarray, tuple[bytes, ...]]:
         # Run each stage, tracking the active one so a failure record names it.
         stage = SuggestionStage.MODEL_LOAD
         files: dict[str, bytes] = {}
@@ -374,7 +381,7 @@ class GuidedDrawing:
         # The saving time is known only after saving, so it reaches drawing.json with the drawing's next save.
         shown = replace(shown, timings_seconds=timings)
         self._replace_suggestion(shown)
-        return shown, overlay
+        return shown, overlay, tuple(mask_payloads)
 
     def suggest(self, captured: CapturedSketch, *, source: SketchSource, rotation: int, prompt: str, seed: int | None = None,
                 controls: Mapping[str, ControlValue] | None = None, frame_age_seconds: float | None = None) -> SuggestionRecord:
@@ -434,13 +441,13 @@ class GuidedDrawing:
 
             request = StrokeSuggestionRequest(canvas=replace(strokes.image, path=folder + strokes.image.path), prompt=prompt,
                                               seed=seed, controls=controls or {})
-            shown, overlay = self._show_suggestion(draft, failed, request, strokes, folder, timings)
-            self._overlay, self._open_suggestion, self._baseline_canvas = overlay, shown, canvas.payload
+            shown, overlay, self._part_masks = self._show_suggestion(draft, failed, request, strokes, folder, timings)
+            self._overlay, self._open_suggestion, self._baseline = overlay, shown, canvas
             self._shown_since_start = time.monotonic() - self._started
             return shown
 
     def record_capture(self, captured: CapturedSketch, *, source: SketchSource, rotation: int,
-                       frame_age_seconds: float | None = None) -> CaptureRecord:
+                       frame_age_seconds: float | None = None) -> CaptureRecord | None:
         """
         Save an interval capture as a JPEG raw frame and its canvas, aligned to the open suggestion's baseline if any.
 
@@ -451,9 +458,14 @@ class GuidedDrawing:
             frame_age_seconds (float | None, optional): Age of a streamed webcam frame, or None. Defaults to None.
 
         Returns:
-            CaptureRecord: The saved capture, with any canvas failure kept in its record rather than raised.
+            CaptureRecord | None: The saved capture, with any canvas failure kept in its record rather than raised, or None
+                when a suggestion or another change is running.
         """
-        with self._lock:
+        # Skip rather than wait while a suggestion runs, since a frame saved after the wait would be stale.
+        if not self._lock.acquire(blocking=False):
+            return None
+
+        try:
             self._require_open()
 
             # Compress the frame, since interval captures are most of a drawing's disk use, then capture and save it.
@@ -467,6 +479,8 @@ class GuidedDrawing:
             capture = replace(capture, timings_seconds=timings)
             self._record = replace(self._record, captures=(*self._record.captures[:-1], capture))
             return capture
+        finally:
+            self._lock.release()
 
     def finish(self, captured: CapturedSketch | None, *, source: SketchSource | None = None, rotation: int = Rotation.DEG_000,
                frame_age_seconds: float | None = None, end: DrawingEnd = DrawingEnd.FINISHED) -> DrawingRecord:
@@ -503,7 +517,7 @@ class GuidedDrawing:
                 self._record = replace(self._record, ended_at=None, end=None, final_capture=None)
                 raise
 
-            self._overlay, self._open_suggestion, self._baseline_canvas = None, None, None
+            self._overlay, self._open_suggestion, self._baseline, self._part_masks = None, None, None, ()
             return self._record
 
     def compose_preview(self, canvas: PaperCanvas) -> bytes:

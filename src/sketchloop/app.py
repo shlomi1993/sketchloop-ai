@@ -554,7 +554,7 @@ class AppController:
 
         Returns:
             CaptureView | None: The saved capture, or None when no drawing is open, there is no frame, the last capture is
-                less than 0.8 of the save interval old, or another call is saving one.
+                less than 0.8 of the save interval old, another call is saving one, or a suggestion is running.
         """
         # Let one call save at a time, and turn away calls from other tabs or a fast timer instead of making them wait.
         if not self._capture_lock.acquire(blocking=False):
@@ -574,7 +574,7 @@ class AppController:
             self._check_drawing_inputs(sketch, source, rotation, frame_age_seconds)
             captured = capture_browser_sketch(sketch, INTERVAL_JPEG_QUALITY)
             capture = drawing.record_capture(captured, source=source, rotation=rotation, frame_age_seconds=frame_age_seconds)
-            return build_capture_view(drawing.record.number, capture)
+            return build_capture_view(drawing.record.number, capture) if capture is not None else None
         finally:
             self._capture_lock.release()
 

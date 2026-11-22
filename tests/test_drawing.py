@@ -6,15 +6,16 @@ import cv2
 import json
 import numpy as np
 import pytest
+import threading
 
 from collections.abc import Mapping
 from dataclasses import replace
 from typing import Final
 
 from sketchloop.capture import CapturedSketch, InvalidSketchError, encode_frame
-from sketchloop.domain import ColorMode, SketchLoopError, SketchSource
-from sketchloop.drawing import (NO_STROKES_MESSAGE, GuidedDrawing, check_suggestion_output, compress_interval_frame,
-                                parse_hex_color)
+from sketchloop.domain import ColorMode, InvalidRecordError, SketchLoopError, SketchSource, Unavailable
+from sketchloop.drawing import (INTERVAL_JPEG_QUALITY, NO_STROKES_MESSAGE, GuidedDrawing, check_suggestion_output,
+                                compress_interval_frame, parse_hex_color)
 from sketchloop.experiments import (CaptureTrigger, DrawingEnd, DrawingRecord, MemoryStore, StoreError, SuggestionStage,
                                     SuggestionStatus, drawing_from_dict, drawing_to_dict)
 from sketchloop.preprocessing import make_paper_canvas
@@ -77,6 +78,25 @@ class SmallMaskSuggester(FakeStrokeSuggester):
         """
         small_ref, small_payload = encode_png(np.full((64, 64), 255, dtype=np.uint8), "strokes.png")
         return super().suggest(replace(request, canvas=small_ref), small_payload)
+
+
+class BlockingSuggester(FakeStrokeSuggester):
+    """
+    Test-only fake suggester that waits inside suggest until released, as a model run takes several seconds.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def suggest(self, request: StrokeSuggestionRequest, canvas_payload: bytes) -> StrokeSuggestionOutput:
+        """
+        Signal that the suggestion started, wait for the release, then suggest as the fake does.
+        """
+        self.started.set()
+        self.release.wait(10)
+        return super().suggest(request, canvas_payload)
 
 
 class FlakyDrawingStore(MemoryStore):
@@ -315,11 +335,23 @@ def test_drawing_interval_captures_are_jpeg_and_aligned(sheet_frame: np.ndarray,
     jpeg = store.drawing_files[(SESSION_ID, 1, "captures/capture-0001-raw.jpg")]
     assert jpeg.startswith(b"\xff\xd8\xff"), "The interval frame must be saved as JPEG bytes"
 
+    # The JPEG quality is recorded, and every canvas has its filled mask saved beside it.
+    assert record.interval_jpeg_quality == INTERVAL_JPEG_QUALITY == 90, f"Unexpected quality {record.interval_jpeg_quality}"
+    filled_paths = [capture.filled.path for capture in record.captures]
+    assert filled_paths[0] == "captures/capture-0001-filled.png", f"Unexpected filled mask paths {filled_paths}"
+    assert all((SESSION_ID, 1, path) in store.drawing_files for path in filled_paths), "Every filled mask must be saved"
+
     # Only captures after the press are aligned, to suggestion 1, and the shifted frame aligns with its time recorded.
     assert before.follow is None and record.captures[1].follow is None, "Captures before a suggestion have no alignment"
     follow = after.follow
     assert follow.suggestion == 1 and follow.alignment.converged, f"Expected an alignment to suggestion 1, got {follow}"
     assert follow.new_stroke_pixels is not None and follow.seconds_since_shown >= 0, f"Unexpected scores {follow}"
+
+    # Every suggested part is scored, in index order, at the four tolerances.
+    part_count = len(record.suggestions[0].result.parts)
+    indexes = [part.part for part in follow.parts]
+    assert part_count > 0 and indexes == list(range(part_count)), f"Expected {part_count} scored parts, got {indexes}"
+    assert set(follow.parts[0].coverage) == {4, 8, 16, 24}, f"Unexpected tolerances {follow.parts[0].coverage}"
     assert record.captures[3].follow.suggestion == 1, "The finish capture is aligned to the open suggestion too"
     stages = set(after.timings_seconds)
     assert {"capture", "canvas", "scoring", "saving"} <= stages, f"Unexpected capture timings {stages}"
@@ -328,6 +360,63 @@ def test_drawing_interval_captures_are_jpeg_and_aligned(sheet_frame: np.ndarray,
     assert record.follow_detector.name == "aligned-strokes", f"Unexpected follow method {record.follow_detector}"
     text = json.dumps(drawing_to_dict(record), allow_nan=False)
     assert drawing_from_dict(json.loads(text)) == record, "drawing.json with captures must load back unchanged"
+
+
+def test_drawing_without_part_scores_loads(sheet_capture: CapturedSketch) -> None:
+    """
+    A drawing.json written before part scores, filled masks, and the JPEG quality loads with those marked as not recorded.
+    """
+    drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
+    suggest(drawing, sheet_capture)
+    drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
+    data = drawing_to_dict(drawing.record)
+    del data["interval_jpeg_quality"]
+    for capture in data["captures"]:
+        del capture["filled"]
+    del data["captures"][1]["follow"]["parts"]
+    loaded = drawing_from_dict(data)
+
+    # The quality is unavailable with a reason, and the masks and part scores are absent.
+    assert isinstance(loaded.interval_jpeg_quality, Unavailable), f"Expected no quality, got {loaded.interval_jpeg_quality}"
+    assert all(capture.filled is None for capture in loaded.captures), "Older captures have no filled mask"
+    follow = loaded.captures[1].follow
+    assert follow.parts is None and follow.alignment.converged, f"Expected an alignment without part scores, got {follow}"
+
+
+def test_drawing_part_scores_must_match_the_suggestion(sheet_capture: CapturedSketch) -> None:
+    """
+    A capture whose part scores do not cover every part of the open suggestion is refused when loaded.
+    """
+    drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
+    suggest(drawing, sheet_capture)
+    drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
+    data = drawing_to_dict(drawing.record)
+    data["captures"][1]["follow"]["parts"] = []
+
+    # The record names the mismatch.
+    with pytest.raises(InvalidRecordError, match="scores 0 parts, not suggestion 1's"):
+        drawing_from_dict(data)
+
+
+def test_drawing_skips_interval_capture_during_suggestion(sheet_capture: CapturedSketch) -> None:
+    """
+    An interval capture that arrives while a suggestion runs is skipped at once, rather than saving a stale frame later.
+    """
+    suggester = BlockingSuggester()
+    drawing = start_drawing(MemoryStore(), suggester)
+    pressing = threading.Thread(target=suggest, args=(drawing, sheet_capture))
+    pressing.start()
+    try:
+        assert suggester.started.wait(10), "The suggestion must start"
+        skipped = drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
+    finally:
+        suggester.release.set()
+        pressing.join(10)
+
+    # The skipped call saved nothing, and the next one after the suggestion saves an aligned capture.
+    assert skipped is None and len(drawing.record.captures) == 1, f"Expected only the press capture, got {skipped}"
+    after = drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
+    assert after.number == 2 and after.follow.suggestion == 1, f"Expected capture 2 aligned to suggestion 1, got {after}"
 
 
 def test_drawing_without_alignment_fields_loads(sheet_capture: CapturedSketch) -> None:

@@ -350,3 +350,49 @@ def test_strokes_on_a_lit_sheet_are_kept_without_border_marks(corners: list[tupl
     inner[10:-10, 10:-10] = True
     border_pixels = int((mask & ~inner).sum())
     assert border_pixels == 0, f"No strokes may be marked along the border, got {border_pixels} pixels"
+
+
+def decode_filled_mask(payload: bytes) -> np.ndarray:
+    """
+    Decode a canvas's filled mask PNG to a mask that is True where the canvas was filled in.
+    """
+    return cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_GRAYSCALE) > 0
+
+
+def test_paper_canvas_marks_a_hand_from_the_frame_edge_as_filled() -> None:
+    """
+    A dark hand reaching in from the frame edge is filled with the paper's level, and the canvas marks that area as filled.
+    """
+    photo = np.full((600, 800), 40, dtype=np.uint8)
+    photo[80:520, 200:] = 215
+    cv2.rectangle(photo, (300, 150), (500, 300), 50, 4)
+    cv2.rectangle(photo, (600, 380), (800, 450), 70, -1)
+    canvas = make_paper_canvas(cv2.imencode(".png", photo)[1].tobytes(), 0, *CANVAS_SIZE)
+    filled = decode_filled_mask(canvas.filled_payload)
+
+    # The mask is a grayscale PNG of the canvas size, named beside the canvas.
+    image = canvas.filled
+    assert (image.path, image.mode, image.width, image.height) == ("canvas-filled.png", "L", 512, 360), f"Unexpected {image}"
+
+    # The hand, at the lower right of the paper's box, is filled, while the middle of the paper is seen.
+    crop = canvas.steps[3].params
+    to_canvas = (CANVAS_SIZE[0] / crop["width"], CANVAS_SIZE[1] / crop["height"])
+    hand = (round((700 - crop["x"]) * to_canvas[0]), round((415 - crop["y"]) * to_canvas[1]))
+    middle = (round((400 - crop["x"]) * to_canvas[0]), round((225 - crop["y"]) * to_canvas[1]))
+    assert filled[hand[1], hand[0]], f"The hand at {hand} must be marked as filled"
+    assert not filled[middle[1], middle[0]], f"The paper's middle at {middle} must be seen"
+    assert 0.03 < filled.mean() < 0.3, f"Expected the hand and the paper's rim filled, got share {filled.mean():.3f}"
+
+
+def test_paper_canvas_with_corners_fills_only_a_thin_rim() -> None:
+    """
+    A whole sheet warped by its corners is seen everywhere except a thin rim at the canvas border.
+    """
+    canvas = make_paper_canvas(photograph_sheet([(150, 110), (660, 80), (690, 480), (120, 500)]), 0, *CANVAS_SIZE)
+    filled = decode_filled_mask(canvas.filled_payload)
+
+    # Only pixels within a few percent of the border are filled.
+    inner = np.zeros_like(filled)
+    inner[20:-20, 20:-20] = True
+    assert not (filled & inner).any(), "Nothing inside the rim may be filled"
+    assert filled[0, 0] and filled[-1, -1], "The eroded rim at the canvas corners must be filled"

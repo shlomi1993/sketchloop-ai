@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 
 from sketchloop.capture import InvalidSketchError
 from sketchloop.domain import ControlValue
+from sketchloop.preprocessing import find_skeleton
 from sketchloop.stroke_suggestion import StrokeSuggestionRequest
 
 
@@ -174,14 +175,5 @@ def group_parts(new_lines: np.ndarray, params: LinePartParams, max_parts: int) -
 
 
 def count_skeleton_pixels(mask: np.ndarray) -> int:
-    # Peel the mask with repeated erosions, keeping what each opening removes, which is OpenCV's morphological skeleton.
-    kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
-    remaining = mask.copy()
-    skeleton = np.zeros_like(mask)
-    while cv2.countNonZero(remaining):
-        eroded = cv2.erode(remaining, kernel)
-        skeleton |= cv2.subtract(remaining, cv2.dilate(eroded, kernel))
-        remaining = eroded
-
     # Any non-empty mask has a skeleton of at least one pixel.
-    return max(1, cv2.countNonZero(skeleton))
+    return max(1, cv2.countNonZero(find_skeleton(mask)))
