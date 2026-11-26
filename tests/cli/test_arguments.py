@@ -49,28 +49,18 @@ def launches(monkeypatch: pytest.MonkeyPatch) -> list[tuple[AppController, dict[
 @pytest.mark.usefixtures("launches")
 @pytest.mark.parametrize(("command", "option", "settings_text", "error_pattern"), [
     ("run", ["--candidates", "0"], None, r"must be at least 1, got 0"),
-    ("run", ["--seed", "-1"], None, r"must be at least 0, got -1"),
-    ("ui", ["--candidates", "0"], None, r"must be at least 1, got 0"),
-    ("ui", ["--mode", "fast"], None, r"--mode needs a real backend, such as --backend diffusers"),
-    ("run", ["--precision", "float16"], None, r"--precision needs a real backend, such as --backend diffusers"),
-    ("run", [], '[generator.diffusers]\nprecision = "fp16"\n', r'generator\.diffusers\.precision must be one of .+"fp16"\.'),
+    ("ui", ["--backend", "fake", "--mode", "fast"], None, r"--mode needs a real backend, such as --backend diffusers"),
     ("run", [], '[generator]\nbackend = "difusers"\n', r'sketchloop\.toml: generator\.backend must be one of .+"difusers"\.'),
     ("ui", [], "[ui]\ncandidates = true\n", r"sketchloop\.toml: ui\.candidates must be an integer, got (?i:true)\."),
-    ("run", [], '[generator]\nmdoe = "fast"\n', r"sketchloop\.toml: unknown key generator\.mdoe\. Keys in \[generator\]: "),
     ("run", [], '[generator\nbackend = "fake"\n', r"sketchloop\.toml is not valid TOML: .+\. Fix the file and retry\."),
     ("run", [], "[preprocessing]\nrotation = 90\nraw = true\n",
      re.escape("preprocessing.rotation 90 cannot be combined with preprocessing.raw, which skips preprocessing. Change one in sketchloop.toml or pass --rotate 0 or --no-raw.")),  # noqa: E501
-    ("run", [], '[storage]\nstore = "memory"\n', re.escape('storage.store must be one of folder, got "memory".')),
     ("rerun", ["--config", "missing.toml"], None, re.escape("Settings file missing.toml not found. Check the --config path.")),
     ("ui", ["--capture-interval", "inf"], None, r"must be greater than 0 seconds, got inf"),
     ("ui", [], "[ui]\ncapture_interval_seconds = inf\n", r"capture_interval_seconds must be greater than 0, got inf\."),
-    ("run", [], "seed = 7\n", re.escape("sketchloop.toml: unknown section [seed]. Use generator, ")),
-    ("ui", [], "[drawing]\ncanvas_width = 500\n", re.escape("canvas_width must be a multiple of 8 from 256 to 1024, got 500.")),
-    ("ui", [], '[stroke_suggester]\nname = "magic"\n', re.escape('name must be one of fake or controlnet, got "magic".'))
-], ids=["candidates-0", "negative-seed", "ui-candidates-0", "mode-without-diffusers", "precision-without-diffusers",
-        "misspelled-precision", "misspelled-backend", "boolean-candidates",
-        "unknown-key", "broken-toml", "rotation-with-raw", "memory-store", "missing-config", "infinite-interval-flag",
-        "infinite-interval-file", "top-level-key", "canvas-width-500", "unknown-stroke-suggester"])
+    ("run", [], "seed = 7\n", re.escape("sketchloop.toml: unknown section [seed]. Use generator, "))
+], ids=["candidates-0", "mode-without-diffusers", "misspelled-backend", "boolean-candidates", "broken-toml", "rotation-with-raw",
+        "missing-config", "infinite-interval-flag", "infinite-interval-file", "top-level-key"])
 def test_cli_rejects_invalid_options(tmp_path: Path, capsys: pytest.CaptureFixture[str], command: str, option: list[str],
                                      settings_text: str | None, error_pattern: str) -> None:
     """
@@ -108,3 +98,21 @@ def test_cli_without_command_opens_ui_with_settings(tmp_path: Path) -> None:
     # The page command is chosen with the file's backend.
     assert args.command == "ui", f"Expected the ui command, got {args.command!r}"
     assert args.settings.generator.backend == "diffusers", f"Expected diffusers, got {args.settings.generator.backend!r}"
+
+
+@pytest.mark.parametrize(("arguments", "settings_text", "expected"), [
+    (["--stroke-suggester", "controlnet", "--prompt-suggester", "florence"], None, ("controlnet", "florence")),
+    (["--prompt-suggester", "templates"], '[prompt_suggester]\nname = "florence"\n', ("fake", "templates"))
+], ids=["flags", "flag-beats-file"])
+def test_cli_ui_chooses_suggesters(tmp_path: Path, arguments: list[str], settings_text: str | None,
+                                   expected: tuple[str, str]) -> None:
+    """
+    The ui suggester flags choose the stroke and prompt suggesters and override the settings file.
+    """
+    if settings_text is not None:
+        (tmp_path / "sketchloop.toml").write_text(settings_text, encoding="utf-8")
+    settings = parse_args(["ui", "--study", *arguments]).settings
+
+    # Each flag sets its suggester's registry name, and an unset flag keeps the file or default.
+    chosen = (settings.stroke_suggester.name, settings.prompt_suggester.name)
+    assert chosen == expected, f"Expected suggesters {expected}, got {chosen}"

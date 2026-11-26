@@ -65,16 +65,16 @@ The installer creates or reuses `sketchloop-ai-venv`, installs the package with 
 sketchloop ui
 ```
 
-This opens a local page, usually at <http://127.0.0.1:7860>, with the fake backend. The fake makes clearly labeled noise images, so you can explore the whole workflow in seconds before downloading anything.
+This opens a local page, usually at <http://127.0.0.1:7860>, with the fake backend and the fake stroke suggester. They make clearly labeled noise images and test shapes, so you can explore the whole workflow in seconds before downloading anything.
 
-### 3. Use the real model
+### 3. Use the real models
 
 ```sh
 python scripts/download_models.py
-sketchloop ui --backend diffusers
+sketchloop ui --backend diffusers --stroke-suggester controlnet
 ```
 
-The download script fetches about 7 GB into the git-ignored `models/` folder and skips files already present. It fetches a CLIP evaluator's weights only when the settings file names that evaluator or you ask for it, as in `python scripts/download_models.py --evaluator clip-b32 --evaluator clip-l14`. To make the real model the default, copy [examples/sketchloop.toml](examples/sketchloop.toml) to `sketchloop.toml`, which already sets `backend = "diffusers"`. After that, plain `sketchloop` opens the page with the real model.
+The download script fetches about 7 GB into the git-ignored `models/` folder and skips files already present. It fetches a CLIP evaluator's weights only when the settings file names that evaluator or you ask for it, as in `python scripts/download_models.py --evaluator clip-b32 --evaluator clip-l14`. To keep your own choices, copy [examples/sketchloop.toml](examples/sketchloop.toml) to `sketchloop.toml`, and plain `sketchloop` then uses them. For the user study, `sketchloop ui --config study.toml` uses the committed [study.toml](study.toml), as described in [the study guide](docs/STUDY-GUIDE.md).
 
 ## Using the browser page
 
@@ -86,7 +86,7 @@ Run `sketchloop`, which is short for `sketchloop ui`. The page is served on 127.
 
 The page lists the current session's history, and **New session** starts a fresh session with the model still loaded. All browser tabs share one session, and reloading the page keeps it.
 
-**Guided drawing:** under **Experiment**, type a code such as `participant1_car`, never a real name, and press **Start drawing**. The code names the session folder, as in `runs/participant1_car/`. While the drawing is open, **Suggest next strokes** sends the current sketch and the prompt box text as typed, even when empty, and the sketch view shows the live paper with the suggested parts in color. **Finish drawing** keeps the current sketch as the final drawing. Every suggestion is checked against what is drawn until the next suggestion appears or the drawing ends, and is recorded as followed, not followed, or undetermined, part by part. The page never shows this to the participant, and `sketchloop show` prints it. The stroke suggester is set under `[stroke_suggester]` in the settings, and the fake one draws labeled test shapes.
+**Guided drawing:** under **Experiment**, type a code such as `participant1_car`, never a real name, and press **Start drawing**. The code names the session folder, as in `runs/participant1_car/`. While the drawing is open, **Suggest next strokes** sends the current sketch and the prompt box text as typed, even when empty, and the sketch view shows the live paper with the suggested parts in color. **Finish drawing** keeps the current sketch as the final drawing. Every suggestion is checked against what is drawn until the next suggestion appears or the drawing ends, and is recorded as followed, not followed, or undetermined, part by part. The page never shows this to the participant, and `sketchloop show` prints it. The stroke suggester is set under `[stroke_suggester]` in the settings or with `--stroke-suggester`, and the fake one draws labeled test shapes.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -98,9 +98,11 @@ The page lists the current session's history, and **New session** starts a fresh
 | `--capture-interval` | 0.5 | Seconds between the webcam frames the page keeps |
 | `--runs-dir` | `runs` | Where sessions are saved |
 | `--study` | off | Serve the study page, see below |
+| `--stroke-suggester` | `fake` | `fake` or `controlnet` behind Suggest next strokes |
+| `--prompt-suggester` | `templates` | `templates` or `florence` for the Florence-2 model behind Suggest a prompt |
 | `--config` | `./sketchloop.toml` if present | Settings file |
 
-**Study mode:** `sketchloop ui --study`, or `enabled = true` under `[study]`, serves the page for a user study, and `--no-study` turns it off for one run. The command prints a warning for each stand-in, the fake stroke suggester or the template prompts, since a study needs the real ones.
+**Study mode:** `sketchloop ui --study`, or `enabled = true` under `[study]`, serves the page for a user study, and `--no-study` turns it off for one run. The command prints a warning for each stand-in, the fake stroke suggester or the template prompts, since a study needs the real ones. `sketchloop ui --config study.toml` chooses the real ones, and [the study guide](docs/STUDY-GUIDE.md) has the full procedure.
 
 - **Participant view:** only the sketch view, the prompt box, and a status line worded the same in both conditions. "Suggest a prompt" and "Suggest next strokes" appear only while a drawing with AI is open, in a column that keeps its space without them, so nothing moves between conditions. Image generation is not part of study mode.
 - **Experimenter panel:** at the bottom, holding the experiment name, the condition (With AI or Without AI, no default), Start, Finish, and the camera controls. It is open when the page loads, because the webcam only starts once its panel has been shown, and Start closes it. Start needs a name and a condition and clears both, so nothing carries over to the next experiment.
@@ -186,33 +188,28 @@ The full record contract is in [EXPERIMENTS.md](docs/EXPERIMENTS.md).
 
 ## Configuration
 
-Instead of repeating flags, copy [examples/sketchloop.toml](examples/sketchloop.toml), which lists every key, to `sketchloop.toml` in the folder you run from. Git ignores that file. You can also pass `--config PATH` to `run`, `ui`, or `rerun`.
+Settings live in TOML files, so you do not have to repeat flags. A command-line flag overrides the file, and the file overrides the built-in default. Two files are used:
 
-```toml
-[generator]
-backend = "diffusers"  # fake, diffusers, or t2i-adapter
+| File | In Git | Read by | Use it for |
+| --- | --- | --- | --- |
+| `sketchloop.toml` in the folder you run from | No, it is ignored | Every command, automatically | Your own everyday settings. Start from [examples/sketchloop.toml](examples/sketchloop.toml), which lists every key with its options |
+| [study.toml](study.toml) at the repository root | Yes | Commands given `--config study.toml` | The user study, with the real models, Florence-2 prompts, the webcam, and the study page |
 
-[generator.diffusers]
-mode = "fast"          # fast or quality, for diffusers and t2i-adapter
-
-[models]
-dir = "models"         # every model, also read by scripts/download_models.py
-
-[evaluator]
-name = "none"          # none, clip-b32, or clip-l14
-
-[storage]
-runs_dir = "runs"
+```sh
+cp examples/sketchloop.toml sketchloop.toml   # once, then edit it
+sketchloop                                    # reads sketchloop.toml when it exists
+sketchloop ui --config study.toml             # reads study.toml instead
 ```
 
-- **Precedence:** a command-line flag overrides the file, and the file overrides the built-in default.
+`--config PATH` works with `run`, `ui`, `rerun`, `benchmark`, and `study`. With `--config`, the local `sketchloop.toml` is not read. Without any file, the built-in defaults use the fake backend and the fake stroke suggester, which need no model.
+
 - **Scope:** the file chooses the backend, mode, and precision, the image source for `run`, the preprocessor, the evaluator, the store and its runs folder, and the default candidates and seed for `run` and `ui`.
 - **Paths:** a relative `runs_dir` or `[models] dir` is relative to the file's folder. Run `scripts/download_models.py` with the same file, so it downloads where the backend looks.
 - **Feedback:** a command that uses a file first prints `Settings:` with its path, and a bad value exits with one line naming the key.
 - **Rerun:** `rerun` takes only the store and models folder from the file, and everything else from the recorded round. It scores with the evaluator the round recorded, and uses the file's evaluator only when the recorded one cannot be recreated, saying so.
 - **Prompt suggestions:** `[prompt_suggester]` chooses what **Suggest a prompt** uses, independently of the image backend: `templates`, the default, which fills five style templates without a model, or `florence`, which names the sketched object with Florence-2-base from the models folder. When its weights are missing, the server prints why at start, and each press is recorded as failed.
 - **Study:** `[study]` sets `enabled`, which serves the study page, and `export_dir`, where the study export creates its folders, `data/study-exports` by default and relative to the file.
-- **Guided sketching:** `[stroke_suggester]` names the next-stroke suggester, `fake`, which draws test shapes, or `controlnet`, which redraws the paper canvas as a line drawing with the downloaded SD 1.5, scribble ControlNet, and LCM-LoRA weights and keeps up to four new parts, and `[drawing]` sets the paper canvas size, 512x360 by default, and the seconds between saved captures, 2 by default. The page does not use them yet, and a canvas side must be a multiple of 8 from 256 to 1024.
+- **Guided sketching:** `[stroke_suggester]` names the next-stroke suggester, `fake`, the default, which draws test shapes, or `controlnet`, which redraws the paper canvas as a line drawing with the downloaded SD 1.5, scribble ControlNet, and LCM-LoRA weights and keeps up to four new parts, and `[drawing]` sets the paper canvas size, 512x360 by default, and the seconds between saved captures, 2 by default. A canvas side must be a multiple of 8 from 256 to 1024.
 - **Evaluator:** `none`, the default, gives no scores. `clip-b32` (CLIP ViT-B/32, about 0.6 GB) and `clip-l14` (CLIP ViT-L/14, about 1.7 GB) score each candidate by the cosine similarity between its image and the prompt, from -1 to 1. They load from the models folder before the first round's scoring, which adds a few seconds to that round's model load time. The score says how well the image matches the words, not how good the design is, and each round records the CLIP model and revision that produced it.
 
 ## Using it as a library
@@ -336,6 +333,7 @@ After the first supervisor meeting, T09 to T11 come first. See the [meeting note
 | [EXPERIMENTS.md](docs/EXPERIMENTS.md) | The experiment record contract |
 | [ROADMAP.md](docs/ROADMAP.md) | Tasks, their evidence, and open decisions |
 | [STATUS.md](docs/STATUS.md) | Current state and the next action |
+| [STUDY-GUIDE.md](docs/STUDY-GUIDE.md) | Step-by-step procedure for running the user study |
 | [decisions/](docs/decisions/) | Architecture decision records |
 | [DEVELOPMENT.md](docs/DEVELOPMENT.md) | Setup, checks, and conventions |
 | [REFERENCES.md](docs/REFERENCES.md) | Research papers and citations |

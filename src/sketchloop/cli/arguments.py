@@ -12,7 +12,14 @@ from pathlib import Path
 from typing import Final
 
 from sketchloop.backends.diffusers import GenerationMode, TorchPrecision
-from sketchloop.components import FAKE_BACKEND, GENERATORS, NO_RUN_SKETCH_MESSAGE, check_component_names
+from sketchloop.components import (
+    FAKE_BACKEND,
+    GENERATORS,
+    NO_RUN_SKETCH_MESSAGE,
+    PROMPT_SUGGESTERS,
+    STROKE_SUGGESTERS,
+    check_component_names,
+)
 from sketchloop.domain import Rotation
 from sketchloop.settings import Settings, SettingsError, find_settings_file, load_settings, override_settings
 
@@ -59,6 +66,8 @@ FLAG_SETTINGS: Final[dict[str, dict[str, str]]] = {
         "mode": "generator.diffusers.mode",
         "precision": "generator.diffusers.precision",
         "study": "study.enabled",
+        "stroke_suggester": "stroke_suggester.name",
+        "prompt_suggester": "prompt_suggester.name",
     },
     Command.RERUN: {"runs_dir": "storage.runs_dir"},
     Command.STUDY: {"runs_dir": "storage.runs_dir"},
@@ -263,6 +272,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ui_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="mode of a real backend (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
     ui_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="precision of a real backend (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
     ui_parser.add_argument("--study", action=argparse.BooleanOptionalAction, default=unset, help="serve the study page, where participants see only the sketch, the prompt, and the AI buttons in the AI condition (settings study.enabled, default off)")  # noqa: E501
+    ui_parser.add_argument("--stroke-suggester", choices=list(STROKE_SUGGESTERS), default=unset, help="next-stroke suggester behind Suggest next strokes (settings stroke_suggester.name, default fake)")  # noqa: E501
+    ui_parser.add_argument("--prompt-suggester", choices=list(PROMPT_SUGGESTERS), default=unset, help="prompt suggester behind Suggest a prompt (settings prompt_suggester.name, default templates)")  # noqa: E501
     ui_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
 
     # Export the study's final drawings under random codes, or summarize its drawings.
