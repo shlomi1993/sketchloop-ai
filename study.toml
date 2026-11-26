@@ -1,0 +1,17 @@
+# Settings for the user study. Run sketchloop ui --config study.toml from this folder.
+# The paths resolve next to this file, so runs and models stay in this repository's ignored folders.
+
+[generator]
+backend = "diffusers"
+
+[capture]
+source = "camera"
+
+[stroke_suggester]
+name = "controlnet"
+
+[prompt_suggester]
+name = "florence"
+
+[study]
+enabled = true
