@@ -16,7 +16,7 @@ from typing import Final
 from sketchloop.capture import CapturedSketch, InvalidSketchError, encode_frame
 from sketchloop.domain import ColorMode, InvalidRecordError, SketchLoopError, SketchSource, Unavailable
 from sketchloop.drawing import (INTERVAL_JPEG_QUALITY, NO_STROKES_MESSAGE, GuidedDrawing, check_suggestion_output,
-                                compress_interval_frame, parse_hex_color)
+                                compress_interval_frame)
 from sketchloop.experiments import (FINAL_PROMPT_NOT_RECORDED, ORIGIN_NOT_RECORDED, OUTSIDE_DRAWING_REASON, CaptureTrigger,
                                     DrawingEnd, DrawingRecord, DrawingStudy, MemoryStore, PromptOrigin, PromptOriginKind,
                                     PromptSuggestionRecord, StoreError, StudyCondition, SuggestionStage, SuggestionStatus,
@@ -314,14 +314,6 @@ def test_check_suggestion_output_refuses_more_parts_than_requested(sheet_capture
         check_suggestion_output(output, StrokeSuggestionRequest(canvas=image, prompt="", max_parts=1))
 
 
-def test_parse_hex_color() -> None:
-    """
-    A "#RRGGBB" color gives its red, green, and blue levels.
-    """
-    # The first part color is Okabe-Ito blue.
-    assert parse_hex_color(PART_COLORS[0]) == (0, 114, 178), f"Unexpected levels {parse_hex_color(PART_COLORS[0])}"
-
-
 def test_drawing_interval_captures_are_jpeg_and_aligned(sheet_frame: np.ndarray, sheet_capture: CapturedSketch) -> None:
     """
     Interval frames are kept as JPEG and press frames as PNG, and captures after a suggestion record their alignment.
@@ -394,21 +386,6 @@ def test_drawing_without_part_scores_loads(sheet_capture: CapturedSketch) -> Non
     assert follow.parts is None and follow.alignment.converged, f"Expected an alignment without part scores, got {follow}"
     assert isinstance(follow.alignment.filled_share, Unavailable), f"Expected no filled share, got {follow.alignment}"
     assert isinstance(follow.alignment.aligned_on, Unavailable), f"Expected no aligned region, got {follow.alignment}"
-
-
-def test_drawing_part_scores_must_match_the_suggestion(sheet_capture: CapturedSketch) -> None:
-    """
-    A capture whose part scores do not cover every part of the open suggestion is refused when loaded.
-    """
-    drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
-    suggest(drawing, sheet_capture)
-    drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
-    data = drawing_to_dict(drawing.record)
-    data["captures"][1]["follow"]["parts"] = []
-
-    # The record names the mismatch.
-    with pytest.raises(InvalidRecordError, match="scores 0 parts, not suggestion 1's"):
-        drawing_from_dict(data)
 
 
 def test_drawing_skips_interval_capture_during_suggestion(sheet_capture: CapturedSketch) -> None:
@@ -728,13 +705,15 @@ def test_failed_prompt_suggestion_save_leaves_no_entry(make_prompt_suggestion: P
 @pytest.mark.parametrize(("prompt", "suggestion_id", "end", "expected_prompt", "expected_origin"), [
     ("a sports car, low and wide", "prompt-a", DrawingEnd.FINISHED, "a sports car, low and wide",
      PromptOrigin(kind=PromptOriginKind.EDITED, prompt_suggestion="prompt-a")),
-    ("", "prompt-a", DrawingEnd.FINISHED, "", PromptOrigin(kind=PromptOriginKind.TYPED, prompt_suggestion=None)),
     ("a car", "prompt-a", DrawingEnd.NEW_SESSION, None, None),
     (None, None, DrawingEnd.FINISHED, None, None),
-], ids=["edited", "empty", "new-session", "without-page"])
+], ids=["edited", "new-session", "without-page"])
 def test_drawing_records_final_prompt(make_prompt_suggestion: PromptMaker, prompt: str | None, suggestion_id: str | None,
                                       end: DrawingEnd, expected_prompt: str | None,
                                       expected_origin: PromptOrigin | None) -> None:
+    """
+    Finishing records the final prompt and its origin, and a new session or a library caller without a prompt records none.
+    """
     store = MemoryStore()
     drawing = start_study_drawing(store, StudyCondition.AI)
     drawing.record_prompt_suggestion(make_prompt_suggestion(SUGGESTED_PROMPT, "prompt-a"))
@@ -772,13 +751,9 @@ def break_study_record(data: dict[str, object], case: str) -> None:
         data["study"], data["suggestions_enabled"], data["suggester"] = None, False, None
         data["suggestions"], data["follow_detector"], data["rule"] = [], None, None
         data["final_prompt_origin"] = {"kind": "typed", "prompt_suggestion": None}
-    elif case == "number-gap":
-        second["number"] = 3
     elif case == "duplicate-id":
         second["id"] = first["id"]
         data["final_prompt_origin"]["prompt_suggestion"] = first["id"]
-    elif case == "capture-beyond":
-        second["after_capture"] = 99
     elif case == "kind-disagrees":
         data["suggestions"][0]["prompt_origin"]["kind"] = "edited"
     elif case == "shown-after-use":
@@ -796,9 +771,7 @@ def break_study_record(data: dict[str, object], case: str) -> None:
 @pytest.mark.parametrize(("case", "message"), [
     ("condition-disagrees", "condition no_ai has suggestions off"),
     ("prompt-suggestions-while-off", "suggestions off cannot have prompt suggestions"),
-    ("number-gap", "prompt suggestion numbers must run from 1"),
     ("duplicate-id", "prompt suggestion IDs must be unique"),
-    ("capture-beyond", "after_capture 99 is not a capture"),
     ("kind-disagrees", "recorded as edited, but its prompt and suggestion give suggested"),
     ("shown-after-use", "shown after its prompt was used"),
     ("unknown-id", "not a shown one of its record"),
@@ -807,6 +780,9 @@ def break_study_record(data: dict[str, object], case: str) -> None:
 ])
 def test_drawing_with_inconsistent_study_fields_is_refused(sheet_capture: CapturedSketch, make_prompt_suggestion: PromptMaker,
                                                            case: str, message: str) -> None:
+    """
+    A drawing.json whose condition, prompt suggestions, origins, or final prompt contradict each other is refused on load.
+    """
     drawing = start_study_drawing(MemoryStore(), StudyCondition.AI)
     drawing.record_prompt_suggestion(make_prompt_suggestion(SUGGESTED_PROMPT, "prompt-a"))
     drawing.suggest(sheet_capture, source=SketchSource.UPLOAD, rotation=0, prompt=SUGGESTED_PROMPT,

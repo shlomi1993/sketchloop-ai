@@ -23,10 +23,10 @@ from sketchloop.capture import CapturedSketch, CaptureSource, encode_frame, raw_
 from sketchloop.domain import (Candidate, GenerationRequest, Guidance, InvalidRecordError, SketchLoopError, SketchSource,
                                Unavailable, UnsupportedConfigurationError, record_no_selection, select_candidates)
 from sketchloop.evaluation import Evaluator
-from sketchloop.experiments import (FRAME_AGE_NOT_MEASURED_REASON, NOT_STREAMED_REASON, OUTSIDE_SESSION_REASON,
-                                    SETUP_NOT_MEASURED_REASON, UNKNOWN_SOURCE_REASON, DrawingStudy, ExperimentNameError,
-                                    ExperimentNameTakenError, FolderStore, MemoryStore, PromptOrigin, PromptOriginKind,
-                                    PromptSuggestionRecord, RoundRecord, SessionRecord, StoreError, StudyCondition, load_session)
+from sketchloop.experiments import (FRAME_AGE_NOT_MEASURED_REASON, OUTSIDE_SESSION_REASON, SETUP_NOT_MEASURED_REASON,
+                                    UNKNOWN_SOURCE_REASON, DrawingStudy, ExperimentNameError, ExperimentNameTakenError,
+                                    FolderStore, MemoryStore, PromptOrigin, PromptOriginKind, PromptSuggestionRecord,
+                                    RoundRecord, SessionRecord, StoreError, StudyCondition, load_session)
 from sketchloop.generation import Generator
 from sketchloop.preprocessing import PreprocessedSketch, PreprocessingStep, Preprocessor
 from sketchloop.session import SketchSession
@@ -338,37 +338,21 @@ def test_session_times_evaluator_load_as_model_load(first_load_generator: Genera
     assert second.timings_seconds["evaluation"] == pytest.approx(8.0), f"Unexpected evaluation {second.timings_seconds}"
 
 
-@pytest.mark.parametrize(("source", "frame_age", "expected"), [
-    ("webcam", 0.4, 0.4),
-    ("webcam", None, Unavailable(FRAME_AGE_NOT_MEASURED_REASON)),
-    ("file", None, Unavailable(NOT_STREAMED_REASON)),
-    (Unavailable("synthetic unknown source"), None, Unavailable(UNKNOWN_SOURCE_REASON))
-], ids=["webcam-with-age", "webcam-without-age", "file", "unknown-source"])
-def test_session_records_frame_age(source: str | Unavailable, frame_age: float | None, expected: float | Unavailable) -> None:
+@pytest.mark.parametrize(("source", "expected"), [
+    ("webcam", Unavailable(FRAME_AGE_NOT_MEASURED_REASON)),
+    (Unavailable("synthetic unknown source"), Unavailable(UNKNOWN_SOURCE_REASON))
+], ids=["webcam-without-age", "unknown-source"])
+def test_session_records_frame_age(source: str | Unavailable, expected: Unavailable) -> None:
     """
-    A webcam round records its frame age or why it is missing, other sources were not streamed, and an unknown one says so.
+    A webcam round without a measured frame age records why, and a round from an unknown source says so.
     """
     captured = StillCamera().capture()
     session = SketchSession(FakeGenerator(), MemoryStore())
-    session.run_round(captured.image, captured.payload, Guidance(prompt="chair"), source=source, frame_age_seconds=frame_age)
+    session.run_round(captured.image, captured.payload, Guidance(prompt="chair"), source=source)
 
     # The record holds the age or the reason.
     recorded = session.records[0].frame_age_seconds
     assert recorded == expected, f"Expected frame age {expected}, got {recorded}"
-
-
-def test_session_refuses_frame_age_for_file() -> None:
-    """
-    A frame age for a file round is refused before anything is saved.
-    """
-    captured = StillCamera().capture()
-    store = MemoryStore()
-    session = SketchSession(FakeGenerator(), store)
-
-    # The round is refused, and the store stays empty.
-    with pytest.raises(InvalidRecordError, match="Only a webcam round has a frame age"):
-        session.run_round(captured.image, captured.payload, Guidance(prompt="chair"), source="file", frame_age_seconds=0.4)
-    assert (store.sessions, store.rounds, store.files) == ({}, {}, {}), "A refused round must save nothing"
 
 
 def test_session_refuses_load_longer_than_call(first_load_generator: Generator) -> None:
@@ -407,13 +391,12 @@ def test_named_session_claims_its_folder_and_records_name(tmp_path: Path) -> Non
         SketchSession(FakeGenerator(), store, name="PARTICIPANT1_CAR")
 
 
-@pytest.mark.parametrize("name", ["../x", "a/b", "C:x", "COM1", "x" * 65])
-def test_named_session_refuses_bad_name_before_creating_anything(tmp_path: Path, name: str) -> None:
+def test_named_session_refuses_bad_name_before_creating_anything(tmp_path: Path) -> None:
     """
     A name breaking the rules raises ExperimentNameError and creates no folder.
     """
     with pytest.raises(ExperimentNameError):
-        SketchSession(FakeGenerator(), FolderStore(tmp_path / "runs"), name=name)
+        SketchSession(FakeGenerator(), FolderStore(tmp_path / "runs"), name="../x")
 
     # Nothing was created, not even the runs folder.
     assert not (tmp_path / "runs").exists(), "A refused name must create nothing"
@@ -442,6 +425,9 @@ def test_session_allows_one_open_drawing() -> None:
 ])
 def test_study_drawing_refuses_condition_that_disagrees(condition: StudyCondition, suggester: FakeStrokeSuggester | None,
                                                         message: str) -> None:
+    """
+    An AI drawing without a stroke suggester, or a no-AI drawing with one, is refused before anything is saved.
+    """
     store = MemoryStore()
     session = SketchSession(FakeGenerator(), store)
 

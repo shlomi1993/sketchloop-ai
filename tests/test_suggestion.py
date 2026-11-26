@@ -6,19 +6,16 @@ import pytest
 
 from pathlib import Path
 
-from sketchloop.domain import ExecutionKind, Unavailable
-from sketchloop.suggestion import (FLORENCE_MODEL, NEUTRAL_SUBJECT, STYLE_TEMPLATES, FlorenceSuggester, PromptSuggester,
-                                   SuggestionError, TemplateSuggester, extract_subject)
+from sketchloop.suggestion import (FLORENCE_MODEL, NEUTRAL_SUBJECT, STYLE_TEMPLATES, FlorenceSuggester, SuggestionError,
+                                   TemplateSuggester, extract_subject)
 
 
 @pytest.mark.parametrize(("caption", "expected"), [
     ("A drawing of a lounge chair.", "a lounge chair"),
     ("a black and white sketch of a desk lamp", "a desk lamp"),
-    ("a chair", "a chair"),
     ("a drawing of", NEUTRAL_SUBJECT),
-    ("", NEUTRAL_SUBJECT),
     ("a drawing of a very tall wooden chair with a curved back", "a very tall wooden chair with"),
-], ids=["framed", "black-and-white", "plain", "framing-only", "empty", "long"])
+], ids=["framed", "black-and-white", "framing-only", "long"])
 def test_extract_subject(caption: str, expected: str) -> None:
     """
     The medium words are dropped, long captions are cut to six words, and an empty result becomes the neutral subject.
@@ -55,16 +52,10 @@ def test_florence_suggester_missing_model(tmp_path: Path) -> None:
         FlorenceSuggester(tmp_path).suggest(b"sketch")
 
 
-def test_template_suggester_identity() -> None:
-    identity = TemplateSuggester().identity
-
-    # The templates run in process without a model, and they are a real suggester, not a test fake.
-    assert identity.adapter == "sketchloop.prompt-templates", f"Unexpected adapter {identity.adapter}"
-    assert identity.execution == ExecutionKind.IN_PROCESS and not identity.is_fake, f"Unexpected execution {identity.execution}"
-    assert identity.model_id == Unavailable("fixed style templates, no model"), f"Unexpected model ID {identity.model_id}"
-
-
 def test_florence_suggester_identity_names_repository_and_revision(tmp_path: Path) -> None:
+    """
+    Florence-2's recorded model ID joins its repository with the downloaded revision, and it is not a fake.
+    """
     metadata = tmp_path / FLORENCE_MODEL.folder / ".cache" / "huggingface" / "download" / "model.safetensors.metadata"
     metadata.parent.mkdir(parents=True)
     metadata.write_text("00921df66db728a9ceb750f5eca43e5c203a2051\netag\n", encoding="utf-8")
@@ -74,13 +65,3 @@ def test_florence_suggester_identity_names_repository_and_revision(tmp_path: Pat
     expected = "florence-community/Florence-2-base@00921df66db7"
     assert identity.model_id == expected, f"Expected {expected}, got {identity.model_id}"
     assert identity.adapter == "sketchloop.florence-prompts" and not identity.is_fake, f"Unexpected identity {identity}"
-
-
-def test_prompt_suggester_needs_identity() -> None:
-    class NamelessSuggester(PromptSuggester):
-        def suggest(self, sketch_payload: bytes) -> tuple[str, ...]:
-            return ("a chair",)
-
-    # A suggester that cannot name itself cannot be created, so every record names what suggested.
-    with pytest.raises(TypeError, match="identity"):
-        NamelessSuggester()

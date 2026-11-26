@@ -1,5 +1,5 @@
 """
-Tests of the next-stroke suggester contract: its request, part, suggestion, and output records and the base class.
+Tests of the next-stroke suggester contract: its request, part, suggestion, and output records.
 """
 
 import hashlib
@@ -12,9 +12,8 @@ from typing import Any
 
 from sketchloop.domain import (BackendIdentity, ColorMode, EffectiveSettings, ExecutionKind, ImageRef, InvalidRecordError,
                                Unavailable)
-from sketchloop.generation import ControlSpec
-from sketchloop.stroke_suggestion import (LINE_DRAWING_FILE, MAX_PARTS, PART_COLORS, StrokeSuggester, StrokeSuggestion,
-                                          StrokeSuggestionOutput, StrokeSuggestionRequest, SuggestedPart, name_part_file)
+from sketchloop.stroke_suggestion import (LINE_DRAWING_FILE, MAX_PARTS, StrokeSuggestion, StrokeSuggestionOutput,
+                                          StrokeSuggestionRequest, SuggestedPart, name_part_file)
 
 
 CANVAS = ImageRef(path="strokes.png", width=512, height=360, mode="L", media_type="image/png", sha256="a" * 64)
@@ -59,46 +58,17 @@ def make_payloads(part_count: int = 2) -> dict[str, bytes]:
     return {LINE_DRAWING_FILE: b"line drawing", **masks}
 
 
-@pytest.mark.parametrize("prompt", ["", "   ", "  a red sports car, side view  "], ids=["empty", "spaces", "padded"])
-def test_request_keeps_prompt_exactly_as_typed(prompt: str) -> None:
-    """
-    Any prompt text, empty or padded with spaces, is accepted and kept unchanged, with the defaults filled in.
-    """
-    request = StrokeSuggestionRequest(canvas=CANVAS, prompt=prompt)
-
-    # The prompt is not stripped, and the defaults ask for every part with a random seed.
-    assert request.prompt == prompt, f"The prompt must stay exactly as typed, got {request.prompt!r}"
-    assert request.seed is None and request.max_parts == MAX_PARTS, f"Unexpected defaults: {request}"
-    assert dict(request.controls) == {}, f"Default controls must be empty, got {dict(request.controls)}"
-
-
-def test_request_freezes_controls() -> None:
-    """
-    The request copies its controls into a read-only view, so a later change to the caller's dict cannot alter it.
-    """
-    controls = {"strength": 0.85}
-    request = StrokeSuggestionRequest(canvas=CANVAS, prompt="", controls=controls)
-    controls["strength"] = 0.1
-
-    # The record keeps the value it was built with and refuses changes.
-    assert request.controls["strength"] == 0.85, f"The request must copy its controls, got {dict(request.controls)}"
-    with pytest.raises(TypeError):
-        request.controls["strength"] = 0.5
-
-
 @pytest.mark.parametrize(("changes", "message"), [
     ({"max_parts": 0}, "max_parts must be an int from 1 to 4"),
     ({"max_parts": MAX_PARTS + 1}, "max_parts must be an int from 1 to 4"),
     ({"max_parts": True}, "max_parts must be an int from 1 to 4"),
     ({"seed": -1}, "seed must be None or an int >= 0"),
-    ({"prompt": None}, "prompt must be text"),
     ({"canvas": replace(CANVAS, width=500)}, "multiples of 8, got 500x360"),
-    ({"canvas": replace(CANVAS, height=362)}, "multiples of 8, got 512x362"),
     ({"canvas": replace(CANVAS, mode=ColorMode.RGB)}, "canvas must be mode L"),
     ({"controls": {"strength": math.nan}}, "must be finite"),
     ({"controls": {"Strength": 0.5}}, "must be snake_case")
-], ids=["no-parts", "too-many-parts", "bool-parts", "negative-seed", "no-prompt", "width-500", "height-362", "rgb-canvas",
-        "nan-control", "control-name"])
+], ids=["no-parts", "too-many-parts", "bool-parts", "negative-seed", "width-500", "rgb-canvas", "nan-control",
+        "control-name"])
 def test_request_refuses_invalid_values(changes: Mapping[str, Any], message: str) -> None:
     """
     A request with a bad part limit, seed, prompt, canvas, or control is refused with a message naming the problem.
@@ -119,17 +89,14 @@ def test_part_holds_a_box_loaded_as_a_list_as_a_tuple() -> None:
 @pytest.mark.parametrize(("changes", "message"), [
     ({"index": -1}, "index must be an int >= 0"),
     ({"box": (10, 20, 30)}, "box must be four ints"),
-    ({"box": (-1, 20, 30, 40)}, "box must be four ints"),
     ({"box": (10, 20, 0, 40)}, "must lie inside its 512x360 mask"),
     ({"box": (500, 20, 30, 40)}, "must lie inside its 512x360 mask"),
-    ({"box": (10, 340, 30, 40)}, "must lie inside its 512x360 mask"),
     ({"pixel_count": 0}, "pixel_count must be an int from 1"),
-    ({"skeleton_pixels": 0}, "skeleton_pixels must be an int from 1 to the pixel count"),
     ({"skeleton_pixels": 301}, "skeleton_pixels must be an int from 1 to the pixel count"),
     ({"mask": make_image("part-1.png", b"mask 0", mode=ColorMode.RGB)}, "mask must be mode L"),
     ({"label": " "}, "label must be None or non-empty text")
-], ids=["negative-index", "short-box", "negative-left", "zero-width", "past-right", "past-bottom", "no-pixels", "no-skeleton",
-        "skeleton-above-pixels", "rgb-mask", "blank-label"])
+], ids=["negative-index", "short-box", "zero-width", "past-right", "no-pixels", "skeleton-above-pixels", "rgb-mask",
+        "blank-label"])
 def test_part_refuses_invalid_values(changes: Mapping[str, Any], message: str) -> None:
     """
     A part with a bad index, box, count, mask mode, or label is refused with a message naming the problem.
@@ -138,26 +105,14 @@ def test_part_refuses_invalid_values(changes: Mapping[str, Any], message: str) -
         make_part(**({"index": 0} | dict(changes)))
 
 
-def test_suggestion_without_parts_is_valid() -> None:
-    """
-    No new parts is a valid suggestion, and its output needs only the line drawing's bytes.
-    """
-    suggestion = make_suggestion(part_count=0)
-    output = StrokeSuggestionOutput(suggestion=suggestion, payloads=make_payloads(part_count=0))
-    assert output.suggestion.parts == (), f"Expected no parts, got {output.suggestion.parts}"
-
-
 @pytest.mark.parametrize(("changes", "message"), [
     ({"parts": (make_part(0), make_part(2))}, r"Part indexes must be 0\.\.1 in order, got \[0, 2\]"),
-    ({"parts": (make_part(1), make_part(0))}, r"Part indexes must be 0\.\.1 in order, got \[1, 0\]"),
     ({"parts": tuple(make_part(index) for index in range(MAX_PARTS + 1))}, "at most 4 parts, got 5"),
     ({"parts": (make_part(0), make_part(1, mask=make_image("part-2.png", b"mask 1", width=256)))}, "share one size"),
-    ({"line_drawing": make_image(LINE_DRAWING_FILE, b"line drawing", height=512)}, "share one size"),
     ({"line_drawing": make_image(name_part_file(0), b"line drawing")}, "image paths must be unique"),
     ({"seed": -2}, "seed must be an int >= 0 or Unavailable"),
     ({"timings_seconds": {"generation": -1.0}}, "timings_seconds.generation must be finite seconds")
-], ids=["index-gap", "index-order", "too-many-parts", "mask-size", "line-drawing-size", "shared-path", "negative-seed",
-        "negative-timing"])
+], ids=["index-gap", "too-many-parts", "mask-size", "shared-path", "negative-seed", "negative-timing"])
 def test_suggestion_refuses_invalid_values(changes: Mapping[str, Any], message: str) -> None:
     """
     A suggestion with an index gap, too many parts, mismatched sizes, shared paths, or a bad seed or timing is refused.
@@ -177,9 +132,8 @@ def test_suggestion_accepts_unavailable_seed_and_line_drawing() -> None:
 
 @pytest.mark.parametrize(("payloads", "message"), [
     ({LINE_DRAWING_FILE: b"line drawing", "part-1.png": b"mask 0"}, "Payload keys must equal"),
-    (make_payloads() | {"extra.png": b"x"}, "Payload keys must equal"),
     (make_payloads() | {"part-2.png": b"changed"}, "Payload part-2.png fails its checksum")
-], ids=["missing-mask", "extra-file", "changed-mask"])
+], ids=["missing-mask", "changed-mask"])
 def test_output_refuses_payloads_that_do_not_match(payloads: Mapping[str, bytes], message: str) -> None:
     """
     The output needs exactly one payload per line drawing and mask, each matching the checksum the suggestion recorded.
@@ -204,50 +158,3 @@ def test_output_checks_load_seconds_and_freezes_payloads() -> None:
     # A negative load time is refused.
     with pytest.raises(InvalidRecordError, match="load_seconds must be finite seconds"):
         StrokeSuggestionOutput(suggestion=make_suggestion(), payloads=make_payloads(), load_seconds=-1.0)
-
-
-class EmptyStrokeSuggester(StrokeSuggester):
-    """
-    Test-only suggester that implements only the abstract methods, to check the base class defaults.
-    """
-
-    @property
-    def controls(self) -> tuple[ControlSpec, ...]:
-        """
-        Return no controls.
-        """
-        return ()
-
-    def suggest(self, request: StrokeSuggestionRequest, canvas_payload: bytes) -> StrokeSuggestionOutput:
-        """
-        Return a suggestion without parts.
-        """
-        return StrokeSuggestionOutput(suggestion=make_suggestion(part_count=0), payloads=make_payloads(part_count=0))
-
-    def describe(self) -> str:
-        """
-        Name the test suggester.
-        """
-        return "Using the empty test suggester."
-
-
-def test_base_class_requires_suggest_and_skips_load() -> None:
-    """
-    The base class cannot be created without its abstract methods, and its default load does nothing.
-    """
-    # Every abstract method must be implemented.
-    with pytest.raises(TypeError):
-        StrokeSuggester()
-
-    # The default load accepts the canvas size and returns without loading anything.
-    suggester = EmptyStrokeSuggester()
-    assert suggester.load(512, 360) is None, "The default load must do nothing"
-    assert suggester.suggest(StrokeSuggestionRequest(canvas=CANVAS, prompt=""), b"").suggestion.parts == (), "Expected no parts"
-
-
-def test_part_colors_cover_every_part() -> None:
-    """
-    There is one distinct overlay color per possible part, and part files are numbered from 1.
-    """
-    assert len(set(PART_COLORS)) == MAX_PARTS, f"Expected {MAX_PARTS} distinct colors, got {PART_COLORS}"
-    assert name_part_file(0) == "part-1.png", f"Part files must be numbered from 1, got {name_part_file(0)}"

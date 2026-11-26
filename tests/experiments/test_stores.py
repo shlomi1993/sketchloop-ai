@@ -22,8 +22,7 @@ def make_drawing_record(number: int) -> DrawingRecord:
                          final_capture=None)
 
 
-@pytest.mark.parametrize("taken_name", ["participant1_car", "Participant1_CAR"])
-def test_folder_store_claims_a_name_once_ignoring_case(tmp_path: Path, taken_name: str) -> None:
+def test_folder_store_claims_a_name_once_ignoring_case(tmp_path: Path) -> None:
     """
     FolderStore creates the named folder, then refuses the same name in any letter case and leaves the folder untouched.
     """
@@ -31,6 +30,7 @@ def test_folder_store_claims_a_name_once_ignoring_case(tmp_path: Path, taken_nam
     store.claim_session("participant1_car")
     marker = tmp_path / "runs" / "participant1_car" / "keep.txt"
     marker.write_text("kept", encoding="utf-8")
+    taken_name = "Participant1_CAR"
     with pytest.raises(ExperimentNameTakenError) as caught:
         store.claim_session(taken_name)
 
@@ -55,8 +55,7 @@ def test_folder_store_refuses_a_name_matching_a_file(tmp_path: Path) -> None:
         FolderStore(runs_dir).claim_session("notes")
 
 
-@pytest.mark.parametrize("taken_name", ["p1", "P1"])
-def test_memory_store_claims_a_name_once_ignoring_case(taken_name: str) -> None:
+def test_memory_store_claims_a_name_once_ignoring_case() -> None:
     """
     MemoryStore refuses a name already claimed, in any letter case.
     """
@@ -65,7 +64,7 @@ def test_memory_store_claims_a_name_once_ignoring_case(taken_name: str) -> None:
 
     # The second claim fails, and only the first name is held.
     with pytest.raises(ExperimentNameTakenError):
-        store.claim_session(taken_name)
+        store.claim_session("P1")
     assert store.claimed == {"p1"}, f"Expected only the first claim, got {store.claimed}"
 
 

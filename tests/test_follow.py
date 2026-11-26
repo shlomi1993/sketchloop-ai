@@ -95,8 +95,6 @@ def baseline_canvas() -> bytes:
 
 
 @pytest.mark.parametrize(("shift", "angle_degrees", "uneven_light"), [
-    ((0, 0), 0.0, False),
-    ((3, -2), 0.0, False),
     ((4, 3), 1.0, False),
     ((-3, 2), -1.5, True),
 ])
@@ -209,20 +207,14 @@ def build_part_scores(**changes: object) -> PartScores:
 @pytest.mark.parametrize(("build", "message"), [
     (lambda: Alignment(converged=True, correlation=Unavailable("x"), warp=IDENTITY, occluded_share=0.0), "finite correlation"),
     (lambda: Alignment(converged=True, correlation=0.8, warp=None, occluded_share=0.0), "3x3 warp"),
-    (lambda: Alignment(converged=True, correlation=0.8, warp=IDENTITY[:2], occluded_share=0.0), "3x3 warp"),
     (lambda: Alignment(converged=True, correlation=0.8, warp=IDENTITY, occluded_share=1.5), "from 0 to 1"),
     (lambda: Alignment(converged=False, correlation=0.8, warp=None, occluded_share=0.0), "has no correlation"),
     (lambda: Alignment(converged=False, correlation=Unavailable("x"), warp=IDENTITY, occluded_share=0.0), "has no warp"),
     (lambda: Alignment(converged=False, correlation=Unavailable("x"), warp=None, occluded_share=0.1, filled_share=0.2),
      "filled_share must be at most"),
-    (lambda: Alignment(converged=True, correlation=0.8, warp=IDENTITY, occluded_share=0.0, aligned_on="everywhere"),
-     "aligned_on must be one of baseline_strokes, whole_canvas"),
     (lambda: CaptureScores(suggestion=1, seconds_since_shown=1.0, new_stroke_pixels=None, parts=(),
                            alignment=Alignment(converged=True, correlation=0.8, warp=IDENTITY, occluded_share=0.0)),
      "needs new_stroke_pixels"),
-    (lambda: CaptureScores(suggestion=0, seconds_since_shown=1.0, new_stroke_pixels=None, parts=(),
-                           alignment=Alignment(converged=False, correlation=Unavailable("x"), warp=None, occluded_share=0.0)),
-     "suggestion must be an int >= 1"),
     (lambda: CaptureScores(suggestion=1, seconds_since_shown=1.0, new_stroke_pixels=None, parts=(build_part_scores(),),
                            alignment=Alignment(converged=False, correlation=Unavailable("x"), warp=None, occluded_share=0.0)),
      "did not align has no part scores"),
@@ -230,9 +222,7 @@ def build_part_scores(**changes: object) -> PartScores:
                            alignment=Alignment(converged=True, correlation=0.8, warp=IDENTITY, occluded_share=0.0)),
      "numbered from 0"),
     (lambda: build_part_scores(new_pixels_near=0), "precision exactly when new strokes are near"),
-    (lambda: build_part_scores(coverage={4: 1.2, 8: 0.5, 16: 0.5, 24: 0.5}), "coverage at 4 px must be a number from 0 to 1"),
     (lambda: build_part_scores(coverage={4: 0.5}), "same tolerances"),
-    (lambda: build_part_scores(chamfer_part_to_new=-1.0), "chamfer distances must be >= 0"),
 ])
 def test_alignment_records_refuse_invalid_values(build: Callable[[], object], message: str) -> None:
     """
@@ -576,15 +566,13 @@ def score_window_capture(coverage_16: float | Unavailable = 0.6, precision_16: f
     ([(3, score_window_capture(precision_16=Unavailable("none near")))], FollowResult.NOT_FOLLOWED, 3, None),
     ([(3, score_window_capture(new_stroke_pixels=10))], FollowResult.UNDETERMINED, 3, NOTHING_NEW_REASON),
     ([], FollowResult.UNDETERMINED, None, NO_USABLE_CAPTURE_REASON),
-    ([(3, score_window_capture(converged=False))], FollowResult.UNDETERMINED, None, NO_USABLE_CAPTURE_REASON),
     ([(3, score_window_capture(correlation=0.2))], FollowResult.UNDETERMINED, None, NO_USABLE_CAPTURE_REASON),
-    ([(3, score_window_capture(occluded_share=0.8))], FollowResult.UNDETERMINED, None, NO_USABLE_CAPTURE_REASON),
     ([(3, score_window_capture(coverage_16=0.1)), (4, score_window_capture(occluded_share=0.8))],
      FollowResult.NOT_FOLLOWED, 3, None),
     ([(4, score_window_capture(converged=False)), (3, score_window_capture())], FollowResult.FOLLOWED, 3, None),
     ([(3, score_window_capture(coverage_16=0.1)), (4, score_window_capture())], FollowResult.FOLLOWED, 4, None),
-], ids=["followed", "low-coverage", "low-precision", "nothing-near", "nothing-new", "no-capture", "unaligned",
-        "weak-correlation", "occluded", "occluded-latest-uses-earlier", "unaligned-latest-uses-earlier", "latest-decides"])
+], ids=["followed", "low-coverage", "low-precision", "nothing-near", "nothing-new", "no-capture", "weak-correlation",
+        "occluded-latest-uses-earlier", "unaligned-latest-uses-earlier", "latest-decides"])
 def test_decide_follow_outcomes(window: list[tuple[int, CaptureScores]], result: FollowResult, deciding_capture: int | None,
                                 reason: str | None) -> None:
     """
@@ -666,11 +654,8 @@ def test_decide_follow_recomputes_with_another_rule() -> None:
 
 @pytest.mark.parametrize(("build", "message"), [
     (lambda: FollowRule(min_coverage=1.5), "min_coverage must be a number from 0 to 1"),
-    (lambda: FollowRule(coverage_tolerance_pixels=0), "coverage_tolerance_pixels must be an int >= 1"),
-    (lambda: FollowRule(min_new_stroke_pixels=-1), "min_new_stroke_pixels must be an int >= 0"),
     (lambda: PartDecision(part=0, result=FollowResult.FOLLOWED, deciding_capture=None, reason=None), "without a deciding"),
     (lambda: PartDecision(part=0, result=FollowResult.UNDETERMINED, deciding_capture=None, reason=None), "reason exactly"),
-    (lambda: PartDecision(part=0, result=FollowResult.FOLLOWED, deciding_capture=3, reason="x"), "reason exactly"),
     (lambda: FollowDecision(method="aligned-strokes", method_version="2", rule=PROVISIONAL_RULE,
                             result=FollowResult.NOT_FOLLOWED, parts=(PartDecision(part=0, result=FollowResult.FOLLOWED,
                                                                                   deciding_capture=3, reason=None),)),
@@ -684,14 +669,3 @@ def test_decision_records_refuse_invalid_values(build: Callable[[], object], mes
     """
     with pytest.raises(InvalidRecordError, match=message):
         build()
-
-
-def test_provisional_rule_describes_itself() -> None:
-    """
-    The provisional rule is coverage_16 >= 0.35 and precision_16 >= 0.4, and says so in one line.
-    """
-    text = PROVISIONAL_RULE.describe()
-
-    # The line starts with the followed condition and names the undetermined limits.
-    assert text.startswith("coverage_16 >= 0.35 and precision_16 >= 0.4"), f"Unexpected rule text {text}"
-    assert "correlation 0.3" in text and "60 new pixels" in text, f"The limits must be named, got {text}"

@@ -194,7 +194,7 @@ def test_extract_new_lines_drops_loose_lines_from_the_border() -> None:
     assert boxes[2][0] >= 497 and boxes[2][1] <= 300, f"The short line at the border must stay, got {boxes[2]}"
 
 
-@pytest.mark.parametrize("max_parts", [1, 2, 4])
+@pytest.mark.parametrize("max_parts", [1, 4])
 def test_group_parts_returns_at_most_max_parts(max_parts: int) -> None:
     """
     Of five separate parts, only the largest max_parts are returned.

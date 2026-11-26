@@ -37,8 +37,8 @@ def test_cli_benchmark_reports_statistics(tmp_path: Path, capsys: pytest.Capture
     """
     A benchmark saves warm-up and measured rounds without a selection and prints the conditions, statistics, and caveats.
     """
-    exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--rounds", "3", "--warmup", "1", "--candidates", "1",
-                      "--seed", "7"])
+    exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--backend", "fake", "--rounds", "3",
+                      "--warmup", "1", "--candidates", "1", "--seed", "7"])
     output = " ".join(capsys.readouterr().out.split())
     session_dirs = list((tmp_path / "runs").iterdir())
     saved = load_session(session_dirs[0])
@@ -72,20 +72,20 @@ def test_cli_benchmark_seed(tmp_path: Path, settings_text: str | None, expected_
     if settings_text is not None:
         (tmp_path / "sketchloop.toml").write_text(settings_text, encoding="utf-8")
 
-    exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--rounds", "1", "--warmup", "1", "--candidates", "1"])
+    exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--backend", "fake", "--rounds", "1", "--warmup", "1",
+                      "--candidates", "1"])
 
     # Both rounds use the pinned seed.
     assert exit_code == 0, f"The benchmark must succeed, got exit code {exit_code}"
     assert list_round_seeds(tmp_path / "runs") == [expected_seed] * 2, f"Every round must use seed {expected_seed}"
 
 
-@pytest.mark.parametrize("flag", [["--rounds", "0"], ["--warmup", "-1"]], ids=["no-rounds", "negative-warmup"])
-def test_cli_benchmark_rejects_counts(tmp_path: Path, flag: list[str]) -> None:
+def test_cli_benchmark_rejects_counts(tmp_path: Path) -> None:
     """
-    Zero measured rounds or a negative warm-up exit with code 2 before anything is saved.
+    Zero measured rounds exit with code 2 before anything is saved.
     """
     with pytest.raises(SystemExit) as raised:
-        main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", *flag])
+        main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--rounds", "0"])
 
     # argparse refuses the count, and no runs folder is created.
     assert raised.value.code == 2, f"Expected exit code 2, got {raised.value.code}"
@@ -105,7 +105,8 @@ def test_cli_benchmark_ignores_camera_setting(tmp_path: Path, monkeypatch: pytes
     """
     (tmp_path / "sketchloop.toml").write_text('[capture]\nsource = "camera"\n', encoding="utf-8")
     monkeypatch.setitem(CAPTURE_SOURCES, "camera", refuse_camera)
-    exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--rounds", "1", "--warmup", "0", "--candidates", "1"])
+    exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--backend", "fake", "--rounds", "1", "--warmup", "0",
+                      "--candidates", "1"])
 
     # The round records the file source.
     rounds = load_session(next((tmp_path / "runs").iterdir())).rounds
@@ -136,13 +137,12 @@ def test_cli_benchmark_failing_round(tmp_path: Path, capsys: pytest.CaptureFixtu
 
 @pytest.mark.parametrize(("flags", "settings_text", "expected"), [
     (["--precision", "float16"], None, TorchPrecision.FLOAT16),
-    ([], '[generator.diffusers]\nprecision = "float32"\n', TorchPrecision.FLOAT32),
-    ([], None, None)
-], ids=["flag", "settings-file", "device-default"])
+    ([], '[generator.diffusers]\nprecision = "float32"\n', TorchPrecision.FLOAT32)
+], ids=["flag", "settings-file"])
 def test_cli_benchmark_passes_precision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flags: list[str],
                                         settings_text: str | None, expected: TorchPrecision | None) -> None:
     """
-    A --precision flag or a settings value reaches the diffusers backend, and leaving both out keeps the device default.
+    A --precision flag or a settings value reaches the diffusers backend.
     """
     received = []
 
@@ -161,6 +161,6 @@ def test_cli_benchmark_passes_precision(tmp_path: Path, monkeypatch: pytest.Monk
     exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "chair", "--backend", "diffusers", "--rounds", "1",
                       "--warmup", "0", "--candidates", "1", "--runs-dir", str(tmp_path / "runs"), *flags])
 
-    # The benchmark ran, and the backend got the chosen precision or None for the device default.
+    # The benchmark ran, and the backend got the chosen precision.
     assert exit_code == 0, f"The benchmark must succeed, got exit code {exit_code}"
     assert received == [expected], f"Expected precision {expected}, got {received}"

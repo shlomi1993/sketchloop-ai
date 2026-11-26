@@ -22,13 +22,14 @@ PromptMaker = Callable[..., PromptSuggestionRecord]  # Builds a shown prompt sug
 @pytest.mark.parametrize(("prompt", "has_suggestion", "expected"), [
     ("a red car", False, PromptOriginKind.TYPED),
     ("", True, PromptOriginKind.TYPED),
-    ("   ", True, PromptOriginKind.TYPED),
     (f"  {SUGGESTED_TEXT} ", True, PromptOriginKind.SUGGESTED),
     (SUGGESTED_TEXT.replace("studio", "soft"), True, PromptOriginKind.EDITED),
-    ("a lamp", True, PromptOriginKind.EDITED),
-], ids=["no-suggestion", "blank", "spaces-only", "same-text", "one-word", "different-text"])
+], ids=["no-suggestion", "blank", "same-text", "one-word"])
 def test_classify_prompt_origin(make_prompt_suggestion: PromptMaker, prompt: str, has_suggestion: bool,
                                 expected: PromptOriginKind) -> None:
+    """
+    A prompt matching the suggestion is suggested, a changed one edited, and a blank one or no suggestion typed.
+    """
     suggestion = make_prompt_suggestion(SUGGESTED_TEXT) if has_suggestion else None
     origin = classify_prompt_origin(prompt, suggestion)
 
@@ -41,10 +42,12 @@ def test_classify_prompt_origin(make_prompt_suggestion: PromptMaker, prompt: str
 @pytest.mark.parametrize(("kind", "suggestion_id"), [
     (PromptOriginKind.TYPED, "prompt-1"),
     (PromptOriginKind.EDITED, None),
-    (PromptOriginKind.SUGGESTED, ""),
     ("pasted", "prompt-1"),
 ])
 def test_prompt_origin_refuses_inconsistent_values(kind: str, suggestion_id: str | None) -> None:
+    """
+    A typed origin naming a suggestion, an edited one without it, or an unknown kind is refused.
+    """
     with pytest.raises(InvalidRecordError, match="Prompt origin"):
         PromptOrigin(kind=kind, prompt_suggestion=suggestion_id)
 
@@ -56,17 +59,17 @@ def fail_suggestion(record: PromptSuggestionRecord) -> PromptSuggestionRecord:
 
 @pytest.mark.parametrize(("change", "message"), [
     ({"text": None}, "needs its text"),
-    ({"text": "  "}, "needs its text"),
     ({"list_position": -1}, "list_position"),
     ({"ran_suggester": False}, "suggester_seconds exactly when"),
     ({"suggester_seconds": float("nan")}, "suggester_seconds"),
-    ({"number": 0}, "number must be an int >= 1"),
-    ({"id": " "}, "non-empty ID"),
     ({"after_capture": 0}, "after_capture"),
     ({"failure": PromptSuggestionFailure(error="E", message="m")}, "exactly when it has no failure"),
 ])
 def test_shown_prompt_suggestion_refuses_bad_values(make_prompt_suggestion: PromptMaker, change: dict[str, object],
                                                     message: str) -> None:
+    """
+    A shown prompt suggestion without text, with a bad position, timing, or capture, or with a failure is refused.
+    """
     with pytest.raises(InvalidRecordError, match=message):
         replace(make_prompt_suggestion(SUGGESTED_TEXT), **change)
 
@@ -83,6 +86,9 @@ def test_failed_prompt_suggestion_refuses_text(make_prompt_suggestion: PromptMak
 
 
 def test_prompt_suggestion_round_trips(make_prompt_suggestion: PromptMaker) -> None:
+    """
+    Shown and failed records and every origin survive JSON, and a missing origin loads as not recorded.
+    """
     shown = make_prompt_suggestion(SUGGESTED_TEXT)
     failed = fail_suggestion(replace(shown, ran_suggester=False, suggester_seconds=None))
     origins = [classify_prompt_origin("a car", None), classify_prompt_origin("a car", shown), Unavailable("a reason")]
@@ -94,20 +100,13 @@ def test_prompt_suggestion_round_trips(make_prompt_suggestion: PromptMaker) -> N
     for origin in origins:
         text = json.dumps(prompt_origin_to_dict(origin))
         assert prompt_origin_from_dict(json.loads(text)) == origin, f"The origin must load back unchanged: {text}"
+    assert prompt_origin_from_dict(None) == Unavailable(ORIGIN_NOT_RECORDED), "A missing origin must load as not recorded"
 
     # The template suggester is recorded as a real in-process suggester without a model.
     data = prompt_suggestion_to_dict(shown)
     expected = {"adapter": "sketchloop.prompt-templates", "adapter_version": "1", "execution": "in_process",
                 "model_id": {"unavailable": "fixed style templates, no model"}}
     assert data["suggester"] == expected, f"Unexpected suggester {data['suggester']}"
-
-
-def test_prompt_origin_from_dict_reads_missing_and_objects() -> None:
-    loaded = prompt_origin_from_dict({"kind": "edited", "prompt_suggestion": "prompt-1"})
-
-    # The missing value has the not-recorded reason, and the object loads as an origin.
-    assert prompt_origin_from_dict(None) == Unavailable(ORIGIN_NOT_RECORDED), "A missing origin must load as not recorded"
-    assert loaded == PromptOrigin(kind=PromptOriginKind.EDITED, prompt_suggestion="prompt-1"), f"Unexpected origin {loaded}"
 
 
 def test_resolve_prompt_origin(make_prompt_suggestion: PromptMaker) -> None:

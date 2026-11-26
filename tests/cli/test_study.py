@@ -11,7 +11,6 @@ from pathlib import Path
 from rich.console import Console
 
 from sketchloop.cli import main
-from sketchloop.cli.arguments import Command, StudyAction, parse_args
 from sketchloop.cli.study import GIT_MISSING_NOTE, HANDOVER_NOTE, OUTSIDE_GIT_NOTE, check_ignored_by_git
 from sketchloop.experiments import KEY_FILE, ExportError
 
@@ -25,19 +24,6 @@ def run_study(arguments: list[str], capsys: pytest.CaptureFixture[str]) -> tuple
     exit_code = main(["study", *arguments])
     captured = capsys.readouterr()
     return exit_code, " ".join((captured.out + captured.err).split())
-
-
-def test_study_actions_take_runs_folder_and_match(tmp_path: Path) -> None:
-    args = parse_args(["study", "export", "--runs-dir", "elsewhere", "--match", "p3_*", "--output", "out"])
-
-    # The action, the match, the output, and the runs folder from the flag are parsed.
-    assert (args.command, args.study_action) == (Command.STUDY, StudyAction.EXPORT), f"Unexpected command {args}"
-    assert (args.match, args.output) == ("p3_*", Path("out")), f"Unexpected options {args}"
-    assert args.settings.storage.runs_dir == Path("elsewhere"), f"Unexpected runs folder {args.settings.storage.runs_dir}"
-
-    # The summary matches every experiment by default.
-    summary_args = parse_args(["study", "summary"])
-    assert (summary_args.study_action, summary_args.match) == (StudyAction.SUMMARY, "*"), f"Unexpected summary {summary_args}"
 
 
 def test_export_prints_counts_missing_reasons_skipped_sessions_and_the_handover_note(

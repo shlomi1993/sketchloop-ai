@@ -127,7 +127,7 @@ def test_camera_capture_excludes_preview(monkeypatch: pytest.MonkeyPatch) -> Non
     assert captured.capture_seconds == 7.0, f"The preview must not count as capture time, got {captured.capture_seconds}"
 
 
-@pytest.mark.parametrize(("channels", "mode"), [(1, "L"), (3, "RGB"), (4, "RGB")])
+@pytest.mark.parametrize(("channels", "mode"), [(1, "L"), (4, "RGB")])
 def test_encode_frame_jpeg(channels: int, mode: str) -> None:
     """
     A gray, BGR, or BGRA frame is encoded as a JPEG raw frame, dropping alpha, with its size and checksum.

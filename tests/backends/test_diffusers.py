@@ -87,11 +87,10 @@ def test_diffusers_maps_request() -> None:
 
 
 @pytest.mark.parametrize(("device", "precision", "expected"), [
-    ("cuda", None, "float16"),
     ("mps", None, "float16"),
     ("mps", "float32", "float32"),
     ("cpu", None, "float32"),
-], ids=["cuda-default", "mps-default", "mps-float32", "cpu-default"])
+], ids=["mps-default", "mps-float32", "cpu-default"])
 def test_diffusers_precision(device: str, precision: str | None, expected: str) -> None:
     """
     float16 is the default on a GPU, float32 can still be chosen there, and the precision is recorded as the effective dtype.

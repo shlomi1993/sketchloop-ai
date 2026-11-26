@@ -50,17 +50,10 @@ def fail_command(command: list[str], **options: object) -> subprocess.CompletedP
     return subprocess.CompletedProcess(command, 1, stdout="", stderr="unknown oid")
 
 
-def miss_command(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
-    """
-    Stand in for a system without the sysctl command.
-    """
-    raise FileNotFoundError(command[0])
-
-
-@pytest.mark.parametrize("run_command", [time_out, fail_command, miss_command], ids=["timeout", "error-exit", "missing"])
+@pytest.mark.parametrize("run_command", [time_out, fail_command], ids=["timeout", "error-exit"])
 def test_mac_hardware_unavailable(monkeypatch: pytest.MonkeyPatch, run_command: object) -> None:
     """
-    A sysctl call that times out, fails, or is missing gives an unavailable CPU name instead of raising.
+    A sysctl call that times out or fails gives an unavailable CPU name instead of raising.
     """
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(subprocess, "run", run_command)

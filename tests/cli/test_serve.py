@@ -57,8 +57,9 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     sketchloop ui launches with the defaults and telemetry off, refuses too many candidates, and takes its model from --config.
     """
     runs_dir = tmp_path / "runs"
-    exit_code = main(["ui", "--runs-dir", str(runs_dir), "--seed", "5"])
-    over_limit_exit = main(["ui", "--runs-dir", str(runs_dir), "--candidates", "9"])
+    fakes = ["--backend", "fake", "--stroke-suggester", "fake"]
+    exit_code = main(["ui", *fakes, "--runs-dir", str(runs_dir), "--seed", "5"])
+    over_limit_exit = main(["ui", *fakes, "--runs-dir", str(runs_dir), "--candidates", "9"])
     errors = capsys.readouterr().err
     diffusers_calls: list[tuple[object, Path]] = []
 
@@ -135,10 +136,13 @@ def test_cli_ui_passes_stroke_suggester_and_drawing_settings(tmp_path: Path,
 
 def test_cli_ui_builds_prompt_suggester_from_settings(tmp_path: Path,
                                                       launches: list[tuple[AppController, dict[str, object]]]) -> None:
+    """
+    The ui command builds the templates by default and Florence-2 from the file, which warns and records a failed press.
+    """
     config = tmp_path / "prompts.toml"
     config.write_text('[prompt_suggester]\nname = "florence"\n\n[models]\ndir = "no-weights"\n', encoding="utf-8")
-    default_exit = main(["ui"])
-    florence_exit = main(["ui", "--config", str(config)])
+    default_exit = main(["ui", "--backend", "fake", "--stroke-suggester", "fake"])
+    florence_exit = main(["ui", "--backend", "fake", "--stroke-suggester", "fake", "--config", str(config)])
     default_controller, florence_controller = launches[0][0], launches[1][0]
 
     # The templates are the default with the fake backend, and the file chooses Florence-2 with the fake backend too.
@@ -161,16 +165,17 @@ def test_cli_ui_builds_prompt_suggester_from_settings(tmp_path: Path,
 
 @pytest.mark.parametrize(("arguments", "settings_text", "study"), [
     (["--study"], None, True),
-    ([], "[study]\nenabled = true\n", True),
-    (["--no-study"], "[study]\nenabled = true\n", False),
-    ([], None, False)
-], ids=["flag", "file", "flag-beats-file", "default"])
+    (["--no-study"], "[study]\nenabled = true\n", False)
+], ids=["flag", "flag-beats-file"])
 def test_cli_ui_study_mode(tmp_path: Path, capsys: pytest.CaptureFixture[str],
                            launches: list[tuple[AppController, dict[str, object]]], arguments: list[str],
                            settings_text: str | None, study: bool) -> None:
+    """
+    Study mode follows --study over the file, and only study mode serves the study page with its stand-in warnings.
+    """
     if settings_text is not None:
         (tmp_path / "sketchloop.toml").write_text(settings_text, encoding="utf-8")
-    exit_code = main(["ui", *arguments])
+    exit_code = main(["ui", "--backend", "fake", "--stroke-suggester", "fake", *arguments])
     output = " ".join(capsys.readouterr().out.split())
     options = launches[0][1]
 

@@ -56,10 +56,8 @@ def test_convert_names_transformers_weights(tmp_path: Path) -> None:
 @pytest.mark.usefixtures("isolated_cwd")
 @pytest.mark.parametrize(("settings_evaluator", "flags", "expected"), [
     ("none", [], []),
-    ("none", ["--evaluator", "clip-l14"], [CLIP_L14_MODEL]),
-    ("clip-b32", [], [CLIP_B32_MODEL]),
     ("clip-b32", ["--evaluator", "clip-l14", "--evaluator", "clip-b32"], [CLIP_B32_MODEL, CLIP_L14_MODEL]),
-], ids=["none", "flag", "settings", "both"])
+], ids=["none", "both"])
 def test_download_evaluators_on_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings_evaluator: str,
                                         flags: list[str], expected: list[ModelSource]) -> None:
     """

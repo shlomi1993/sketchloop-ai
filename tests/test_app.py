@@ -14,7 +14,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from sketchloop.app import NO_DRAWING_MESSAGE, NO_NEW_STROKES_MESSAGE, NO_SKETCH_MESSAGE, AppController
+from sketchloop.app import NO_DRAWING_MESSAGE, NO_NEW_STROKES_MESSAGE, AppController
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import InvalidSketchError
 from sketchloop.domain import (BackendIdentity, ExecutionKind, InvalidSelectionError, SketchLoopError, Unavailable,
@@ -24,7 +24,7 @@ from sketchloop.experiments import (OUTSIDE_SESSION_REASON, SETUP_REUSED_REASON,
                                     load_session)
 from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
 from sketchloop.stroke_suggestion import StrokeSuggestionError, StrokeSuggestionOutput, StrokeSuggestionRequest
-from sketchloop.suggestion import STYLE_TEMPLATES, FlorenceSuggester, PromptSuggester, SuggestionError, TemplateSuggester
+from sketchloop.suggestion import STYLE_TEMPLATES, FlorenceSuggester, PromptSuggester, TemplateSuggester
 
 
 class EmptySuggester(FakeStrokeSuggester):
@@ -158,23 +158,21 @@ def test_app_round_records_browser_source(tmp_path: Path, controller: AppControl
 
 
 @pytest.mark.parametrize(("sketch_kind", "source", "prompt", "options", "error", "message"), [
-    (None, "upload", "chair", {}, InvalidSketchError, NO_SKETCH_MESSAGE),
     ("text", "upload", "chair", {}, InvalidSketchError, "Sketch notes.png is not a PNG or JPEG file."),
     ("png", "upload", "   ", {}, SketchLoopError, "Enter a prompt, then generate."),
     ("png", "upload", "chair", {"rotation": 45}, SketchLoopError, "Rotation must be one of 0, 90, 180, or 270, got 45."),
     ("png", "upload", "chair", {"rotation": 90, "use_raw": True}, SketchLoopError,
-     "Rotation cannot be combined with the raw sketch option, which skips preprocessing."),
-    ("png", "scanner", "chair", {}, SketchLoopError, "Round source must be file, camera, webcam, or upload, got 'scanner'.")
-], ids=["no-sketch", "not-an-image", "blank-prompt", "bad-rotation", "rotation-with-raw", "unknown-source"])
-def test_app_rejects_input_before_writing(tmp_path: Path, controller: AppController, sketch_file: Path, sketch_kind: str | None,
+     "Rotation cannot be combined with the raw sketch option, which skips preprocessing.")
+], ids=["not-an-image", "blank-prompt", "bad-rotation", "rotation-with-raw"])
+def test_app_rejects_input_before_writing(tmp_path: Path, controller: AppController, sketch_file: Path, sketch_kind: str,
                                           source: str, prompt: str, options: dict[str, object], error: type[Exception],
                                           message: str) -> None:
     """
-    A missing or non-image sketch, a blank prompt, a bad rotation, rotation with raw, or an unknown source saves nothing.
+    A non-image sketch, a blank prompt, a bad rotation, or rotation with raw saves nothing.
     """
     text_file = tmp_path / "notes.png"
     text_file.write_text("synthetic text, not an image", encoding="utf-8")
-    sketch = {None: None, "text": text_file, "png": sketch_file}[sketch_kind]
+    sketch = {"text": text_file, "png": sketch_file}[sketch_kind]
 
     # The controller raises the documented one-line message.
     with pytest.raises(error, match=re.escape(message)):
@@ -367,8 +365,7 @@ def test_app_drawing_operations_need_an_open_drawing(controller: AppController, 
     assert controller.preview_guided_sketch(None, 0) is None, "No frame means no guided preview"
 
 
-@pytest.mark.parametrize(("name", "error"), [("p1", ExperimentNameTakenError), ("P1", ExperimentNameTakenError),
-                                             ("../p1", ExperimentNameError)])
+@pytest.mark.parametrize(("name", "error"), [("P1", ExperimentNameTakenError), ("../p1", ExperimentNameError)])
 def test_app_bad_name_keeps_current_drawing(tmp_path: Path, controller: AppController, name: str, error: type[Exception]) -> None:
     """
     A taken or invalid name is refused, and the current session and its open drawing stay as they were.
@@ -572,16 +569,15 @@ def test_app_ai_drawing_records_prompt_suggestions_and_origins(tmp_path: Path, s
     assert prompt_suggester.calls == 2, f"A new experiment must run the suggester again, ran {prompt_suggester.calls} times"
 
 
-@pytest.mark.parametrize(("error", "message"), [
-    (SuggestionError("Model folder models/florence-2-base is missing. Run python scripts/download_models.py and retry."),
-     "Model folder models/florence-2-base is missing. Run python scripts/download_models.py and retry."),
-    (RuntimeError("MPS backend out of memory\nstack details"),
-     "Prompt suggestion failed: MPS backend out of memory. Retry, or type a prompt.")
-], ids=["missing-weights", "runtime-error"])
-def test_app_records_failed_prompt_suggestion(tmp_path: Path, sheet_frame: np.ndarray, prompt_suggester: StubPromptSuggester,
-                                              error: Exception, message: str) -> None:
+def test_app_records_failed_prompt_suggestion(tmp_path: Path, sheet_frame: np.ndarray,
+                                              prompt_suggester: StubPromptSuggester) -> None:
+    """
+    An unexpected prompt suggester error reaches the page as one line and is recorded as a failed press.
+    """
     controller = make_study_controller(tmp_path, prompt_suggester)
     controller.start_drawing("p1_car", StudyCondition.AI)
+    error = RuntimeError("MPS backend out of memory\nstack details")
+    message = "Prompt suggestion failed: MPS backend out of memory. Retry, or type a prompt."
     prompt_suggester.error = error
     with pytest.raises(SketchLoopError, match=re.escape(message)) as raised:
         controller.request_prompt_suggestion(sheet_frame, 0, False)

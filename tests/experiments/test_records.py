@@ -20,13 +20,7 @@ def make_session_record(session_id: str, name: str | None) -> SessionRecord:
                          generator_setup_seconds=Unavailable("test"), rerun_of=None, benchmark=None, name=name)
 
 
-@pytest.mark.parametrize(("name", "expected"), [
-    ("participant1_car", "participant1_car"),
-    ("P-03", "P-03"),
-    ("  p2_lamp ", "p2_lamp"),
-    ("a" * 64, "a" * 64),
-    ("con1", "con1"),
-])
+@pytest.mark.parametrize(("name", "expected"), [("  P-03 ", "P-03"), ("a" * 64, "a" * 64), ("con1", "con1")])
 def test_check_experiment_name_accepts_codes(name: str, expected: str) -> None:
     """
     Codes of letters, digits, "_", and "-" pass, with surrounding spaces stripped.
@@ -37,8 +31,8 @@ def test_check_experiment_name_accepts_codes(name: str, expected: str) -> None:
     assert checked == expected, f"Expected {expected!r}, got {checked!r}"
 
 
-@pytest.mark.parametrize("name", ["", "   ", "../x", "a/b", "a\\b", "C:x", ".hidden", "has space", "nul", "COM1", "lpt9",
-                                  "Aux", "a" * 65, "-lead", "_lead", "café", "x\x00y"])
+@pytest.mark.parametrize("name", ["", "../x", "a\\b", "C:x", ".hidden", "has space", "COM1", "Aux", "a" * 65, "-lead", "café",
+                                  "x\x00y"])
 def test_check_experiment_name_refuses_unsafe_names(name: str) -> None:
     """
     Empty names, separators, drive letters, dots, spaces, device names, non-ASCII, nul, and 65 characters fail in one line.

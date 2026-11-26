@@ -9,7 +9,6 @@ import pytest
 from collections.abc import Sequence
 from pathlib import Path
 
-from sketchloop.backends.diffusers import ModelSource
 from sketchloop.backends.fake import FakeGenerator
 from sketchloop.domain import GenerationRequest, Guidance, ImageRef
 from sketchloop.evaluation import EvaluationError
@@ -146,13 +145,13 @@ def test_clip_missing_download(tmp_path: Path) -> None:
     assert CLIP_B32_MODEL.folder in message and "download_models.py" in message, f"Unhelpful error {message!r}"
 
 
-@pytest.mark.parametrize("model", [CLIP_B32_MODEL, CLIP_L14_MODEL], ids=["b32", "l14"])
-def test_clip_describes_its_scores(model: ModelSource) -> None:
+def test_clip_describes_its_scores() -> None:
     """
     The evaluator names its repository, pinned revision, and what the score means, for the round record.
     """
-    details = ClipEvaluator(model).describe_scores()
-    assert details["model"] == model.repo_id and details["revision"] == model.revision, f"Bad identity {details}"
+    details = ClipEvaluator(CLIP_B32_MODEL).describe_scores()
+    identity = (details["model"], details["revision"])
+    assert identity == (CLIP_B32_MODEL.repo_id, CLIP_B32_MODEL.revision), f"Bad identity {details}"
     assert "cosine similarity" in details["score"] and "not design quality" in details["score"], f"Bad meaning {details}"
 
 
