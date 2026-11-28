@@ -13,7 +13,7 @@ This guide explains how to run the user study. Five participants each draw four 
 ## Start the page
 
 ```sh
-sketchloop ui --config study.toml
+sketchloop start --config study.toml
 ```
 
 Wait until the terminal says next-stroke suggestions are ready, about 30 s. Fix any yellow warning before you start.

@@ -12,12 +12,12 @@ mode = "fast"  # fast or quality, omit for the device default
 dir = "models"  # relative to this file, holds every model, and scripts/download_models.py downloads here
 
 [capture]
-source = "camera"  # file or camera, for sketchloop run
+source = "camera"  # file or camera, for sketchloop dev run
 camera_index = 0
 
 [preprocessing]
 name = "strokes"  # strokes for paper photos, or minimal for clean scans and digital drawings
-rotation = 0  # 0, 90, 180, or 270, for sketchloop run
+rotation = 0  # 0, 90, 180, or 270, for sketchloop dev run
 raw = false
 
 [evaluator]

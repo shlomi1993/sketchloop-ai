@@ -62,7 +62,7 @@ The installer creates or reuses `sketchloop-ai-venv`, installs the package with 
 ### 2. Try it without a model
 
 ```sh
-sketchloop ui
+sketchloop start
 ```
 
 This opens a local page, usually at <http://127.0.0.1:7860>, with the fake backend and the fake stroke suggester. They make clearly labeled noise images and test shapes, so you can explore the whole workflow in seconds before downloading anything.
@@ -71,16 +71,16 @@ This opens a local page, usually at <http://127.0.0.1:7860>, with the fake backe
 
 ```sh
 python scripts/download_models.py
-sketchloop ui --backend diffusers --stroke-suggester controlnet
+sketchloop start --backend diffusers --stroke-suggester controlnet
 ```
 
-The download script fetches about 7 GB into the git-ignored `models/` folder and skips files already present. It fetches a CLIP evaluator's weights only when the settings file names that evaluator or you ask for it, as in `python scripts/download_models.py --evaluator clip-b32 --evaluator clip-l14`. To keep your own choices, copy [examples/sketchloop.toml](examples/sketchloop.toml) to `sketchloop.toml`, and plain `sketchloop` then uses them. For the user study, `sketchloop ui --config study.toml` uses the committed [study.toml](study.toml), as described in [the study guide](docs/STUDY-GUIDE.md).
+The download script fetches about 7 GB into the git-ignored `models/` folder and skips files already present. It fetches a CLIP evaluator's weights only when the settings file names that evaluator or you ask for it, as in `python scripts/download_models.py --evaluator clip-b32 --evaluator clip-l14`. To keep your own choices, copy [examples/sketchloop.toml](examples/sketchloop.toml) to `sketchloop.toml`, and plain `sketchloop` then uses them. For the user study, `sketchloop start --config study.toml` uses the committed [study.toml](study.toml), as described in [the study guide](docs/STUDY-GUIDE.md).
 
 ## Using the browser page
 
-Run `sketchloop`, which is short for `sketchloop ui`. The page is served on 127.0.0.1 only, with no share link and Gradio analytics off.
+Run `sketchloop`, which is short for `sketchloop start`. The page is served on 127.0.0.1 only, with no share link and Gradio analytics off.
 
-The page is for guided drawing. The experimenter types an experiment name such as `participant1_car`, chooses With AI or Without AI, and presses Start. The name becomes the session folder, as in `runs/participant1_car/`. While the drawing is open, the page saves the sketch every 2 s. With AI, **Suggest a prompt** and **Suggest next strokes** appear, and suggested parts show in color over the live sketch. Each suggestion is checked against what is drawn next and recorded as followed, not followed, or undetermined, part by part. The participant never sees these decisions, and `sketchloop show` prints them. Image generation stays available from the command line with `sketchloop run`.
+The page is for guided drawing. The experimenter types an experiment name such as `participant1_car`, chooses With AI or Without AI, and presses Start. The name becomes the session folder, as in `runs/participant1_car/`. While the drawing is open, the page saves the sketch every 2 s. With AI, **Suggest a prompt** and **Suggest next strokes** appear, and suggested parts show in color over the live sketch. Each suggestion is checked against what is drawn next and recorded as followed, not followed, or undetermined, part by part. The participant never sees these decisions, and `sketchloop dev show` prints them. Image generation stays available from the command line with `sketchloop dev run`.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -93,7 +93,7 @@ The page is for guided drawing. The experimenter types an experiment name such a
 | `--prompt-suggester` | `templates` | `templates` or `florence` for the Florence-2 model behind Suggest a prompt |
 | `--config` | `./sketchloop.toml` if present | Settings file |
 
-**The page:** the command prints a warning for each stand-in, the fake stroke suggester or the template prompts, since a study needs the real ones. `sketchloop ui --config study.toml` chooses the real ones, and [the study guide](docs/STUDY-GUIDE.md) has the full procedure.
+**The page:** the command prints a warning for each stand-in, the fake stroke suggester or the template prompts, since a study needs the real ones. `sketchloop start --config study.toml` chooses the real ones, and [the study guide](docs/STUDY-GUIDE.md) has the full procedure.
 
 - **Participant view:** only the sketch view, the prompt box, and a status line worded the same in both conditions. "Suggest a prompt" and "Suggest next strokes" appear only while a drawing with AI is open, in a column that keeps its space without them, so nothing moves between conditions. Image generation is not part of study mode.
 - **Experimenter panel:** at the bottom, holding the experiment name, the condition (With AI or Without AI, no default), Start, Finish, and the camera controls. It is open when the page loads, because the webcam only starts once its panel has been shown, and Start closes it. Start needs a name and a condition and clears both, so nothing carries over to the next experiment.
@@ -113,23 +113,25 @@ sketchloop study summary [--runs-dir runs] [--match "p3_*"]
 
 ## Using the command line
 
+`start` launches the browser page, `study` manages study exports and summaries, and `dev` groups development and research tools. Run `sketchloop dev --help` to list them. The old `ui` and top-level `run`, `show`, `rerun`, and `benchmark` commands are no longer accepted.
+
 | Command | What it does |
 | --- | --- |
-| `sketchloop run SKETCH --prompt TEXT` | Run rounds in the terminal from an image file |
-| `sketchloop run --camera --prompt TEXT` | Same, capturing from a webcam |
-| `sketchloop show runs/SESSION` | Print a saved session and check its files, without loading a model |
-| `sketchloop rerun runs/SESSION --round N` | Repeat a round as a new linked session |
-| `sketchloop benchmark SKETCH --prompt TEXT` | Time repeated rounds and report statistics per stage |
-| `sketchloop ui` | Open the browser page, also the default with no command |
+| `sketchloop dev run SKETCH --prompt TEXT` | Run rounds in the terminal from an image file |
+| `sketchloop dev run --camera --prompt TEXT` | Same, capturing from a webcam |
+| `sketchloop dev show runs/SESSION` | Print a saved session and check its files, without loading a model |
+| `sketchloop dev rerun runs/SESSION --round N` | Repeat a round as a new linked session |
+| `sketchloop dev benchmark SKETCH --prompt TEXT` | Time repeated rounds and report statistics per stage |
+| `sketchloop start` | Open the browser page, also the default with no command |
 | `sketchloop study export` | Export blinded final drawings for expert evaluation |
 | `sketchloop study summary` | Print one row per study drawing |
 
-Run any command with `--help` for all its options. `run`, `ui`, and `benchmark` share `--backend`, `--mode`, `--precision`, `--seed`, `--candidates`, and `--runs-dir`.
+Run any command with `--help` for all its options. `dev run`, `start`, and `dev benchmark` share `--backend`, `--mode`, `--precision`, `--seed`, `--candidates`, and `--runs-dir`.
 
 ### Run rounds in the terminal
 
 ```sh
-sketchloop run examples/sketch-photo.jpg --prompt "modern chair"
+sketchloop dev run examples/sketch-photo.jpg --prompt "modern chair"
 ```
 
 This generates four candidates by default and asks you to pick some by number. Add `--raw` to generate from the unprocessed image, or `--rotate 90` to turn it first. With `--camera`, a preview window opens, Space captures, and Esc cancels, and `--camera-index 1` picks a second camera.
@@ -149,8 +151,8 @@ Each round prints how long every stage took (capture, preprocessing, model load,
 ### Inspect and rerun a session
 
 ```sh
-sketchloop show runs/<session>
-sketchloop rerun runs/<session> --round 1
+sketchloop dev show runs/<session>
+sketchloop dev rerun runs/<session> --round 1
 ```
 
 `show` prints the records and lists missing or changed files. For a guided drawing it prints the experiment name, the study condition, the drawing's length and captures, the suggester and the rule, each prompt suggestion, the final prompt, and for each suggestion its prompt as typed and how it came about, parts, timings, and whether each part was followed. Records saved before a value was recorded say "not recorded". `rerun` recreates the backend and settings from the recorded round, generates from the stored `sketch.png`, and reports which candidates came out byte-identical and what changed in the environment. It never claims exact replay when the backend cannot guarantee it.
@@ -158,7 +160,7 @@ sketchloop rerun runs/<session> --round 1
 ### Benchmark
 
 ```sh
-sketchloop benchmark examples/sketch-photo.jpg --prompt "modern chair" --rounds 5 --warmup 1
+sketchloop dev benchmark examples/sketch-photo.jpg --prompt "modern chair" --rounds 5 --warmup 1
 ```
 
 The benchmark runs the warm-up rounds and then the measured rounds with one loaded backend, records no selection, and prints the median, p95, minimum, and maximum of every stage and the total. It uses seed 0 unless one is given. With fewer than 20 measured rounds, the p95 is only indicative. See [the latency baseline](docs/results/t08-latency-baseline.md) for measured numbers.
@@ -189,12 +191,12 @@ Settings live in TOML files, so you do not have to repeat flags. A command-line 
 ```sh
 cp examples/sketchloop.toml sketchloop.toml   # once, then edit it
 sketchloop                                    # reads sketchloop.toml when it exists
-sketchloop ui --config study.toml             # reads study.toml instead
+sketchloop start --config study.toml             # reads study.toml instead
 ```
 
-`--config PATH` works with `run`, `ui`, `rerun`, `benchmark`, and `study`. With `--config`, the local `sketchloop.toml` is not read. Without any file, the built-in defaults use the fake backend and the fake stroke suggester, which need no model.
+`--config PATH` works with `dev run`, `start`, `dev rerun`, `dev benchmark`, and `study`. With `--config`, the local `sketchloop.toml` is not read. Without any file, the built-in defaults use the fake backend and the fake stroke suggester, which need no model.
 
-- **Scope:** the file chooses the backend, mode, and precision, the image source for `run`, the preprocessor, the evaluator, the store and its runs folder, and the default candidates and seed for `run` and `ui`.
+- **Scope:** the file chooses the backend, mode, and precision, the image source for `dev run`, the preprocessor, the evaluator, the store and its runs folder, and the default candidates and seed for `dev run` and `start`.
 - **Paths:** a relative `runs_dir` or `[models] dir` is relative to the file's folder. Run `scripts/download_models.py` with the same file, so it downloads where the backend looks.
 - **Feedback:** a command that uses a file first prints `Settings:` with its path, and a bad value exits with one line naming the key.
 - **Rerun:** `rerun` takes only the store and models folder from the file, and everything else from the recorded round. It scores with the evaluator the round recorded, and uses the file's evaluator only when the recorded one cannot be recreated, saying so.
