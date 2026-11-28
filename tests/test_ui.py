@@ -170,10 +170,11 @@ def test_study_page_builds_only_the_participant_and_experimenter_controls(contro
     labels = [str(getattr(block, "label", "") or "") for block in blocks]
     assert not built and "Seed" not in labels, f"The study page must not build generation components, found {built}"
 
-    # The header is the title only, and the panel names the prompt suggester and says to use the participant's tab.
+    # The header is the title only, and the panel names the prompt suggester in its settings card.
     texts = [block.value or "" for block in blocks if isinstance(block, gradio.Markdown)]
     assert "# SketchLoop" in texts and controller.describe_backend() not in texts[0], f"Unexpected header {texts[0]!r}"
-    assert any(controller.describe_prompt_suggester() in text for text in texts), "The panel must name the prompt suggester"
+    system = next(block for block in blocks if isinstance(block, gradio.HTML) and block.elem_id == "system")
+    assert "System settings" in system.value and "templates" in system.value, "The panel must name the prompt suggester"
 
     # The prompt names no object, the condition has no default, and the panel starts open so the webcam can start.
     prompts = [block for block in blocks if isinstance(block, gradio.Textbox) and block.label == "Prompt"]

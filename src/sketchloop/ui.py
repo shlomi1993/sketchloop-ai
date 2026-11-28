@@ -9,12 +9,16 @@ import threading
 import time
 
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 from typing import Final, TypeAlias
 
 from sketchloop.app import NO_FRAME_MESSAGE, AppController, DrawingView, SuggestionView
+from sketchloop.backends.diffusers import GenerationMode, TorchDevice, TorchPrecision
+from sketchloop.components import GENERATORS, PROMPT_SUGGESTERS, STROKE_SUGGESTERS
 from sketchloop.domain import Rotation, SketchLoopError, SketchSource
 from sketchloop.experiments import StudyCondition
+from sketchloop.generation import ControlSpec
 
 
 SOURCE_CHOICES: Final = [("Live webcam", SketchSource.WEBCAM), ("Upload a file", SketchSource.UPLOAD)]
@@ -29,7 +33,6 @@ STYLESHEET_PATH: Final = STATIC_DIR / "ui.css"
 SCRIPT_PATH: Final = STATIC_DIR / "ui.js"
 
 FAKE_BACKEND_PREFIX: Final = "**Fake backend:** these images are deterministic noise, not output from a real model."
-SHARED_SESSION_NOTE: Final = "All browser tabs share one session, and reloading keeps it."
 STALE_FRAME_MESSAGE: Final = "The webcam stopped sending frames. Restart it and try again."
 
 # Guided drawing texts. Nothing on the page names a task or goal, since the system is never told one.
@@ -39,8 +42,8 @@ FAKE_SUGGESTER_PREFIX: Final = "**Fake suggester:** these are test shapes, not A
 FINISH_FIRST_MESSAGE: Final = "Finish the current drawing first."
 SUGGESTING_STATUS: Final = "Suggesting next strokes, usually a few seconds."
 PLAIN_PREVIEW_LABEL: Final = "Sketch the model will receive"
-OPEN_DRAWING_LABEL: Final = "Your sketch"
-GUIDED_PREVIEW_LABEL: Final = "Your sketch with suggested strokes"
+OPEN_DRAWING_LABEL: Final = "Sketch"
+GUIDED_PREVIEW_LABEL: Final = "Sketch with suggested strokes"
 
 # Sketch view heights in pixels, taller while a drawing is open so the suggested strokes read at a glance.
 PLAIN_PREVIEW_HEIGHT: Final = 320
@@ -98,6 +101,71 @@ StudyDrawingOutputs: TypeAlias = tuple[str, gr.Button, gr.Button, gr.Textbox, gr
 
 # A drawing's experiment, number, open state, and suggestion count, or None before the first drawing.
 DrawingSignature: TypeAlias = tuple[str | None, int, bool, int] | None
+
+
+def build_setting_row(label: str, choices: tuple[str, ...], active: str) -> str:
+    """
+    Render escaped option chips with the active value highlighted.
+
+    Args:
+        label (str): Setting name shown beside the chips.
+        choices (tuple[str, ...]): Available values to display.
+        active (str): Value selected by the loaded component.
+
+    Returns:
+        str: HTML for one read-only settings row.
+    """
+    # Include an unregistered component's actual value rather than highlighting a known but unused option.
+    values = tuple(dict.fromkeys((*choices, active)))
+    chips = []
+    for value in values:
+        selected = value == active
+        state = " selected" if selected else ""
+        suffix = '<span class="setting-check" aria-hidden="true">✓</span>' if selected else ""
+        description = ' aria-label="' + escape(value, quote=True) + ', active"' if selected else ""
+        chips.append(f'<span class="setting-value{state}"{description}>{suffix}{escape(value)}</span>')
+
+    return f'<div class="setting-row"><span class="setting-key">{escape(label)}</span><div class="setting-values">{"".join(chips)}</div></div>'  # noqa: E501
+
+
+def identify_component(component: object) -> str:
+    """
+    Derive a display name from a component's registry or adapter name.
+    """
+    # Built-in components publish a registry name or a persisted adapter name, and custom ones keep their class name.
+    name = getattr(component, "BACKEND_NAME", None) or getattr(component, "ADAPTER_NAME", type(component).__name__)
+    return str(name).removeprefix("sketchloop.").removesuffix("-strokes").removesuffix("-prompts").replace("prompt-templates", "templates")  # noqa: E501
+
+
+def build_runtime_rows(component: object, controls: tuple[ControlSpec, ...]) -> str:
+    """
+    Render runtime values exposed by a component without loading its model.
+
+    Args:
+        component (object): Component whose runtime attributes are displayed when available.
+        controls (tuple[ControlSpec, ...]): Supported controls with defaults and ranges.
+
+    Returns:
+        str: HTML rows for device, precision, mode, and steps when available.
+    """
+    # Show only runtime settings exposed by this component, without loading a model or guessing a device.
+    rows = []
+    for label, attribute, choices in (("Device", "device", tuple(device.upper() for device in TorchDevice)),
+                                      ("Precision", "precision", tuple(TorchPrecision)),
+                                      ("Mode", "mode", tuple(GenerationMode))):
+        value = getattr(component, attribute, None)
+        if value is not None:
+            active = str(value).upper() if attribute == "device" else str(value)
+            rows.append(build_setting_row(label, choices, active))
+
+    # Numeric controls show the available range beside the active default, rather than dozens of chips.
+    for control in controls:
+        if control.name == "steps" and control.default is not None:
+            bounds = f"{control.minimum}–{control.maximum}" if control.minimum is not None else ""
+            row = build_setting_row("Steps", (), str(control.default))
+            rows.append(row.replace('</div></div>', f'<span class="setting-range">{escape(bounds)}</span></div></div>'))
+
+    return "".join(rows)
 
 
 def pick_rotation(choice: str, use_raw: bool) -> int:
@@ -779,12 +847,22 @@ class SketchPage:
 
     def describe_system(self) -> str:
         """
-        Describe the backend, both suggesters, and the shared session for the experimenter, with a warning per stand-in.
+        Render read-only component settings and stand-in warnings for the experimenter.
         """
         controller = self.controller
-        lines = [controller.describe_backend(), controller.describe_stroke_suggester(), controller.describe_prompt_suggester(),
-                 SHARED_SESSION_NOTE, *(f"**Stand-in:** {warning}" for warning in controller.list_stand_in_warnings())]
-        return "\n".join(f"- {line}" for line in lines)
+        generator = controller.generator
+        strokes = controller.stroke_suggester
+        groups = [
+            ("Image generation", build_setting_row("Backend", tuple(GENERATORS), identify_component(generator))
+             + build_runtime_rows(generator, generator.capabilities.controls)),
+            ("Next strokes", build_setting_row("Suggester", tuple(STROKE_SUGGESTERS), identify_component(strokes))
+             + build_runtime_rows(strokes, strokes.controls)),
+            ("Prompt", build_setting_row("Suggester", tuple(PROMPT_SUGGESTERS), identify_component(controller.suggester))),
+        ]
+        cards = "".join(f'<section class="settings-group"><h4>{title}</h4>{rows}</section>' for title, rows in groups)
+        warnings = "".join(f'<p class="settings-warning">{escape(warning)}</p>'
+                           for warning in controller.list_stand_in_warnings())
+        return f'<div class="system-settings"><h3>System settings</h3>{cards}{warnings}</div>'  # noqa: E501
 
     def _build_layout(self) -> tuple[ParticipantArea, ExperimenterPanel]:
         """
@@ -827,7 +905,7 @@ class SketchPage:
                 status = gr.Markdown(WAITING_STATUS, visible=False)
                 experimenter_status = gr.Markdown(NO_EXPERIMENT_STATUS, elem_id="experimenter-status")
                 capture_notice = gr.Markdown(visible=False, elem_id="capture-notice")
-                gr.Markdown(self.describe_system(), elem_id="system")
+                gr.HTML(self.describe_system(), elem_id="system")
 
         participant = ParticipantArea(sketch_view=sketch_view, prompt=prompt, prompt_suggestion=gr.State(None),
                                       suggest_prompt=suggest_prompt, suggest_strokes=suggest_strokes, status=status,
