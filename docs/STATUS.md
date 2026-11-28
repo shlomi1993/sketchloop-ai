@@ -43,7 +43,7 @@ The owner's first UI session after T08 is implemented and tested offline (U1, U3
 - **Prompt suggestions (U1):** "Suggest a prompt" names the sketched object with a local Florence-2-base model and fills one of five style templates, the next style on each press for the same drawing, with no network ([ADR 0019](decisions/0019-offline-prompt-suggestions.md), amended). The fake backend uses the templates alone. `scripts/download_models.py` also fetches the model. A suggestion written automatically on each drawing change was tried and reverted. Rounds do not record suggestions yet.
 - **Controls (U3):** the page shows one slider per numeric backend control, with steps starting at 10, and records them as requested controls.
 - **Page (U4):** the settings are always visible, the webcam starts by itself, the sketch the model will receive refreshes every capture interval, the seed is blank for random, and the page starts at 1 candidate.
-- **Commands:** a bare `sketchloop` runs `sketchloop ui` with the settings file's choices, and `python scripts/dev_ui.py` serves the page with live reload while the model stays loaded.
+- **Commands:** a bare `sketchloop` runs `sketchloop ui` with the settings file's choices.
 
 Standalone tools resolve paths from their own files without requiring an application install.
 

@@ -277,7 +277,7 @@ The choices are explained in [ADR 0009](docs/decisions/0009-diffusers-backend.md
 ```text
 src/sketchloop/   Library: domain records, capture, preprocessing, backends, evaluators, session, experiments, cli, app, ui
 tests/            Offline pytest suite, mirroring src/
-scripts/          check.py, download_models.py, dev_ui.py, and the privacy guard
+scripts/          check.py, download_models.py, and the privacy guard
 examples/         Sample sketches and a settings file with every key
 docs/             Specification, architecture, roadmap, status, ADRs, research notes, and results
 models/, runs/    Downloaded weights and saved sessions, both git-ignored
@@ -290,9 +290,6 @@ models/, runs/    Downloaded weights and saved sessions, both git-ignored
 | `python scripts/check.py` | Full offline check: privacy guard, syntax, TOML, Markdown links, Ruff, and pytest |
 | `python -m pytest` | Offline tests only |
 | `python -m pytest -m model` | Real-model test, which needs the downloaded weights |
-| `python scripts/dev_ui.py` | Serve the page with live reload while editing it |
-
-`dev_ui.py` loads the model once and rebuilds the page whenever a `.py` or `.css` file under `src/sketchloop` is saved. Changes to the controller or model code still need a restart.
 
 CI runs the full check on Python 3.11 and 3.12 for every push and pull request, with CPU-only torch and no model weights. The [development guide](docs/DEVELOPMENT.md) covers the installer, checks, and conventions in depth.
 
@@ -351,8 +348,6 @@ conda deactivate
 If both `(sketchloop-ai)` and `(base)` show, run `deactivate`, then `conda deactivate`, then activate again. To stop Conda from activating `base` in new terminals, run `conda config --set auto_activate_base false`.
 
 **Not sure which Python is active.** Run `python -c "import sys; print(sys.prefix)"`, which should print this repository's `sketchloop-ai-venv`. Rerunning the installer refreshes an existing environment without removing its packages.
-
-**Edits to the page do not show up.** Plain `sketchloop` does not reload code. Use `python scripts/dev_ui.py` while working on the page.
 
 **Generation is slow.** On the CPU, use `--mode fast`. A GPU is picked automatically, CUDA first and then Apple MPS. Close memory-heavy apps on a 16 GB Mac, since a model paged to swap can make a round take minutes.
 

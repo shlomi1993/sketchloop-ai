@@ -29,7 +29,7 @@ Project subagents live in `.claude/agents/`. The main session coordinates them a
 | `architect` | Design contracts, boundaries, failure types, and records, and draft ADRs | `docs/` only |
 | `researcher` | Read papers and official docs, compare models and dependencies, and write implementation guidance | `docs/research/`, `docs/REFERENCES.md` |
 | `backend-developer` | Implement a planned slice test-first under `src/`, except the browser page | Code and tests |
-| `frontend-developer` | Change the browser page: the Gradio layout in `ui.py`, the CSS and JavaScript in `static/`, and the live-reload script | `ui.py`, `src/sketchloop/static/`, `scripts/dev_ui.py`, UI tests |
+| `frontend-developer` | Change the browser page: the Gradio layout in `ui.py`, and the CSS and JavaScript in `static/` | `ui.py`, `src/sketchloop/static/`, UI tests |
 | `qa-engineer` | Plan tests against acceptance criteria, write tests, and diagnose failures | `tests/`, pytest config |
 | `code-reviewer` | Review a diff for correctness, invariants, tests, and style | None |
 | `ux-reviewer` | Review page changes for usability and study validity, as a participant and an experimenter | None |
