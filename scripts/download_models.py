@@ -57,7 +57,7 @@ def find_settings(config: Path | None) -> Settings:
     Read the same settings file the sketchloop command uses, and say which file and models folder apply.
 
     Args:
-        config (Path | None): Settings file named by --config, or None to look for sketchloop.toml.
+        config (Path | None): Settings file named by --config, or None for built-in defaults.
 
     Returns:
         Settings: The settings, whose models.dir is where the models go.
@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         int: Process exit code, 0 when every model is present.
     """
     parser = argparse.ArgumentParser(description="Download the generation, prompt suggestion, and chosen evaluator models into the models.dir folder, skipping files already present.")  # noqa: E501
-    parser.add_argument("--config", type=Path, help="settings file, by default sketchloop.toml in the working folder when present")  # noqa: E501
+    parser.add_argument("--config", type=Path, help="settings file to read explicitly. Omitted means built-in defaults")  # noqa: E501
     parser.add_argument("--evaluator", action="append", default=[], choices=list(EVALUATOR_MODELS), help="also download this evaluator's model, and repeat the option for more. The evaluator the settings file names is always downloaded")  # noqa: E501
     args = parser.parse_args(argv)
 

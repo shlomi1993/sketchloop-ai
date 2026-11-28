@@ -195,7 +195,7 @@ def test_cli_rounds_track_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr("sketchloop.components.FakeGenerator", create_counted_fake)
 
-    exit_code = main(["dev", "run", "--prompt", "chair", "--candidates", "2"])
+    exit_code = main(["dev", "run", "--prompt", "chair", "--candidates", "2", "--config", "sketchloop.toml"])
     output = capsys.readouterr().out
     session_dirs = list((tmp_path / "file-runs").iterdir())
     rounds = load_session(session_dirs[0]).rounds

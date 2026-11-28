@@ -68,9 +68,10 @@ def test_cli_rejects_invalid_options(tmp_path: Path, capsys: pytest.CaptureFixtu
         "rerun": ["dev", "rerun", str(tmp_path / "runs" / "earlier"), "--round", "1", *runs_option],
     }[command]
 
-    # A settings file in the working folder is found without --config.
+    # Invalid file values are checked when the file is explicitly requested.
     if settings_text is not None:
         (tmp_path / "sketchloop.toml").write_text(settings_text, encoding="utf-8")
+        base += ["--config", "sketchloop.toml"]
 
     # Argparse exits with its usage error code.
     with pytest.raises(SystemExit) as raised:
@@ -85,14 +86,14 @@ def test_cli_rejects_invalid_options(tmp_path: Path, capsys: pytest.CaptureFixtu
 
 def test_cli_without_command_opens_ui_with_settings(tmp_path: Path) -> None:
     """
-    A bare sketchloop parses as ui and takes the backend from sketchloop.toml.
+    A bare command opens the page with built-in defaults despite a local settings file.
     """
     (tmp_path / "sketchloop.toml").write_text('[generator]\nbackend = "diffusers"\n')
     args = parse_args([])
 
-    # The page command is chosen with the file's backend.
+    # The page uses built-in defaults unless a settings file is explicitly requested.
     assert args.command == "start", f"Expected the start command, got {args.command!r}"
-    assert args.settings.generator.backend == "diffusers", f"Expected diffusers, got {args.settings.generator.backend!r}"
+    assert args.settings.generator.backend == "fake", f"Expected fake backend, got {args.settings.generator.backend!r}"
 
 
 def test_cli_ui_chooses_suggesters(tmp_path: Path) -> None:

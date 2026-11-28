@@ -1,5 +1,5 @@
 """
-Loading and validation of the optional sketchloop.toml settings file.
+Loading and validation of explicitly supplied TOML settings.
 """
 
 import math
@@ -14,7 +14,6 @@ from sketchloop.domain import Rotation, SketchLoopError
 from sketchloop.stroke_suggestion import CANVAS_GRID_PIXELS
 
 
-SETTINGS_FILE_NAME: Final = "sketchloop.toml"
 Record = TypeVar("Record")  # A settings dataclass, replaced by a copy of the same type
 
 # Smallest accepted value of each integer key that has one.
@@ -69,20 +68,20 @@ class ModelsSettings:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CaptureSettings:
     """
-    The image source for sketchloop dev run.
+    Settings for acquiring raw sketches.
     """
-    source: str = "file"  # Registry name of the capture source for sketchloop dev run
+    source: str = "file"  # Registry name of the capture source
     camera_index: int = 0  # Webcam index for the camera source
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PreprocessingSettings:
     """
-    The preprocessor and the rotation and raw defaults of sketchloop dev run.
+    Preprocessor selection and input transformation defaults.
     """
     name: str = "strokes"  # Registry name of the preprocessor
-    rotation: int = Rotation.DEG_000  # Clockwise degrees before preprocessing, for sketchloop dev run
-    raw: bool = False  # Generate from the raw sketch and skip preprocessing, for sketchloop dev run
+    rotation: int = Rotation.DEG_000  # Clockwise degrees before preprocessing
+    raw: bool = False  # Generate from the raw sketch and skip preprocessing
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -100,22 +99,22 @@ class StorageSettings:
     """
     store: str = "folder"  # Registry name of the experiment store
     runs_dir: Path = Path("runs")  # Folder for saved sessions
-    export_dir: Path = Path("data/study-exports")  # Folder where sketchloop study export creates a new export folder
+    export_dir: Path = Path("data/study-exports")  # Parent folder for new study exports
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RunSettings:
     """
-    Defaults for sketchloop dev run.
+    Defaults for image-generation rounds.
     """
-    candidates: int = 4  # Candidates per round for sketchloop dev run
+    candidates: int = 4  # Candidates per round
     seed: int | None = None  # Base seed, None for random
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UiSettings:
     """
-    Defaults for sketchloop start.
+    Defaults for the browser interface.
     """
     candidates: int = 1  # Default candidates per round on the page
     seed: int | None = None  # Default base seed, None for random
@@ -164,12 +163,12 @@ class Settings:
     """
     generator: GeneratorSettings = GeneratorSettings()  # Generation backend and its options
     models: ModelsSettings = ModelsSettings()  # Folder holding every downloaded model
-    capture: CaptureSettings = CaptureSettings()  # Image source for sketchloop dev run
+    capture: CaptureSettings = CaptureSettings()  # Image source
     preprocessing: PreprocessingSettings = PreprocessingSettings()  # Preprocessor and run defaults
     evaluator: EvaluatorSettings = EvaluatorSettings()  # Candidate scorer
     storage: StorageSettings = StorageSettings()  # Experiment store and its folder
-    run: RunSettings = RunSettings()  # Defaults for sketchloop dev run
-    ui: UiSettings = UiSettings()  # Defaults for sketchloop start
+    run: RunSettings = RunSettings()  # Defaults for image-generation rounds
+    ui: UiSettings = UiSettings()  # Defaults for the browser interface
     stroke_suggester: StrokeSuggesterSettings = StrokeSuggesterSettings()  # Next-stroke suggester and its options
     drawing: DrawingSettings = DrawingSettings()  # Paper canvas and capture interval of guided sketching
     prompt_suggester: PromptSuggesterSettings = PromptSuggesterSettings()  # Prompt suggester behind "Suggest a prompt"
@@ -195,10 +194,10 @@ def format_toml_value(value: object) -> str:
 
 def find_settings_file(explicit: Path | None) -> Path | None:
     """
-    Choose the settings file: the explicit one, else sketchloop.toml in the working folder when present, else none.
+    Validate an explicitly supplied settings path, or use built-in defaults.
 
     Args:
-        explicit (Path | None): File named by --config, or None.
+        explicit (Path | None): Settings file path, or None for built-in defaults.
 
     Returns:
         Path | None: The settings file to read, or None for the built-in defaults.
@@ -210,8 +209,7 @@ def find_settings_file(explicit: Path | None) -> Path | None:
 
         return explicit
 
-    default_file = Path(SETTINGS_FILE_NAME)
-    return default_file if default_file.is_file() else None
+    return None
 
 
 def describe_type(value_type: type) -> str:

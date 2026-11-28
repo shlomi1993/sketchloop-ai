@@ -55,7 +55,8 @@ def test_export_command_refuses_prints_and_defaults(study_runs: Path, tmp_path: 
 
     # Without --output the export lands in one export-<UTC time> folder under the configured folder.
     (tmp_path / "sketchloop.toml").write_text('[storage]\nexport_dir = "exports"\n', encoding="utf-8")
-    default_exit, default_output = run_study(["export", "--runs-dir", str(study_runs), "--match", "p1_*"], capsys)
+    default_exit, default_output = run_study(["export", "--config", "sketchloop.toml", "--runs-dir", str(study_runs),
+                                               "--match", "p1_*"], capsys)
     folders = [path.name for path in (tmp_path / "exports").iterdir()]
     assert default_exit == 0, f"Expected success, got {default_exit}: {default_output}"
     assert len(folders) == 1 and re.fullmatch(r"export-\d{8}-\d{6}", folders[0]), f"Unexpected export folders {folders}"

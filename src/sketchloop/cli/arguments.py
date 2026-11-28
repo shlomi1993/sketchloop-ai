@@ -24,7 +24,7 @@ from sketchloop.domain import Rotation
 from sketchloop.settings import Settings, SettingsError, find_settings_file, load_settings, override_settings
 
 
-CONFIG_HELP: Final = "settings file, by default sketchloop.toml in the working folder when present"
+CONFIG_HELP: Final = "settings file to read explicitly. Omitted means built-in defaults"
 
 
 class Command(StrEnum):
@@ -215,7 +215,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             `settings` and the `settings_file` they came from.
     """
     # Options that a settings file can also set are absent unless given, so the file and the defaults can apply.
-    formatter = argparse.ArgumentDefaultsHelpFormatter
+    formatter = argparse.HelpFormatter
     unset = argparse.SUPPRESS
     parser = argparse.ArgumentParser(prog="sketchloop", description="Start the browser page, manage study data, or use development tools. No command means start.")  # noqa: E501
     commands = parser.add_subparsers(dest="command", required=True)
@@ -227,17 +227,17 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     # Run a new session.
     run_parser = dev_commands.add_parser(Command.RUN, help="run a new session", description="Generate alternatives from a sketch and pick some.", formatter_class=formatter)  # noqa: E501
     run_parser.add_argument("sketch", type=Path, nargs="?", help="PNG or JPEG sketch image to start from")
-    run_parser.add_argument("--camera", action="store_true", help="capture the sketch from a webcam instead of a file (settings capture.source)")  # noqa: E501
-    run_parser.add_argument("--camera-index", type=make_int_parser(0), default=unset, help="webcam to use with --camera (settings capture.camera_index, default 0)")  # noqa: E501
+    run_parser.add_argument("--camera", action="store_true", help="capture the sketch from a webcam instead of a file")  # noqa: E501
+    run_parser.add_argument("--camera-index", type=make_int_parser(0), default=unset, help="webcam to use with --camera. Defaults to 0")  # noqa: E501
     run_parser.add_argument("--prompt", required=True, help="text guidance for generation")
-    run_parser.add_argument("--candidates", type=make_int_parser(1), default=unset, help="number of candidates to generate (settings run.candidates, default 4)")  # noqa: E501
-    run_parser.add_argument("--seed", type=make_int_parser(0), default=unset, help="base seed for reproducible candidates (settings run.seed, default random)")  # noqa: E501
-    run_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for run outputs (settings storage.runs_dir, default runs)")  # noqa: E501
-    run_parser.add_argument("--raw", action=argparse.BooleanOptionalAction, default=unset, help="generate from your original sketch instead of the processed one (settings preprocessing.raw, default off)")  # noqa: E501
-    run_parser.add_argument("--rotate", type=int, choices=list(Rotation), default=unset, help="degrees to turn the sketch clockwise before processing (settings preprocessing.rotation, default 0)")  # noqa: E501
-    run_parser.add_argument("--backend", choices=list(GENERATORS), default=unset, help="generation backend to use (settings generator.backend, default fake)")  # noqa: E501
-    run_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="mode of a real backend (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
-    run_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="precision of a real backend (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
+    run_parser.add_argument("--candidates", type=make_int_parser(1), default=unset, help="number of candidates to generate. Defaults to 4")  # noqa: E501
+    run_parser.add_argument("--seed", type=make_int_parser(0), default=unset, help="base seed for reproducible candidates. Defaults to random")  # noqa: E501
+    run_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for run outputs. Defaults to runs")  # noqa: E501
+    run_parser.add_argument("--raw", action=argparse.BooleanOptionalAction, default=unset, help="generate from your original sketch instead of the processed one. Defaults to off")  # noqa: E501
+    run_parser.add_argument("--rotate", type=int, choices=list(Rotation), default=unset, help="degrees to turn the sketch clockwise before processing. Defaults to 0")  # noqa: E501
+    run_parser.add_argument("--backend", choices=list(GENERATORS), default=unset, help="generation backend to use. Defaults to fake")  # noqa: E501
+    run_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="mode of a real backend. Defaults to fast on CPU and quality on a GPU")  # noqa: E501
+    run_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="precision of a real backend. Defaults to float16 on a GPU and float32 on CPU")  # noqa: E501
     run_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
 
     # Show or rerun a saved session.
@@ -246,36 +246,36 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     rerun_parser = dev_commands.add_parser(Command.RERUN, help="rerun a saved round as a new linked session", description="Rerun a saved round with its recorded sketch and settings.", formatter_class=formatter)  # noqa: E501
     rerun_parser.add_argument("session_folder", type=Path, help="session folder, such as runs/<session>")
     rerun_parser.add_argument("--round", type=make_int_parser(1), required=True, dest="round_number", help="round number to rerun")  # noqa: E501
-    rerun_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for the new session (settings storage.runs_dir, default runs)")  # noqa: E501
+    rerun_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for the new session. Defaults to runs")  # noqa: E501
     rerun_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
 
     # Measure repeated rounds from one sketch file.
     benchmark_parser = dev_commands.add_parser(Command.BENCHMARK, help="time repeated rounds from one sketch file", description="Run warm-up and measured rounds and print stage timing statistics.", formatter_class=formatter)  # noqa: E501
     benchmark_parser.add_argument("sketch", type=Path, help="PNG or JPEG sketch image to load for every round")
     benchmark_parser.add_argument("--prompt", required=True, help="text guidance for generation")
-    benchmark_parser.add_argument("--rounds", type=make_int_parser(1), default=5, help="measured rounds the statistics cover")
-    benchmark_parser.add_argument("--warmup", type=make_int_parser(0), default=1, help="rounds run first and left out of the statistics")  # noqa: E501
-    benchmark_parser.add_argument("--candidates", type=make_int_parser(1), default=unset, help="number of candidates per round (settings run.candidates, default 4)")  # noqa: E501
-    benchmark_parser.add_argument("--seed", type=make_int_parser(0), default=unset, help="base seed for every round (settings run.seed, default 0)")  # noqa: E501
-    benchmark_parser.add_argument("--raw", action=argparse.BooleanOptionalAction, default=unset, help="generate from your original sketch instead of the processed one (settings preprocessing.raw, default off)")  # noqa: E501
-    benchmark_parser.add_argument("--rotate", type=int, choices=list(Rotation), default=unset, help="degrees to turn the sketch clockwise before processing (settings preprocessing.rotation, default 0)")  # noqa: E501
-    benchmark_parser.add_argument("--backend", choices=list(GENERATORS), default=unset, help="generation backend to use (settings generator.backend, default fake)")  # noqa: E501
-    benchmark_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="mode of a real backend (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
-    benchmark_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="precision of a real backend (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
-    benchmark_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for run outputs (settings storage.runs_dir, default runs)")  # noqa: E501
+    benchmark_parser.add_argument("--rounds", type=make_int_parser(1), default=5, help="measured rounds the statistics cover. Defaults to 5")  # noqa: E501
+    benchmark_parser.add_argument("--warmup", type=make_int_parser(0), default=1, help="rounds run first and left out of the statistics. Defaults to 1")  # noqa: E501
+    benchmark_parser.add_argument("--candidates", type=make_int_parser(1), default=unset, help="number of candidates per round. Defaults to 4")  # noqa: E501
+    benchmark_parser.add_argument("--seed", type=make_int_parser(0), default=unset, help="base seed for every round. Defaults to 0")  # noqa: E501
+    benchmark_parser.add_argument("--raw", action=argparse.BooleanOptionalAction, default=unset, help="generate from your original sketch instead of the processed one. Defaults to off")  # noqa: E501
+    benchmark_parser.add_argument("--rotate", type=int, choices=list(Rotation), default=unset, help="degrees to turn the sketch clockwise before processing. Defaults to 0")  # noqa: E501
+    benchmark_parser.add_argument("--backend", choices=list(GENERATORS), default=unset, help="generation backend to use. Defaults to fake")  # noqa: E501
+    benchmark_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="mode of a real backend. Defaults to fast on CPU and quality on a GPU")  # noqa: E501
+    benchmark_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="precision of a real backend. Defaults to float16 on a GPU and float32 on CPU")  # noqa: E501
+    benchmark_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for run outputs. Defaults to runs")  # noqa: E501
     benchmark_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
 
     # Serve the local browser interface.
     ui_parser = commands.add_parser(Command.START, help="open the local browser interface", description="Run sessions from a local browser page.", formatter_class=formatter)  # noqa: E501
-    ui_parser.add_argument("--candidates", type=make_int_parser(1), default=unset, help="default number of candidates per round (settings ui.candidates, default 1)")  # noqa: E501
-    ui_parser.add_argument("--seed", type=make_int_parser(0), default=unset, help="default base seed for reproducible candidates (settings ui.seed, default random)")  # noqa: E501
-    ui_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for run outputs (settings storage.runs_dir, default runs)")  # noqa: E501
-    ui_parser.add_argument("--capture-interval", type=parse_positive_seconds, default=unset, help="seconds between webcam frames the page keeps, so Generate uses a fresh one (settings ui.capture_interval_seconds, default 0.5)")  # noqa: E501
-    ui_parser.add_argument("--backend", choices=list(GENERATORS), default=unset, help="generation backend to use (settings generator.backend, default fake)")  # noqa: E501
-    ui_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="mode of a real backend (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
-    ui_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="precision of a real backend (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
-    ui_parser.add_argument("--stroke-suggester", choices=list(STROKE_SUGGESTERS), default=unset, help="next-stroke suggester behind Suggest next strokes (settings stroke_suggester.name, default fake)")  # noqa: E501
-    ui_parser.add_argument("--prompt-suggester", choices=list(PROMPT_SUGGESTERS), default=unset, help="prompt suggester behind Suggest a prompt (settings prompt_suggester.name, default templates)")  # noqa: E501
+    ui_parser.add_argument("--candidates", type=make_int_parser(1), default=unset, help="default number of candidates per round. Defaults to 1")  # noqa: E501
+    ui_parser.add_argument("--seed", type=make_int_parser(0), default=unset, help="default base seed for reproducible candidates. Defaults to random")  # noqa: E501
+    ui_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for run outputs. Defaults to runs")  # noqa: E501
+    ui_parser.add_argument("--capture-interval", type=parse_positive_seconds, default=unset, help="seconds between webcam frames the page keeps, so Generate uses a fresh one. Defaults to 0.5")  # noqa: E501
+    ui_parser.add_argument("--backend", choices=list(GENERATORS), default=unset, help="generation backend to use. Defaults to fake")  # noqa: E501
+    ui_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="mode of a real backend. Defaults to fast on CPU and quality on a GPU")  # noqa: E501
+    ui_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="precision of a real backend. Defaults to float16 on a GPU and float32 on CPU")  # noqa: E501
+    ui_parser.add_argument("--stroke-suggester", choices=list(STROKE_SUGGESTERS), default=unset, help="next-stroke suggester behind Suggest next strokes. Defaults to fake")  # noqa: E501
+    ui_parser.add_argument("--prompt-suggester", choices=list(PROMPT_SUGGESTERS), default=unset, help="prompt suggester behind Suggest a prompt. Defaults to templates")  # noqa: E501
     ui_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
 
     # Export the study's final drawings under random codes, or summarize its drawings.
@@ -284,10 +284,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     export_parser = study_actions.add_parser(StudyAction.EXPORT, help="write each final drawing under a random code", description="Write each study drawing's final canvas under a random code, with a key that stays on this machine.")  # noqa: E501
     summary_parser = study_actions.add_parser(StudyAction.SUMMARY, help="print one row per study drawing", description="Print one row per study drawing without writing anything.")  # noqa: E501
     for action_parser in (export_parser, summary_parser):
-        action_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder the study saved into (settings storage.runs_dir, default runs)")  # noqa: E501
-        action_parser.add_argument("--match", default="*", help='glob on experiment names, ignoring case, such as "p3_*" (default: every experiment)')  # noqa: E501
+        action_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder the study saved into. Defaults to runs")  # noqa: E501
+        action_parser.add_argument("--match", default="*", help='glob on experiment names, ignoring case, such as "p3_*". Defaults to every experiment')  # noqa: E501
         action_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
-    export_parser.add_argument("--output", type=Path, help="new or empty folder for the export (default: export-<UTC time> under settings storage.export_dir)")  # noqa: E501
+    export_parser.add_argument("--output", type=Path, help="new or empty folder for the export. Defaults to export-<UTC time> in the configured export folder")  # noqa: E501
 
     # A bare sketchloop opens the browser page with the settings file's choices.
     if not (sys.argv[1:] if argv is None else argv):

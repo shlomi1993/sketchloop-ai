@@ -84,7 +84,7 @@ def test_cli_benchmark_ignores_camera_setting_and_takes_the_seed(tmp_path: Path,
     (tmp_path / "sketchloop.toml").write_text('[capture]\nsource = "camera"\n\n[run]\nseed = 9\n', encoding="utf-8")
     monkeypatch.setitem(CAPTURE_SOURCES, "camera", refuse_camera)
     exit_code = main(["dev", "benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--backend", "fake", "--rounds", "1",
-                      "--warmup", "0", "--candidates", "1"])
+                      "--warmup", "0", "--candidates", "1", "--config", "sketchloop.toml"])
 
     # The round records the file source and the file's seed.
     rounds = load_session(next((tmp_path / "runs").iterdir())).rounds
@@ -129,10 +129,11 @@ def test_cli_benchmark_passes_precision_and_pins_seed_0(tmp_path: Path, monkeypa
 
     monkeypatch.setattr("sketchloop.cli.common.make_generator", make_recording_generator)
 
-    # A settings file in the working folder is found without --config.
+    # A flag overrides an explicitly requested settings file.
     (tmp_path / "sketchloop.toml").write_text('[generator.diffusers]\nprecision = "float32"\n', encoding="utf-8")
     exit_code = main(["dev", "benchmark", str(EXAMPLE_SKETCH), "--prompt", "chair", "--backend", "diffusers", "--rounds", "1",
-                      "--warmup", "0", "--candidates", "1", "--runs-dir", str(tmp_path / "runs"), "--precision", "float16"])
+                      "--warmup", "0", "--candidates", "1", "--runs-dir", str(tmp_path / "runs"),
+                      "--precision", "float16", "--config", "sketchloop.toml"])
 
     # The benchmark ran with the pinned seed, and the backend got the flag's precision.
     assert exit_code == 0, f"The benchmark must succeed, got exit code {exit_code}"
