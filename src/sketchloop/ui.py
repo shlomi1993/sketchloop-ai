@@ -59,9 +59,7 @@ CONDITION_WORDS: Final = {StudyCondition.AI: "with AI", StudyCondition.NO_AI: "w
 CHOOSE_CONDITION_MESSAGE: Final = "Choose a condition, then start the drawing."
 NO_EXPERIMENT_STATUS: Final = "No experiment started yet. Enter a name, choose a condition, and press **Start drawing**."
 EXPERIMENTER_LABEL: Final = "Experimenter"
-CHECK_NEEDED_LABEL: Final = "Experimenter: check needed"
 CAMERA_STOPPED_NOTICE: Final = "**The webcam stopped sending frames, so nothing is being saved.** Open this panel and restart it."
-SAME_TAB_NOTE: Final = "Use Start and Finish in the participant's tab, since each tab keeps its own prompt."
 START_LABEL: Final = "Start drawing"
 FINISH_LABEL: Final = "Finish drawing"
 FINISH_CONFIRM_LABEL: Final = "Press again to finish"
@@ -75,6 +73,7 @@ FINISH_CONFIRM_SECONDS: Final = 5.0
 # The study page's sketch view height and its right column's width in pixels, fixed so nothing moves between conditions.
 STUDY_SKETCH_HEIGHT: Final = 560
 STUDY_CONTROLS_WIDTH: Final = 360
+CAMERA_HEIGHT: Final = 240
 
 
 # A webcam frame older than this many capture intervals means the stream stopped.
@@ -202,12 +201,11 @@ def describe_experimenter_status(view: DrawingView | None, problem: str | None =
     return f"{status}. {detail}" if detail else status
 
 
-def style_experimenter_panel(needs_check: bool) -> gr.Accordion:
+def style_experimenter_panel(needs_check: bool) -> gr.Column:
     """
     Label and mark the experimenter panel when something needs a check, in neutral words the participant may see.
     """
-    label = CHECK_NEEDED_LABEL if needs_check else EXPERIMENTER_LABEL
-    return gr.Accordion(label=label, elem_classes=["needs-check"] if needs_check else [])
+    return gr.Column(elem_classes=["card", "needs-check"] if needs_check else ["card"])
 
 
 def sign_drawing(view: DrawingView | None) -> DrawingSignature:
@@ -296,7 +294,7 @@ class ExperimenterPanel:
     """
     The study page's collapsible experimenter controls, away from the participant's view.
     """
-    panel: gr.Accordion  # The panel, closed after each start and relabeled when saving fails
+    panel: gr.Column  # The sidebar, marked when saving fails or the webcam stops
     name: gr.Textbox  # Experiment name, which also names the session folder
     condition: gr.Radio  # With AI or without AI, with no default
     start: gr.Button  # Starts a study drawing with the name and condition
@@ -613,7 +611,7 @@ class SketchPage:
 
         # Empty the view until the paper is found, clear the previous prompt and its ID, and hide the panel from the participant.
         return (*build_study_drawing_outputs(view, clear_inputs=True), gr.Button(value=START_LABEL, interactive=False),
-                gr.Image(value=None), gr.Textbox(value=""), None, gr.Accordion(open=False), sign_drawing(view), None)
+                gr.Image(value=None), gr.Textbox(value=""), None, gr.skip(), sign_drawing(view), None)
 
     def press_finish(self, choice: str, upload_path: str | None, rotation_degrees: int, prompt_text: str | None,
                      prompt_suggestion_id: str | None, armed_at: float | None) -> tuple[object, ...]:
@@ -775,27 +773,6 @@ class SketchPage:
         marked_status = gr.Markdown(value=status, elem_classes=[CLOSE_PANEL_CLASS] if is_drawing_open(view) else [])
         return marked_status, *outputs, gr.Button(value=START_LABEL, interactive=False), sign_drawing(view)
 
-    def _build_participant_area(self) -> ParticipantArea:
-        """
-        Lay out the study page's large sketch view beside a fixed-width column with the prompt, the AI buttons, and the status.
-        """
-        with gr.Row(equal_height=False):
-            sketch_view = gr.Image(label=OPEN_DRAWING_LABEL, interactive=False, height=STUDY_SKETCH_HEIGHT, buttons=[],
-                                   elem_id="study-sketch-view")
-            with gr.Column(scale=0, min_width=STUDY_CONTROLS_WIDTH, elem_id="participant-controls"):
-                prompt = gr.Textbox(label="Prompt", placeholder=STUDY_PROMPT_PLACEHOLDER, lines=3)
-
-                # Reserve the AI buttons' space in both conditions, so removing them moves nothing below.
-                with gr.Column(elem_id="ai-help"):
-                    suggest_prompt = gr.Button("Suggest a prompt", visible=False, elem_id="suggest-prompt")
-                    suggest_strokes = gr.Button("Suggest next strokes", variant="primary", visible=False,
-                                                elem_id="suggest-strokes")
-                status = gr.Markdown(WAITING_STATUS, elem_id="participant-status")
-
-        return ParticipantArea(sketch_view=sketch_view, prompt=prompt, prompt_suggestion=gr.State(None),
-                               suggest_prompt=suggest_prompt, suggest_strokes=suggest_strokes, status=status,
-                               shown_drawing=gr.State(None))
-
     def describe_system(self) -> str:
         """
         Describe the backend, both suggesters, and the shared session for the experimenter, with a warning per stand-in.
@@ -805,37 +782,56 @@ class SketchPage:
                  SHARED_SESSION_NOTE, *(f"**Stand-in:** {warning}" for warning in controller.list_stand_in_warnings())]
         return "\n".join(f"- {line}" for line in lines)
 
-    def _build_experimenter_panel(self) -> ExperimenterPanel:
+    def _build_layout(self) -> tuple[ParticipantArea, ExperimenterPanel]:
         """
-        Lay out the experimenter panel with the start row, the statuses, the camera, and the system description.
+        Lay out the logo and title, the sketch with the camera and its settings below it, and the experiment sidebar.
         """
-        # Open on load, since Gradio renders a closed accordion only once opened, and the webcam keeps streaming once it closes.
-        with gr.Accordion(EXPERIMENTER_LABEL, open=True, elem_id="experimenter") as panel:
-            with gr.Row(equal_height=True):
-                name = gr.Textbox(label="Experiment name", info=EXPERIMENT_NAME_HINT, max_lines=1, scale=3)
-                condition = gr.Radio(choices=CONDITION_CHOICES, value=None, label="Condition", scale=2)
-                start = gr.Button(START_LABEL, interactive=False, scale=1)
-                finish = gr.Button(FINISH_LABEL, variant="stop", interactive=False, scale=1)
-            status = gr.Markdown(NO_EXPERIMENT_STATUS, elem_id="experimenter-status")
-            capture_notice = gr.Markdown(visible=False, elem_id="capture-notice")
-            gr.Markdown(SAME_TAB_NOTE, elem_id="same-tab-note")
+        # A logo placeholder beside the title.
+        with gr.Row(elem_id="header"):
+            gr.HTML('<div id="logo">SL</div>', elem_id="logo-box")
+            gr.Markdown("# SketchLoop")
 
-            # The camera the experimenter aims and turns, beside the source choice and what the system runs.
-            with gr.Row(equal_height=False):
-                webcam = gr.Image(label="Live webcam", sources=["webcam"], streaming=True, type="numpy",
-                                  webcam_options=gr.WebcamOptions(mirror=False), height=300, elem_id="webcam",
-                                  elem_classes=[f"rotate-{DEFAULT_ROTATION_BY_SOURCE[SketchSource.WEBCAM]}"])
-                upload = gr.Image(label="Sketch file", sources=["upload"], type="filepath", image_mode=None, visible=False,
-                                  height=300)
-                with gr.Column():
-                    source = gr.Radio(choices=SOURCE_CHOICES, value=SketchSource.WEBCAM, label="Source")
-                    rotation = gr.Dropdown(choices=list(Rotation), value=DEFAULT_ROTATION_BY_SOURCE[SketchSource.WEBCAM],
-                                           label="Clockwise rotation")
-                    gr.Markdown(self.describe_system(), elem_id="system")
+        with gr.Row(equal_height=False):
+            # The large sketch, and below it the camera beside its source and rotation.
+            with gr.Column(scale=3):
+                sketch_view = gr.Image(label=OPEN_DRAWING_LABEL, interactive=False, height=STUDY_SKETCH_HEIGHT, buttons=[],
+                                       elem_id="study-sketch-view")
+                with gr.Row(equal_height=True):
+                    webcam = gr.Image(label="Camera", sources=["webcam"], streaming=True, type="numpy",
+                                      webcam_options=gr.WebcamOptions(mirror=False), height=CAMERA_HEIGHT, elem_id="webcam",
+                                      elem_classes=[f"rotate-{DEFAULT_ROTATION_BY_SOURCE[SketchSource.WEBCAM]}"])
+                    upload = gr.Image(label="Sketch file", sources=["upload"], type="filepath", image_mode=None,
+                                      visible=False, height=CAMERA_HEIGHT)
+                    with gr.Column(elem_classes="card"):
+                        source = gr.Radio(choices=SOURCE_CHOICES, value=SketchSource.WEBCAM, label="Source")
+                        rotation = gr.Dropdown(choices=list(Rotation), value=DEFAULT_ROTATION_BY_SOURCE[SketchSource.WEBCAM],
+                                               label="Clockwise rotation")
 
-        return ExperimenterPanel(panel=panel, name=name, condition=condition, start=start, finish=finish, status=status,
-                                 capture_notice=capture_notice, source=source, rotation=rotation, webcam=webcam, upload=upload,
-                                 finish_armed=gr.State(None))
+            # The experiment sidebar, from the name and condition down to the suggestions, with the fixed info at the end.
+            with gr.Column(scale=1, min_width=STUDY_CONTROLS_WIDTH, elem_id="experimenter", elem_classes="card") as panel:
+                gr.Markdown(f"### {EXPERIMENTER_LABEL}")
+                name = gr.Textbox(label="Experiment name", info=EXPERIMENT_NAME_HINT, max_lines=1)
+                condition = gr.Radio(choices=CONDITION_CHOICES, value=None, label="Condition")
+                prompt = gr.Textbox(label="Prompt", placeholder=STUDY_PROMPT_PLACEHOLDER, lines=3)
+                with gr.Row():
+                    start = gr.Button(START_LABEL, interactive=False)
+                    finish = gr.Button(FINISH_LABEL, variant="stop", interactive=False)
+                with gr.Column(elem_id="ai-help"):
+                    suggest_prompt = gr.Button("Suggest a prompt", visible=False, elem_id="suggest-prompt")
+                    suggest_strokes = gr.Button("Suggest next strokes", variant="primary", visible=False,
+                                                elem_id="suggest-strokes")
+                status = gr.Markdown(WAITING_STATUS, visible=False)
+                experimenter_status = gr.Markdown(NO_EXPERIMENT_STATUS, elem_id="experimenter-status")
+                capture_notice = gr.Markdown(visible=False, elem_id="capture-notice")
+                gr.Markdown(self.describe_system(), elem_id="system")
+
+        participant = ParticipantArea(sketch_view=sketch_view, prompt=prompt, prompt_suggestion=gr.State(None),
+                                      suggest_prompt=suggest_prompt, suggest_strokes=suggest_strokes, status=status,
+                                      shown_drawing=gr.State(None))
+        experimenter = ExperimenterPanel(panel=panel, name=name, condition=condition, start=start, finish=finish,
+                                         status=experimenter_status, capture_notice=capture_notice, source=source,
+                                         rotation=rotation, webcam=webcam, upload=upload, finish_armed=gr.State(None))
+        return participant, experimenter
 
     def _wire_study_events(self, app: gr.Blocks, participant: ParticipantArea, experimenter: ExperimenterPanel) -> None:
         """
@@ -906,11 +902,7 @@ class SketchPage:
         """
         Lay out and wire the study page: the title, the participant area, and the experimenter panel below it.
         """
-        # The title only, so nothing above the drawing names a model or differs between conditions.
-        with gr.Column(elem_classes="study"):
-            gr.Markdown("# SketchLoop", elem_id="header")
-            participant = self._build_participant_area()
-            experimenter = self._build_experimenter_panel()
+        participant, experimenter = self._build_layout()
 
         self._wire_study_events(app, participant, experimenter)
 

@@ -139,11 +139,9 @@ def test_study_status_and_controls_follow_the_condition_and_drawing() -> None:
     armed = [ui.is_finish_armed(None, 10.0), ui.is_finish_armed(10.0, 14.0), ui.is_finish_armed(10.0, 16.0)]
     assert armed == [False, True, False], f"Unexpected Finish confirmation {armed}"
 
-    # The panel asks for a check in neutral words and is marked so the stylesheet can flag it.
+    # The sidebar is marked when something needs a check, so the stylesheet can flag it.
     calm, flagged = ui.style_experimenter_panel(False), ui.style_experimenter_panel(True)
-    assert (calm.label, calm.elem_classes) == (ui.EXPERIMENTER_LABEL, []), f"Unexpected calm panel {calm}"
-    assert (flagged.label, flagged.elem_classes) == (ui.CHECK_NEEDED_LABEL, ["needs-check"]), f"Unexpected panel {flagged}"
-    assert "failed" not in ui.CHECK_NEEDED_LABEL.lower(), "The label the participant may see must not alarm"
+    assert (calm.elem_classes, flagged.elem_classes) == (["card"], ["card", "needs-check"]), f"Unexpected sidebar {flagged}"
 
 
 @pytest.mark.usefixtures("no_network")
@@ -176,15 +174,12 @@ def test_study_page_builds_only_the_participant_and_experimenter_controls(contro
     texts = [block.value or "" for block in blocks if isinstance(block, gradio.Markdown)]
     assert "# SketchLoop" in texts and controller.describe_backend() not in texts[0], f"Unexpected header {texts[0]!r}"
     assert any(controller.describe_prompt_suggester() in text for text in texts), "The panel must name the prompt suggester"
-    assert ui.SAME_TAB_NOTE in texts, "The panel must say to start and finish in the participant's tab"
 
     # The prompt names no object, the condition has no default, and the panel starts open so the webcam can start.
     prompts = [block for block in blocks if isinstance(block, gradio.Textbox) and block.label == "Prompt"]
     assert [box.placeholder for box in prompts] == [ui.STUDY_PROMPT_PLACEHOLDER], f"Unexpected prompt boxes {prompts}"
     conditions = [block for block in blocks if isinstance(block, gradio.Radio) and block.label == "Condition"]
     assert len(conditions) == 1 and conditions[0].value is None, "The condition must have no default"
-    panels = [block for block in blocks if isinstance(block, gradio.Accordion)]
-    assert [(panel.label, panel.open) for panel in panels] == [(ui.EXPERIMENTER_LABEL, True)], f"Unexpected panels {panels}"
 
 
 @pytest.mark.usefixtures("no_network")
@@ -216,7 +211,7 @@ def test_study_page_runs_a_no_ai_and_an_ai_drawing(controller: AppController, sh
     assert name_box.value == "" and condition.value is None and start.interactive is False, "A start must clear its inputs"
     assert start.value == ui.START_LABEL, f"Start must go back to its plain label, got {start.value!r}"
     assert prompt.value == "" and prompt_id is None and sketch_view.value is None, "A start must clear the prompt and view"
-    assert panel.open is False and status == ui.DRAWING_STATUS, f"A start must close the panel, got {panel.open} and {status!r}"
+    assert status == ui.DRAWING_STATUS, f"Unexpected status after a start {status!r}"
     assert shown == ("p1_car", 1, True, 0) and armed is None, f"A start must record what the tab shows, got {shown}"
 
     # Prompt suggestions are refused without AI.
@@ -279,7 +274,7 @@ def test_study_save_timer_follows_tabs_and_flags_problems(controller: AppControl
     # A webcam that stopped sending frames flags the panel and prints one line.
     page.latest_frame_time -= ui.STALE_FRAME_INTERVALS * page.capture_interval_seconds + 1
     notice, panel, *rest = page.save_study_capture("webcam", None, 0, "", shown)
-    assert notice.value == ui.CAMERA_STOPPED_NOTICE and panel.label == ui.CHECK_NEEDED_LABEL, f"Bad flag {notice}, {panel}"
+    assert notice.value == ui.CAMERA_STOPPED_NOTICE and "needs-check" in panel.elem_classes, f"Bad flag {notice}, {panel}"
     assert rest == [gradio.skip()] * 4, "A camera problem must not touch the participant's status"
     assert page.save_study_capture("webcam", None, 0, notice.value, shown)[:2] == (gradio.skip(),) * 2, "No repeat"
     assert capsys.readouterr().out.count("check needed") == 1, "The terminal must name the problem once"
@@ -287,7 +282,7 @@ def test_study_save_timer_follows_tabs_and_flags_problems(controller: AppControl
     # Frames that return clear the flag and print the recovery.
     page.store_frame(frame)
     notice, panel, *_ = page.save_study_capture("webcam", None, 0, notice.value, shown)
-    assert notice.visible is False and panel.label == ui.EXPERIMENTER_LABEL, f"Frames must clear the flag, got {panel}"
+    assert notice.visible is False and "needs-check" not in panel.elem_classes, f"Frames must clear the flag, got {panel}"
     assert "work again" in capsys.readouterr().out, "The terminal must say when it works again"
 
     # A failed save flags the panel with its own notice.
@@ -299,7 +294,7 @@ def test_study_save_timer_follows_tabs_and_flags_problems(controller: AppControl
 
     monkeypatch.setattr(controller, "record_drawing_capture", fail_to_save)
     notice, panel, *_ = page.save_study_capture("webcam", None, 0, "", shown)
-    assert "Free disk space" in notice.value and panel.elem_classes == ["needs-check"], f"A failed save must flag, got {notice}"
+    assert "Free disk space" in notice.value and "needs-check" in panel.elem_classes, f"A failed save must flag, got {notice}"
 
 
 @pytest.mark.usefixtures("no_network")

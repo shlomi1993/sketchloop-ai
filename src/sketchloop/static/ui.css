@@ -24,19 +24,21 @@
 #capture-notice { padding: 8px 16px; border-radius: 12px; background: var(--background-fill-secondary); }
 
 /* Study page: a tall sketch view, and status text that reads from the drawing position. ui.py sets the class. */
-.study #study-sketch-view { min-height: 560px; }
-.study #ai-help { min-height: 128px; gap: 12px; }
-.study #suggest-prompt, .study #suggest-strokes { min-height: 56px; font-size: 1.1rem; }
-.study #participant-status { padding: 16px; border-radius: 12px; background: var(--background-fill-secondary); }
-.study #participant-status p { font-size: 1.4rem; line-height: 1.4; }
-.study #participant-status .pending { opacity: 1 !important; }
-.study #experimenter-status, .study #system { color: var(--body-text-color-subdued); }
+#study-sketch-view { min-height: 560px; }
+#ai-help { min-height: 128px; gap: 12px; }
+#suggest-prompt, #suggest-strokes { min-height: 56px; font-size: 1.1rem; }
+#experimenter-status, #system { color: var(--body-text-color-subdued); }
 
 /* Fill the study sketch view with the canvas, keeping its shape. */
-.study #study-sketch-view img { width: 100%; height: 100%; object-fit: contain; }
+#study-sketch-view img { width: 100%; height: 100%; object-fit: contain; }
 
 /* The experimenter panel when saving failed or the webcam stopped. ui.py sets the class. */
 #experimenter.needs-check { border-left: 6px solid var(--error-border-color); }
-#experimenter.needs-check > button { background: var(--error-background-fill); }
 #capture-notice { color: var(--error-text-color); }
-#same-tab-note { color: var(--body-text-color-subdued); }
+
+/* The logo placeholder beside the title, to be swapped for an image file. */
+#header { align-items: center; gap: 12px; flex-wrap: nowrap; }
+#logo-box { flex: 0 0 auto !important; min-width: 0 !important; width: auto !important; }
+#logo { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+        font-weight: 700; background: var(--button-primary-background-fill); color: var(--button-primary-text-color); }
+#webcam video { object-fit: contain; }
