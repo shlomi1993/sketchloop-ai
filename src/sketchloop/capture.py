@@ -304,7 +304,7 @@ def preview_until_capture(camera: VideoSource, unavailable: str) -> np.ndarray:
 
 class CaptureSource(ABC):
     """
-    Where sketchloop dev run gets its raw sketches, such as a file or a webcam.
+    Acquire raw sketches from an input source, such as a file or a webcam.
     """
 
     @property

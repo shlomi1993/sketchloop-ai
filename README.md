@@ -74,7 +74,7 @@ python scripts/download_models.py
 sketchloop start --backend diffusers --stroke-suggester controlnet
 ```
 
-The download script fetches about 7 GB into the git-ignored `models/` folder and skips files already present. It fetches a CLIP evaluator's weights only when the settings file names that evaluator or you ask for it, as in `python scripts/download_models.py --evaluator clip-b32 --evaluator clip-l14`. To keep your own choices, copy [examples/sketchloop.toml](examples/sketchloop.toml) to `sketchloop.toml`, and plain `sketchloop` then uses them. For the user study, `sketchloop start --config study.toml` uses the committed [study.toml](study.toml), as described in [the study guide](docs/STUDY-GUIDE.md).
+The download script fetches about 7 GB into the git-ignored `models/` folder and skips files already present. It fetches a CLIP evaluator's weights only when the settings file names that evaluator or you ask for it, as in `python scripts/download_models.py --evaluator clip-b32 --evaluator clip-l14`. To keep your own choices, copy [examples/sketchloop.toml](examples/sketchloop.toml) to `sketchloop.toml`, and launch with `sketchloop start --config sketchloop.toml`. For the user study, `sketchloop start --config study.toml` uses the committed [study.toml](study.toml), as described in [the study guide](docs/STUDY-GUIDE.md).
 
 ## Using the browser page
 
@@ -91,7 +91,7 @@ The page is for guided drawing. The experimenter types an experiment name such a
 | `--runs-dir` | `runs` | Where sessions are saved |
 | `--stroke-suggester` | `fake` | `fake` or `controlnet` behind Suggest next strokes |
 | `--prompt-suggester` | `templates` | `templates` or `florence` for the Florence-2 model behind Suggest a prompt |
-| `--config` | `./sketchloop.toml` if present | Settings file |
+| `--config` | None | Explicit settings file |
 
 **The page:** the command prints a warning for each stand-in, the fake stroke suggester or the template prompts, since a study needs the real ones. `sketchloop start --config study.toml` chooses the real ones, and [the study guide](docs/STUDY-GUIDE.md) has the full procedure.
 
@@ -185,16 +185,16 @@ Settings live in TOML files, so you do not have to repeat flags. A command-line 
 
 | File | In Git | Read by | Use it for |
 | --- | --- | --- | --- |
-| `sketchloop.toml` in the folder you run from | No, it is ignored | Every command, automatically | Your own everyday settings. Start from [examples/sketchloop.toml](examples/sketchloop.toml), which lists every key with its options |
+| `sketchloop.toml` in the folder you run from | No, it is ignored | Commands given `--config sketchloop.toml` | Your own everyday settings. Start from [examples/sketchloop.toml](examples/sketchloop.toml), which lists every key with its options |
 | [study.toml](study.toml) at the repository root | Yes | Commands given `--config study.toml` | The user study, with the real models, Florence-2 prompts, the webcam, and the study page |
 
 ```sh
 cp examples/sketchloop.toml sketchloop.toml   # once, then edit it
-sketchloop                                    # reads sketchloop.toml when it exists
+sketchloop start --config sketchloop.toml      # reads your settings
 sketchloop start --config study.toml             # reads study.toml instead
 ```
 
-`--config PATH` works with `dev run`, `start`, `dev rerun`, `dev benchmark`, and `study`. With `--config`, the local `sketchloop.toml` is not read. Without any file, the built-in defaults use the fake backend and the fake stroke suggester, which need no model.
+`--config PATH` works with `dev run`, `start`, `dev rerun`, `dev benchmark`, and `study`. No file is discovered automatically. Without `--config`, the built-in defaults use the fake backend and the fake stroke suggester, which need no model.
 
 - **Scope:** the file chooses the backend, mode, and precision, the image source for `dev run`, the preprocessor, the evaluator, the store and its runs folder, and the default candidates and seed for `dev run` and `start`.
 - **Paths:** a relative `runs_dir` or `[models] dir` is relative to the file's folder. Run `scripts/download_models.py` with the same file, so it downloads where the backend looks.

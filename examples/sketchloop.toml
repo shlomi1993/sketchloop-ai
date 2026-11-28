@@ -1,4 +1,4 @@
-# SketchLoop settings. Copy to sketchloop.toml in the folder you run sketchloop from, or pass --config PATH.
+# SketchLoop settings. Copy to a local file and pass --config PATH to read it.
 # Command-line flags override these values. Remove a line to use the built-in default.
 
 [generator]

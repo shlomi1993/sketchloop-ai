@@ -236,7 +236,7 @@ def load_session(folder: Path) -> SavedSession:
     Load a session folder's records, failing on structural faults and listing artifact problems.
 
     Args:
-        folder (Path): Session folder created by sketchloop dev run.
+        folder (Path): Folder containing persisted session records.
 
     Returns:
         SavedSession: The session, its rounds and drawings, and any problems found.
