@@ -684,16 +684,19 @@ class AppController:
             rotation (int): Degrees to turn the sketch clockwise.
 
         Returns:
-            bytes | None: PNG of the preview, or None when there is no open drawing, no frame, or no paper found.
+            bytes | None: PNG of the preview, or None when there is no frame or no paper found.
         """
-        # Without an open drawing or a frame, the page keeps its ordinary preview.
-        drawing = self._find_open_drawing()
-        if drawing is None or sketch is None:
+        if sketch is None:
             return None
 
         # Warp the frame to the paper canvas by its corners only, without alignment, since this runs every capture interval.
+        # Outside a drawing, show the plain paper canvas, so the sketch is visible before Start.
+        drawing = self._find_open_drawing()
         try:
             _, payload = encode_frame(sketch) if isinstance(sketch, np.ndarray) else load_sketch_file(sketch)
+            if drawing is None:
+                return make_paper_canvas(payload, rotation, *self.canvas_size).payload
+
             canvas = make_paper_canvas(payload, rotation, drawing.record.canvas_width, drawing.record.canvas_height)
             return drawing.compose_preview(canvas)
         except (SketchLoopError, OSError, ValueError):

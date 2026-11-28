@@ -328,7 +328,7 @@ def test_app_drawing_operations_need_an_open_drawing(controller: AppController, 
         controller.finish_drawing(sheet_frame, "webcam", rotation=0)
 
     # The page keeps its ordinary preview, there is no drawing to restore, and the header names the fake suggester.
-    assert controller.preview_guided_sketch(sheet_frame, 0) is None, "No drawing means no guided preview"
+    assert controller.preview_guided_sketch(sheet_frame, 0) is not None, "Without a drawing the plain sheet must show"
     assert "fake stroke suggester" in controller.describe_stroke_suggester(), "The default suggester is the labeled fake"
     assert controller.latest_drawing() is None, "No drawing to restore yet"
 
