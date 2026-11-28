@@ -52,4 +52,4 @@ The page gains a second layout that the `ux-reviewer` and a pilot must check, an
 
 The owner accepted the recorded 512x360 canvas for the pilot. A larger image for the experts would need a re-warp of the raw final frame, which stays a noted option that can be added without record changes. Prompt suggestions made on the generation page outside a drawing are lost if no round follows. Codes change on every export, so a second export cannot be joined to the first one's expert scores. With the owner's approval, S03 in PROJECT.md no longer mentions a design task, and the T10 row in ROADMAP.md names `sketchloop ui --study` instead of a `sketchloop study` runner.
 
-Amended by owner decision: the page has one mode, the study layout, so `--study`, `study.enabled`, and the separate generation page are removed, and image generation stays in the command line.
+Amended by owner decision: the page has one mode, the study layout, so `--study`, `study.enabled`, and the separate generation page are removed, and image generation stays in the command line. The export folder setting moved from `[study] export_dir` to `[storage] export_dir`.

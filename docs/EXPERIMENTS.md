@@ -71,7 +71,7 @@ Implemented in the T10 library, within schema version 1, following [the T10 desi
 Implemented for the study's analysis, reading the runs folder only and writing outside it:
 
 - **Finding study drawings:** `find_study_drawings` loads every runs-folder entry whose name matches `--match`, a glob compared ignoring case, `*` by default. A session that fails to load is skipped with one line naming the folder and the error, and the rest go on. Folders without `session.json`, time-named sessions, and sessions holding only drawings without `study` are passed over and counted.
-- **Blinded export:** `sketchloop study export [--runs-dir DIR] [--output DIR] [--match GLOB]` creates a new export folder, by default `export-<UTC yyyymmdd-HHMMSS>` under `[study] export_dir`, which is `data/study-exports/` and ignored by Git. It holds `drawings/<code>.png`, one per finished study drawing, `key.csv`, and `export.json`:
+- **Blinded export:** `sketchloop study export [--runs-dir DIR] [--output DIR] [--match GLOB]` creates a new export folder, by default `export-<UTC yyyymmdd-HHMMSS>` under `[storage] export_dir`, which is `data/study-exports/` and ignored by Git. It holds `drawings/<code>.png`, one per finished study drawing, `key.csv`, and `export.json`:
 
   ```text
   export-20261210-101500/

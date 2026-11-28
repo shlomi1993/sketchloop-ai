@@ -283,7 +283,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         action_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder the study saved into (settings storage.runs_dir, default runs)")  # noqa: E501
         action_parser.add_argument("--match", default="*", help='glob on experiment names, ignoring case, such as "p3_*" (default: every experiment)')  # noqa: E501
         action_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
-    export_parser.add_argument("--output", type=Path, help="new or empty folder for the export (default: export-<UTC time> under settings study.export_dir)")  # noqa: E501
+    export_parser.add_argument("--output", type=Path, help="new or empty folder for the export (default: export-<UTC time> under settings storage.export_dir)")  # noqa: E501
 
     # A bare sketchloop opens the browser page with the settings file's choices.
     if not (sys.argv[1:] if argv is None else argv):

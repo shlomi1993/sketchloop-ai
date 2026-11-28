@@ -17,13 +17,13 @@ def test_file_values_resolve_against_the_file(tmp_path: Path) -> None:
     config = tmp_path / "config" / "sketchloop.toml"
     config.parent.mkdir()
     lines = ["[models]", 'dir = "weights"', "[stroke_suggester.controlnet]", 'precision = "float32"', "[drawing]",
-             "canvas_width = 1024", "canvas_height = 256", "save_interval_seconds = 3", "[study]",
+             "canvas_width = 1024", "canvas_height = 256", "save_interval_seconds = 3", "[storage]",
              'export_dir = "exports"', "[prompt_suggester]", 'name = "florence"', ""]
     config.write_text("\n".join(lines), encoding="utf-8")
     settings = load_settings(config)
 
     # Relative folders join the file's folder.
-    folders = (settings.models.dir, settings.study.export_dir)
+    folders = (settings.models.dir, settings.storage.export_dir)
     assert folders == (tmp_path / "config" / "weights", tmp_path / "config" / "exports"), f"Unexpected folders {folders}"
 
     # Each key takes the file's value, and an integer interval becomes seconds as a float.

@@ -96,10 +96,11 @@ class EvaluatorSettings:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class StorageSettings:
     """
-    The experiment store and its folder.
+    The experiment store, its folder, and where the blinded export writes.
     """
     store: str = "folder"  # Registry name of the experiment store
     runs_dir: Path = Path("runs")  # Folder for saved sessions
+    export_dir: Path = Path("data/study-exports")  # Folder where sketchloop study export creates a new export folder
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -157,14 +158,6 @@ class PromptSuggesterSettings:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class StudySettings:
-    """
-    Where the blinded export writes.
-    """
-    export_dir: Path = Path("data/study-exports")  # Folder where sketchloop study export creates a new export folder
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
 class Settings:
     """
     Every component choice and default, from built-in values, a settings file, and command-line flags.
@@ -180,7 +173,6 @@ class Settings:
     stroke_suggester: StrokeSuggesterSettings = StrokeSuggesterSettings()  # Next-stroke suggester and its options
     drawing: DrawingSettings = DrawingSettings()  # Paper canvas and capture interval of guided sketching
     prompt_suggester: PromptSuggesterSettings = PromptSuggesterSettings()  # Prompt suggester behind "Suggest a prompt"
-    study: StudySettings = StudySettings()  # The blinded export folder
 
 
 def join_choices(choices: Sequence[object]) -> str:

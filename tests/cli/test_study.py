@@ -54,7 +54,7 @@ def test_export_command_refuses_prints_and_defaults(study_runs: Path, tmp_path: 
     assert f"/export/{KEY_FILE}" in output and HANDOVER_NOTE in output, f"Missing key or handover note in {output}"
 
     # Without --output the export lands in one export-<UTC time> folder under the configured folder.
-    (tmp_path / "sketchloop.toml").write_text('[study]\nexport_dir = "exports"\n', encoding="utf-8")
+    (tmp_path / "sketchloop.toml").write_text('[storage]\nexport_dir = "exports"\n', encoding="utf-8")
     default_exit, default_output = run_study(["export", "--runs-dir", str(study_runs), "--match", "p1_*"], capsys)
     folders = [path.name for path in (tmp_path / "exports").iterdir()]
     assert default_exit == 0, f"Expected success, got {default_exit}: {default_output}"

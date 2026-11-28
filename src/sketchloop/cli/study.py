@@ -102,7 +102,7 @@ def print_export(export: StudyExport, console: Console) -> None:
 def export_study(args: argparse.Namespace, console: Console) -> None:
     # Default to a new time-named folder under the configured export folder, and check Git before writing anything.
     settings = args.settings
-    output = args.output or settings.study.export_dir / f"export-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
+    output = args.output or settings.storage.export_dir / f"export-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
     check_ignored_by_git(output, console)
     print_export(export_study_drawings(settings.storage.runs_dir, output, match=args.match), console)
 
