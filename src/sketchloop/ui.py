@@ -795,7 +795,7 @@ class SketchPage:
             gr.HTML('<div id="logo">SL</div>', elem_id="logo-box")
             gr.Markdown("# SketchLoop")
 
-        with gr.Row(equal_height=False):
+        with gr.Row(equal_height=True):
             # The large sketch, and below it the camera beside its source and rotation.
             with gr.Column(scale=3):
                 sketch_view = gr.Image(label=OPEN_DRAWING_LABEL, interactive=False, height=STUDY_SKETCH_HEIGHT, buttons=[],
