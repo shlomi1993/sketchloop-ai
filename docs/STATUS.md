@@ -2,6 +2,8 @@
 
 ## Current state
 
+Removed the Makefile and its usage references at the owner’s request. Run `python scripts/check.py` for full checks and `python -m pytest` for offline tests in the activated project environment, or use the project interpreter directly as documented in [DEVELOPMENT.md](DEVELOPMENT.md). No CLI behavior changed and no tests were added. Full repository checks passed with 243 tests and 4 model tests deselected. The next action remains the study pilot below.
+
 The first supervisor meeting redirected the project to human-AI interaction ([meeting notes](meetings/2026-11-supervisor-meeting-1.md), [ADR 0021](decisions/0021-guided-sketching-and-user-study.md)). The system should suggest how to continue the sketch, infer acceptance from whether the person follows a suggestion, and support a user study of four design tasks with five participants, with and without AI, giving 40 drawings for expert evaluation. Requirements S01 to S05 are in [PROJECT.md](PROJECT.md), and [ROADMAP.md](ROADMAP.md) adds T09 for guided sketching, T10 for the study mode, T11 for the study itself, and T12 for the final documentation. The study runs on the owner's M2 Pro.
 
 Since the meeting, implemented and tested offline, with real runs on the M2 Pro where noted:

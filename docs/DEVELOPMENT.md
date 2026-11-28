@@ -34,7 +34,6 @@ Run these from the repository root in the activated environment. Without activat
 | `python scripts/check.py` | Privacy/publication guard, local Markdown target checks, Python syntax checks, Ruff lint, pytest tests |
 | `python scripts/privacy_check.py` | Scan publishable working files and staged blobs; reject private artifact paths and suspicious data patterns |
 | `python -m pytest` | Run offline tests only |
-| `make check` | POSIX convenience alias for the full check (override `PYTHON` if needed) |
 
 The environment stays in `sketchloop-ai-venv` and uses the shell prompt name `sketchloop-ai`. Running the installer alone prepares it but cannot activate it in the calling terminal. If Conda shows `(base)`, run `conda deactivate` before activating the project environment to avoid stacked prompts. Check the selected interpreter with `python -c "import sys; print(sys.prefix)"`, which should point to this repository's `sketchloop-ai-venv`. Rerunning the installer refreshes the prompt name of an existing environment without removing its packages.
 
