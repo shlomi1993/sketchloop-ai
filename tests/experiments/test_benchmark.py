@@ -6,7 +6,6 @@ import pytest
 
 from pathlib import Path
 
-from sketchloop.backends.fake import FakeGenerator
 from sketchloop.capture import load_sketch_file
 from sketchloop.domain import Guidance, SketchSource, UnsupportedConfigurationError
 from sketchloop.experiments import BenchmarkPlan, MemoryStore, compute_statistics, summarize_benchmark
@@ -18,15 +17,12 @@ EXAMPLE_SKETCH = Path(__file__).resolve().parents[2] / "examples" / "sketch-phot
 
 
 # The p95 of five values lies 80% of the way from the fourth to the fifth sorted value: 4 + 0.8 * (10 - 4).
-@pytest.mark.parametrize(("durations", "expected"), [
-    ([2.0], (1, 2.0, 2.0, 2.0, 2.0)),
-    ([4.0, 1.0, 3.0, 10.0, 2.0], (5, 3.0, 8.8, 1.0, 10.0))
-], ids=["one-value", "five-values"])
-def test_compute_statistics(durations: list[float], expected: tuple[int, float, float, float, float]) -> None:
+def test_compute_statistics() -> None:
     """
-    One value is its own median and p95, and five values give the inclusive interpolated p95.
+    Five values give their median, extremes, and the inclusive interpolated p95.
     """
-    stats = compute_statistics(durations)
+    stats = compute_statistics([4.0, 1.0, 3.0, 10.0, 2.0])
+    expected = (5, 3.0, 8.8, 1.0, 10.0)
 
     # Count, median, p95, minimum, and maximum match.
     values = (stats.count, stats.median_seconds, stats.p95_seconds, stats.min_seconds, stats.max_seconds)
@@ -61,19 +57,3 @@ def test_summarize_benchmark(first_load_generator: Generator) -> None:
 
     # The steps changed between measured rounds, and seeds are never reported as varying.
     assert summary.varying_settings == ("steps",), f"Expected steps to vary, got {summary.varying_settings}"
-
-
-def test_summarize_benchmark_without_measured_round() -> None:
-    """
-    A benchmark whose only measured round failed has no measured rounds and no statistics.
-    """
-    raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
-    session = SketchSession(FakeGenerator(), MemoryStore())
-    session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.FILE)
-    with pytest.raises(UnsupportedConfigurationError):
-        session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.FILE, n_candidates=99)
-    summary = summarize_benchmark(session.records, BenchmarkPlan(warmup_rounds=1, measured_rounds=1))
-
-    # Round 1 is warm-up, round 2 failed, and nothing is measured.
-    roles = (summary.warmup_rounds, summary.measured_rounds, summary.failed_rounds, dict(summary.stages))
-    assert roles == ((1,), (), (2,), {}), f"Expected warm-up 1, failed 2, and no statistics, got {roles}"

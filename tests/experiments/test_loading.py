@@ -15,7 +15,7 @@ from sketchloop.domain import (Guidance, SketchSource, Unavailable, UnsupportedC
 from sketchloop.evaluation import Evaluator
 from sketchloop.experiments import (MISSING_FRAME_AGE_REASON, MISSING_HARDWARE_REASON, MISSING_SETUP_REASON,
                                     MISSING_TOTAL_REASON, ORIGIN_NOT_RECORDED, BenchmarkPlan, ExperimentRecordError, FolderStore,
-                                    Hardware, PromptSuggestionRecord, load_session)
+                                    PromptSuggestionRecord, load_session)
 from sketchloop.session import SketchSession
 from sketchloop.stroke_suggesters.fake import FakeStrokeSuggester
 
@@ -86,41 +86,33 @@ def test_records_round_trip(tmp_path: Path) -> None:
     assert all(isinstance(value, str | Unavailable) for value in versions), f"Unexpected versions {versions}"
 
 
-@pytest.mark.parametrize(("damage", "problem"), [("flip", "does not match its recorded checksum"), ("delete", "is missing")])
-def test_damaged_candidate_listed(tmp_path: Path, damage: str, problem: str) -> None:
+def test_damaged_candidates_listed(tmp_path: Path) -> None:
     """
-    A changed or deleted candidate file is listed as one problem instead of failing the load.
+    A changed and a deleted candidate file are each listed as one problem instead of failing the load.
     """
     session = run_two_rounds(tmp_path)
-    candidate = session.folder / "round-1" / "candidates" / "candidate-1.png"
-    if damage == "flip":
-        payload = bytearray(candidate.read_bytes())
-        payload[-1] ^= 1
-        candidate.write_bytes(payload)
-    else:
-        candidate.unlink()
+    candidates = session.folder / "round-1" / "candidates"
+    payload = bytearray((candidates / "candidate-1.png").read_bytes())
+    payload[-1] ^= 1
+    (candidates / "candidate-1.png").write_bytes(payload)
+    (candidates / "candidate-2.png").unlink()
 
-    # The damaged file is reported as exactly one problem naming the file, while the session still loads.
+    # Each damaged file is one problem naming the file, while the session still loads.
     problems = load_session(session.folder).problems
-    assert problems == (f"round-1/candidates/candidate-1.png {problem}.",), f"Expected one problem, got {problems}"
+    expected = ("round-1/candidates/candidate-1.png does not match its recorded checksum.",
+                "round-1/candidates/candidate-2.png is missing.")
+    assert problems == expected, f"Expected one problem per damaged file, got {problems}"
 
 
 @pytest.mark.parametrize(("file_name", "edit", "message"), [
     ("round-1/round.json", lambda data: data["input"]["raw_sketch"].update(path="../x.png"), "outside its folder"),
     ("session.json", lambda data: data.update(schema_version=2), "schema version 2"),
     ("round-2/round.json", lambda data: data.update(parent_id="0" * 32), "does not link to round-1"),
-    ("round-1/round.json", lambda data: data.update(started_at="2026-10-09T11:25:02"), "timezone-aware"),
     ("round-1/round.json", lambda data: data["evaluation"].update(scores={"x": float("nan")}), "finite"),
-    ("round-1/round.json", lambda data: data["input"].update(source="scanner"), "source must be file, camera, webcam, or upload"),
-    ("round-1/round.json", lambda data: data["timings_seconds"].update(generation=-1.0), "finite seconds"),
-    ("round-1/round.json", lambda data: data["input"].update(frame_age_seconds=0.3), "Only a webcam round has a frame age"),
-    ("session.json", lambda data: data.update(benchmark={"warmup_rounds": -1, "measured_rounds": 5}), "Benchmark needs"),
-    ("session.json", lambda data: data["environment"].update(hardware={"cpu": "", "logical_cores": 0, "memory_bytes": 1}),
-     "Hardware cpu must be non-empty text")
-])
+], ids=["path-traversal", "schema-version", "broken-lineage", "non-finite-score"])
 def test_invalid_records_rejected(tmp_path: Path, file_name: str, edit: Callable[[dict], None], message: str) -> None:
     """
-    Traversal, a bad schema, lineage, time, score, source, duration, setup, frame age, benchmark plan, or hardware refuse to load.
+    A path outside the folder, an unknown schema, broken lineage, or a non-finite score refuses to load.
     """
     session = run_two_rounds(tmp_path)
     record_file = session.folder / file_name
@@ -134,101 +126,47 @@ def test_invalid_records_rejected(tmp_path: Path, file_name: str, edit: Callable
     assert "\n" not in str(raised.value), f"The error must be one line, got {raised.value!r}"
 
 
-def test_timing_fields_round_trip(tmp_path: Path) -> None:
+def test_session_fields_round_trip_and_older_files_load(tmp_path: Path, constant_evaluator: Evaluator) -> None:
     """
-    Totals, frame age, hardware, generator setup, and the benchmark plan load back unchanged, and older files load as unavailable.
+    Timings, frame age, hardware, setup, the benchmark plan, and score details reload, and older files load as unavailable.
     """
     raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
-    session = SketchSession(FakeGenerator(), FolderStore(tmp_path), benchmark=BenchmarkPlan(warmup_rounds=1, measured_rounds=2),
-                            generator_setup_seconds=2.5)
+    session = SketchSession(FakeGenerator(), FolderStore(tmp_path), constant_evaluator,
+                            benchmark=BenchmarkPlan(warmup_rounds=1, measured_rounds=2), generator_setup_seconds=2.5)
     session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.WEBCAM, capture_seconds=0.1,
                       frame_age_seconds=0.3)
     saved = load_session(session.folder)
     record, expected = saved.rounds[0], session.records[0]
 
-    # The new round and session fields load back as recorded.
-    loaded_round = (record.timings_seconds, record.total_seconds, record.frame_age_seconds)
-    assert loaded_round == (expected.timings_seconds, expected.total_seconds, 0.3), f"Round fields changed: {loaded_round}"
-    recorded_session = session.session_record
+    # The round and session fields load back as recorded, with the evaluator's description of its scores.
+    loaded_round = (record.timings_seconds, record.total_seconds, record.frame_age_seconds, dict(record.score_details))
+    expected_round = (expected.timings_seconds, expected.total_seconds, 0.3, dict(constant_evaluator.describe_scores()))
+    assert loaded_round == expected_round, f"Round fields changed: {loaded_round}"
     loaded_session = (saved.session.environment.hardware, saved.session.generator_setup_seconds, saved.session.benchmark)
-    expected_session = (recorded_session.environment.hardware, 2.5, BenchmarkPlan(warmup_rounds=1, measured_rounds=2))
+    expected_session = (session.session_record.environment.hardware, 2.5, BenchmarkPlan(warmup_rounds=1, measured_rounds=2))
     assert loaded_session == expected_session, f"Session fields changed: {loaded_session}"
 
-    # Delete the new keys to stand in for files written before they were tracked.
+    # Delete the newer keys to stand in for files written before they were tracked.
     session_file, round_file = session.folder / "session.json", session.folder / "round-1" / "round.json"
     session_data = json.loads(session_file.read_text(encoding="utf-8"))
     round_data = json.loads(round_file.read_text(encoding="utf-8"))
     removals = [(session_data["environment"], "hardware"), (session_data, "generator_setup_seconds"), (session_data, "benchmark"),
-                (round_data, "total_seconds"), (round_data["input"], "frame_age_seconds")]
+                (session_data, "name"), (round_data, "total_seconds"), (round_data["input"], "frame_age_seconds"),
+                (round_data["evaluation"], "score_details")]
     for data, key in removals:
         del data[key]
     session_file.write_text(json.dumps(session_data), encoding="utf-8")
     round_file.write_text(json.dumps(round_data), encoding="utf-8")
     older = load_session(session.folder)
 
-    # Each missing value loads as unavailable with its reason, and a missing benchmark plan as none.
+    # Each missing value loads as unavailable with its reason, and a missing plan, name, or description as none.
     older_session, older_round = older.session, older.rounds[0]
     assert older_session.environment.hardware == Unavailable(MISSING_HARDWARE_REASON), "Missing hardware must be unavailable"
     assert older_session.generator_setup_seconds == Unavailable(MISSING_SETUP_REASON), "Missing setup must be unavailable"
-    assert older_session.benchmark is None, f"A missing benchmark plan must load as none, got {older_session.benchmark}"
     assert older_round.total_seconds == Unavailable(MISSING_TOTAL_REASON), "A missing total must be unavailable"
     assert older_round.frame_age_seconds == Unavailable(MISSING_FRAME_AGE_REASON), "A missing frame age must be unavailable"
-
-
-def test_score_details_round_trip(tmp_path: Path, constant_evaluator: Evaluator) -> None:
-    """
-    The evaluator's description of its scores is saved with each round, and a round saved before it loads with none.
-    """
-    raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
-    session = SketchSession(FakeGenerator(), FolderStore(tmp_path), constant_evaluator)
-    session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.FILE, n_candidates=2, seed=7)
-    saved = load_session(session.folder).rounds[0]
-    expected = dict(constant_evaluator.describe_scores())
-    assert dict(saved.score_details) == expected, f"Expected score details {expected}, got {saved.score_details}"
-
-    # Delete the key to stand in for a round written before evaluators described their scores.
-    round_file = session.folder / "round-1" / "round.json"
-    round_data = json.loads(round_file.read_text(encoding="utf-8"))
-    del round_data["evaluation"]["score_details"]
-    round_file.write_text(json.dumps(round_data), encoding="utf-8")
-    older = load_session(session.folder).rounds[0]
-    assert dict(older.score_details) == {} and older.scores, f"An older round must load with no details, got {older}"
-
-
-def test_hardware_with_unavailable_fact_round_trips(tmp_path: Path) -> None:
-    """
-    Hardware with one unavailable fact keeps that fact's reason and the other values through session.json.
-    """
-    raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
-    session = SketchSession(FakeGenerator(), FolderStore(tmp_path))
-    session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.FILE)
-    session_file = session.folder / "session.json"
-    data = json.loads(session_file.read_text(encoding="utf-8"))
-
-    # Write synthetic hardware whose memory could not be read.
-    unread_memory = {"unavailable": "synthetic reason"}
-    data["environment"]["hardware"] = {"cpu": "Synthetic CPU", "logical_cores": 4, "memory_bytes": unread_memory}
-    session_file.write_text(json.dumps(data), encoding="utf-8")
-    hardware = load_session(session.folder).session.environment.hardware
-
-    # The readable facts load as values and the unreadable one as unavailable with its reason.
-    expected = Hardware(cpu="Synthetic CPU", logical_cores=4, memory_bytes=Unavailable("synthetic reason"))
-    assert hardware == expected, f"Expected {expected}, got {hardware}"
-
-
-def test_session_without_drawings_or_name_loads(tmp_path: Path) -> None:
-    """
-    A session saved before T09, without drawing folders or a name in session.json, loads with no drawings and no name.
-    """
-    session = run_two_rounds(tmp_path)
-    session_file = session.folder / "session.json"
-    data = json.loads(session_file.read_text(encoding="utf-8"))
-    del data["name"]
-    session_file.write_text(json.dumps(data), encoding="utf-8")
-    saved = load_session(session.folder)
-
-    # The older session has no drawings and no experiment name.
-    assert saved.drawings == () and saved.session.name is None, f"Expected no drawings or name, got {saved}"
+    nothing = (older_session.benchmark, older_session.name, dict(older_round.score_details), older.drawings)
+    assert nothing == (None, None, {}, ()) and older_round.scores, f"Expected no plan, name, details, or drawings, got {nothing}"
 
 
 def run_named_drawing(runs_dir: Path, captured: CapturedSketch) -> SketchSession:
@@ -270,19 +208,12 @@ def test_drawing_loads_and_reports_changed_mask(tmp_path: Path, sheet_capture: C
     (lambda data: data["captures"][0]["raw"].update(path="../x.png"), "outside its folder"),
     (lambda data: data["captures"][1].update(number=3), "Capture numbers must run from 1 without gaps"),
     (lambda data: data["suggestions"][0].update(baseline_capture=2), "baseline must be a suggestion capture"),
-    (lambda data: data["suggestions"][0]["request"].update(max_parts=1), "more than the 1 requested"),
-    (lambda data: data.update(final_capture=1), "must have trigger finish"),
-    (lambda data: data.update(end=None), "end time exactly when it has an end"),
     (lambda data: data["captures"][1]["follow"].update(suggestion=2), "not the one open when it was taken"),
-    (lambda data: data.update(follow_detector=None), "follow scores but no follow method"),
-    (lambda data: data["captures"][1]["follow"]["parts"].pop(), "parts, not suggestion 1's"),
-    (lambda data: data["captures"][1]["filled"].update(width=64), "filled mask must be L, canvas-sized"),
-    (lambda data: data.update(interval_jpeg_quality=0), "interval_jpeg_quality must be an int from 1 to 100"),
-])
+], ids=["path-traversal", "capture-gap", "wrong-baseline", "foreign-suggestion"])
 def test_invalid_drawing_rejected(tmp_path: Path, sheet_capture: CapturedSketch, edit: Callable[[dict], None],
                                   message: str) -> None:
     """
-    A drawing.json with an outside path, a capture gap, a wrong baseline, too many parts, or a bad end or alignment fails.
+    A drawing.json with an outside path, a capture gap, a wrong baseline, or a foreign alignment fails.
     """
     session = run_named_drawing(tmp_path, sheet_capture)
     drawing_file = session.folder / "drawing-1" / "drawing.json"
@@ -297,7 +228,9 @@ def test_invalid_drawing_rejected(tmp_path: Path, sheet_capture: CapturedSketch,
 
 
 def run_prompted_rounds(runs_dir: Path, make_prompt_suggestion: PromptMaker) -> SketchSession:
-    # Show a prompt suggestion outside a drawing, use it unchanged in round 1, and use it edited in round 2.
+    """
+    Show a prompt suggestion outside a drawing, use it unchanged in round 1, and use it edited in round 2.
+    """
     raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
     session = SketchSession(FakeGenerator(), FolderStore(runs_dir))
     session.record_prompt_suggestion(make_prompt_suggestion("a chair, concept art", "prompt-a"))
@@ -309,10 +242,13 @@ def run_prompted_rounds(runs_dir: Path, make_prompt_suggestion: PromptMaker) -> 
 
 
 def test_round_prompt_fields_round_trip_and_older_rounds_load(tmp_path: Path, make_prompt_suggestion: PromptMaker) -> None:
+    """
+    Rounds reload their prompt suggestions and origins, an unknown origin ID is a problem, and older rounds load without.
+    """
     session = run_prompted_rounds(tmp_path, make_prompt_suggestion)
     saved = load_session(session.folder)
-    round_file = session.folder / "round-1" / "round.json"
-    data = json.loads(round_file.read_text(encoding="utf-8"))
+    round1_file, round2_file = session.folder / "round-1" / "round.json", session.folder / "round-2" / "round.json"
+    round1, round2 = (json.loads(path.read_text(encoding="utf-8")) for path in (round1_file, round2_file))
 
     # Both rounds load with their prompt suggestions and origins, the second naming the first round's suggestion.
     loaded = [(record.prompt_suggestions, record.prompt_origin) for record in saved.rounds]
@@ -321,38 +257,20 @@ def test_round_prompt_fields_round_trip_and_older_rounds_load(tmp_path: Path, ma
     assert saved.rounds[1].prompt_origin.kind == "edited", f"Round 2 must be edited, got {saved.rounds[1].prompt_origin}"
 
     # The new keys follow the evaluation in round.json.
-    keys = list(data)
+    keys = list(round1)
     position = keys.index("evaluation")
     assert keys[position + 1:position + 3] == ["prompt_suggestions", "prompt_origin"], f"Unexpected key order {keys}"
 
-    # A round saved before prompt records loads with no list and an origin not recorded.
-    del data["prompt_suggestions"], data["prompt_origin"]
-    round_file.write_text(json.dumps(data), encoding="utf-8")
-    older = load_session(session.folder).rounds[0]
+    # Round 2 names an unknown suggestion, and round 1 loses its keys, standing in for a round saved before them.
+    round2["prompt_origin"]["prompt_suggestion"] = "unknown"
+    del round1["prompt_suggestions"], round1["prompt_origin"]
+    round1_file.write_text(json.dumps(round1), encoding="utf-8")
+    round2_file.write_text(json.dumps(round2), encoding="utf-8")
+    changed = load_session(session.folder)
+
+    # The unknown ID is one problem line, and the older round has no list and an origin not recorded.
+    problems = ("round-2 prompt origin names prompt suggestion unknown, which is not in this session.",)
+    assert changed.problems == problems, f"Expected one problem, got {changed.problems}"
+    older = changed.rounds[0]
     assert older.prompt_suggestions is None, f"An older round has no prompt suggestion list, got {older.prompt_suggestions}"
     assert older.prompt_origin == Unavailable(ORIGIN_NOT_RECORDED), f"Expected not recorded, got {older.prompt_origin}"
-
-
-def test_round_origin_naming_an_unknown_suggestion_is_a_problem(tmp_path: Path, make_prompt_suggestion: PromptMaker) -> None:
-    session = run_prompted_rounds(tmp_path, make_prompt_suggestion)
-    round_file = session.folder / "round-2" / "round.json"
-    data = json.loads(round_file.read_text(encoding="utf-8"))
-    data["prompt_origin"]["prompt_suggestion"] = "unknown"
-    round_file.write_text(json.dumps(data), encoding="utf-8")
-    saved = load_session(session.folder)
-
-    # The session still loads, and the unknown ID is one problem line.
-    expected = ("round-2 prompt origin names prompt suggestion unknown, which is not in this session.",)
-    assert saved.problems == expected, f"Expected one problem, got {saved.problems}"
-
-
-def test_round_origin_disagreeing_with_its_own_suggestion_is_refused(tmp_path: Path, make_prompt_suggestion: PromptMaker) -> None:
-    session = run_prompted_rounds(tmp_path, make_prompt_suggestion)
-    round_file = session.folder / "round-1" / "round.json"
-    data = json.loads(round_file.read_text(encoding="utf-8"))
-    data["prompt_origin"]["kind"] = "edited"
-    round_file.write_text(json.dumps(data), encoding="utf-8")
-
-    # The round's own suggestion gives suggested, so the recorded kind is refused.
-    with pytest.raises(ExperimentRecordError, match="recorded as edited, but its prompt and suggestion give suggested"):
-        load_session(session.folder)

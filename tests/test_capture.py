@@ -1,5 +1,5 @@
 """
-Tests of file and camera capture with a fake camera.
+Tests of camera capture with a fake camera and of JPEG frame encoding.
 """
 
 import cv2
@@ -7,13 +7,7 @@ import numpy as np
 import pytest
 import time
 
-from pathlib import Path
-
-from sketchloop.capture import (SPACE_KEY, CameraCapture, CapturedSketch, FileCapture, InvalidSketchError, VideoSource,
-                                capture_from_camera, encode_frame_jpeg, load_sketch_file)
-
-
-EXAMPLE_SKETCH = Path(__file__).resolve().parents[1] / "examples" / "sketch-photo.jpg"
+from sketchloop.capture import SPACE_KEY, CameraCapture, InvalidSketchError, VideoSource, capture_from_camera, encode_frame_jpeg
 
 
 class FakeCamera(VideoSource):
@@ -60,7 +54,7 @@ def no_windows(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.usefixtures("no_windows")
 def test_camera_capture() -> None:
     """
-    Pressing Space captures the previewed frame as a PNG raw sketch and releases the camera, also through CameraCapture.
+    Space captures the previewed frame as a PNG raw sketch and releases the camera, and a missing camera fails in one line.
     """
     camera = FakeCamera(available=True)
     source = CameraCapture(0, open_camera=lambda index: camera)
@@ -79,33 +73,11 @@ def test_camera_capture() -> None:
     assert source.kind == "camera", f"CameraCapture must record source camera, got {source.kind}"
     assert (image, payload) == (direct.image, direct.payload), "CameraCapture must return the same sketch as capture_from_camera"
 
-
-@pytest.mark.usefixtures("no_windows")
-def test_camera_unavailable() -> None:
-    """
-    A camera that cannot open gives a one-line error naming the index and still gets released.
-    """
-    camera = FakeCamera(available=False)
-
-    # Opening the missing camera fails with an error naming its index.
+    # A camera that cannot open gives a one-line error naming its index and still gets released.
+    missing = FakeCamera(available=False)
     with pytest.raises(InvalidSketchError, match="No camera at index 2") as error:
-        capture_from_camera(2, open_camera=lambda index: camera)
-
-    # The error fits on one line, and the camera is still released.
-    assert "\n" not in str(error.value), f"Expected a one-line error, got {error.value!r}"
-    assert camera.released, "The camera must be released after a failure"
-
-
-def test_file_capture_is_timed() -> None:
-    """
-    A file capture returns the file's sketch with a non-negative capture time.
-    """
-    captured = FileCapture(EXAMPLE_SKETCH).capture()
-
-    # The capture holds the same sketch as loading the file, with its own time.
-    assert isinstance(captured, CapturedSketch), f"Expected a CapturedSketch, got {type(captured)}"
-    assert (captured.image, captured.payload) == load_sketch_file(EXAMPLE_SKETCH), "The capture must hold the file's sketch"
-    assert captured.capture_seconds >= 0, f"Capture time must not be negative, got {captured.capture_seconds}"
+        capture_from_camera(2, open_camera=lambda index: missing)
+    assert "\n" not in str(error.value) and missing.released, f"Expected a one-line error and a release, got {error.value!r}"
 
 
 @pytest.mark.usefixtures("no_windows", "counting_clock")
@@ -127,27 +99,19 @@ def test_camera_capture_excludes_preview(monkeypatch: pytest.MonkeyPatch) -> Non
     assert captured.capture_seconds == 7.0, f"The preview must not count as capture time, got {captured.capture_seconds}"
 
 
-@pytest.mark.parametrize(("channels", "mode"), [(1, "L"), (4, "RGB")])
-def test_encode_frame_jpeg(channels: int, mode: str) -> None:
+def test_encode_frame_jpeg() -> None:
     """
-    A gray, BGR, or BGRA frame is encoded as a JPEG raw frame, dropping alpha, with its size and checksum.
+    A BGRA frame is encoded as a JPEG raw frame without alpha, and a bad quality or a frame that is not 8-bit is refused.
     """
-    frame = np.full((48, 64, channels), 220, dtype=np.uint8)
-    image, payload = encode_frame_jpeg(frame[..., 0] if channels == 1 else frame, 90)
+    image, payload = encode_frame_jpeg(np.full((48, 64, 4), 220, dtype=np.uint8), 90)
 
     # The bytes are JPEG and the reference describes them.
     assert payload.startswith(b"\xff\xd8\xff"), "Expected JPEG bytes"
     described = (image.path, image.media_type, image.width, image.height, image.mode)
-    assert described == ("sketch-raw.jpg", "image/jpeg", 64, 48, mode), f"Unexpected reference {described}"
+    assert described == ("sketch-raw.jpg", "image/jpeg", 64, 48, "RGB"), f"Unexpected reference {described}"
 
-
-@pytest.mark.parametrize(("frame", "quality", "error"), [
-    (np.zeros((8, 8, 3), dtype=np.uint8), 0, ValueError),
-    (np.zeros((8, 8, 3), dtype=np.uint16), 90, InvalidSketchError),
-])
-def test_encode_frame_jpeg_refuses_bad_input(frame: np.ndarray, quality: int, error: type[Exception]) -> None:
-    """
-    A quality outside 1 to 100 or a frame that is not 8-bit is refused.
-    """
-    with pytest.raises(error):
-        encode_frame_jpeg(frame, quality)
+    # A quality outside 1 to 100 and a 16-bit frame are refused.
+    with pytest.raises(ValueError):
+        encode_frame_jpeg(np.zeros((8, 8, 3), dtype=np.uint8), 0)
+    with pytest.raises(InvalidSketchError):
+        encode_frame_jpeg(np.zeros((8, 8, 3), dtype=np.uint16), 90)

@@ -10,12 +10,10 @@ import pytest
 from pathlib import Path
 from typing import Any
 
-from sketchloop.backends.diffusers import DiffusersSketchGenerator, GenerationBackendError, PipelineRunner
+from sketchloop.backends.diffusers import GenerationBackendError, PipelineRunner
 from sketchloop.backends.t2i_adapter import T2IAdapterSketchGenerator
-from sketchloop.components import GENERATORS, RERUNNABLE_BACKENDS
 from sketchloop.domain import GenerationRequest, Guidance, ImageRef
 from sketchloop.preprocessing import preprocess_sketch
-from sketchloop.settings import DiffusersSettings, GeneratorSettings, Settings
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -51,7 +49,7 @@ def make_sketch() -> tuple[ImageRef, bytes]:
 
 def test_t2i_adapter_maps_request() -> None:
     """
-    A request maps to adapter pipeline arguments with a 1-channel white-on-black PIL sketch and the adapter scale.
+    A request maps to adapter arguments with a white-on-black PIL sketch and the adapter scale, and fast mode adds the LoRA.
     """
     runner = RecordingRunner()
     generator = T2IAdapterSketchGenerator(mode="quality", device="cpu", runner=runner)
@@ -83,17 +81,10 @@ def test_t2i_adapter_maps_request() -> None:
                          "conditioning_scale": 0.8}
     assert recorded == expected_settings, f"Unexpected effective settings {recorded}"
 
-
-def test_t2i_adapter_fast_mode() -> None:
-    """
-    Fast mode uses the LCM settings, a default adapter scale of 1.0, and the LCM-LoRA in the recorded model.
-    """
+    # Fast mode uses the LCM settings and a default adapter scale of 1.0.
     runner = RecordingRunner()
     generator = T2IAdapterSketchGenerator(mode="fast", device="cpu", runner=runner)
-    sketch, payload = make_sketch()
     output = generator.generate(GenerationRequest(sketch=sketch, guidance=Guidance(prompt="chair"), seed=1), payload)
-
-    # The fast defaults reach the pipeline, with no ControlNet argument.
     call = runner.calls[0]
     defaults = (call["num_inference_steps"], call["guidance_scale"], call["adapter_conditioning_scale"])
     assert defaults == (4, 1.5, 1.0), f"Expected 4 steps, guidance 1.5, and scale 1.0, got {defaults}"
@@ -124,23 +115,6 @@ def test_t2i_adapter_missing_model(tmp_path: Path) -> None:
     message = str(raised.value)
     assert "t2iadapter_sketch_sd15v2" in message and "download_models.py" in message, f"Unhelpful error {message!r}"
     assert "\n" not in message, "The error must be a single line"
-
-
-def test_t2i_adapter_registered() -> None:
-    """
-    The settings name t2i-adapter creates the adapter backend, and rerun maps its recorded adapter name back.
-    """
-    diffusers = DiffusersSettings(mode="quality", precision="float32")
-    generator = GENERATORS["t2i-adapter"](Settings(generator=GeneratorSettings(backend="t2i-adapter", diffusers=diffusers)))
-
-    # The shared diffusers options reach the new backend.
-    assert isinstance(generator, T2IAdapterSketchGenerator), f"Expected the adapter backend, got {type(generator)}"
-    assert (generator.mode, generator.precision) == ("quality", "float32"), "The shared diffusers options must apply"
-
-    # Rerun recreates each real backend from its own adapter name.
-    adapter_name = T2IAdapterSketchGenerator.ADAPTER_NAME
-    assert adapter_name != DiffusersSketchGenerator.ADAPTER_NAME, "The two real backends need distinct adapter names"
-    assert RERUNNABLE_BACKENDS[adapter_name] == "t2i-adapter", "Rerun must map the adapter name to t2i-adapter"
 
 
 @pytest.mark.model

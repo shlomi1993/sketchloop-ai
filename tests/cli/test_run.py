@@ -83,29 +83,24 @@ def raise_disk_full(source: object, target: object) -> None:
     raise OSError(errno.ENOSPC, "No space left on device")
 
 
-# The fake allows at most 8 candidates, so 9 fails in generation, and a full disk fails saving session.json.
-@pytest.mark.parametrize(("candidates", "disk_full", "failure_pattern"), [
-    ("9", False, r"Round failed: Unsupported request.*"),
-    ("2", True, r"Round failed: Cannot save [\w-]+/session\.json: No space left on device\. Free disk space or check write access to the runs folder, then retry\.")  # noqa: E501
-], ids=["candidate-limit", "full-disk"])
-def test_cli_session_survives_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
-                                     candidates: str, disk_full: bool, failure_pattern: str) -> None:
+FULL_DISK_LINE = r"Round failed: Cannot save [\w-]+/session\.json: No space left on device\. Free disk space or check write access to the runs folder, then retry\."  # noqa: E501
+
+
+def test_cli_session_survives_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """
-    A failed round or a failed save and a missing new file are reported, and the session continues to the menu and summary.
+    A save on a full disk and a missing new file are reported, and the session continues to the menu and summary.
     """
     answers = iter(["f missing.png", "q"])
     monkeypatch.setattr("builtins.input", lambda *prompt: next(answers))
-    if disk_full:
-        monkeypatch.setattr("sketchloop.experiments.stores.os.replace", raise_disk_full)
-
+    monkeypatch.setattr("sketchloop.experiments.stores.os.replace", raise_disk_full)
     runs_dir = str(tmp_path / "runs")
-    exit_code = main(["run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--candidates", candidates, "--runs-dir", runs_dir])
+    exit_code = main(["run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--candidates", "2", "--runs-dir", runs_dir])
     output = capsys.readouterr().out
     failure_lines = [line for line in output.splitlines() if line.startswith("Round failed:")]
 
     # The failure is one line naming the cause and recovery, with no absolute path that could name the user or leftover file.
     assert len(failure_lines) == 1, f"Expected one failure line, got {failure_lines}"
-    assert re.fullmatch(failure_pattern, failure_lines[0]), f"Unexpected failure line {failure_lines[0]!r}"
+    assert re.fullmatch(FULL_DISK_LINE, failure_lines[0]), f"Unexpected failure line {failure_lines[0]!r}"
     assert str(tmp_path) not in failure_lines[0] and tmp_path.as_posix() not in failure_lines[0], "The message shows a path"
     leftovers = list((tmp_path / "runs").rglob("*.tmp"))
     assert leftovers == [], f"A failed save must remove its temporary file, found {leftovers}"

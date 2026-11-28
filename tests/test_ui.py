@@ -54,7 +54,7 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.usefixtures("no_network")
 def test_ui_builds_offline(controller: AppController, monkeypatch: pytest.MonkeyPatch) -> None:
     """
-    The page builds offline without launching, analytics are off, and Generate waits for a sketch and prompt.
+    The page builds offline without launching or naming a goal, analytics are off, and Generate waits for a sketch and prompt.
     """
     import gradio
 
@@ -88,17 +88,32 @@ def test_ui_builds_offline(controller: AppController, monkeypatch: pytest.Monkey
     assert not missing, f"ui.css has no preview rule for rotations {missing}"
     assert "\nwindow.sketchloop.watchWebcam();" in ui.SCRIPT_PATH.read_text(encoding="utf-8"), "ui.js must watch the webcam"
 
+    # The experimenter names the experiment with a code, and the participant has the drawing buttons.
+    labels = [str(getattr(block, "label", "") or "") for block in app.blocks.values()]
+    buttons = [block.value for block in app.blocks.values() if isinstance(block, gradio.Button)]
+    hints = [block.info for block in app.blocks.values() if isinstance(block, gradio.Textbox)]
+    assert "Experiment name" in labels and ui.EXPERIMENT_NAME_HINT in hints, f"Missing the name box or its hint in {labels}"
+    missing = {"Start drawing", "Suggest next strokes", "Finish drawing"} - set(buttons)
+    assert not missing, f"Missing buttons {missing}"
+
+    # No component asks for a goal or a task, since the system is never told one.
+    named = [label for label in labels if re.search(r"\b(goal|task)\b", label, re.IGNORECASE)]
+    assert not named, f"The page must not name a goal or task, found {named}"
+
 
 @pytest.mark.usefixtures("no_network")
-def test_page_handlers_keep_frame_and_refuse_missing_sketch(controller: AppController) -> None:
+def test_page_handlers_keep_frame_and_record_its_age(controller: AppController, tmp_path: Path,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
     """
-    SketchPage handlers work without building the page, refusing a webcam round with no frame and keeping a BGR copy.
+    Handlers refuse a missing or stale webcam frame, keep a BGR copy, and record a webcam frame's age but not an upload's.
     """
     import gradio
 
     from sketchloop import ui
 
     page = ui.SketchPage(controller, default_candidates=2, default_seed=None)
+    clock_seconds = [10.0]
+    monkeypatch.setattr(ui.time, "monotonic", lambda: clock_seconds[0])
 
     # Without a frame, Generate shows the controller's no-sketch message.
     with pytest.raises(gradio.Error, match=re.escape(NO_SKETCH_MESSAGE)):
@@ -119,21 +134,9 @@ def test_page_handlers_keep_frame_and_refuse_missing_sketch(controller: AppContr
     with pytest.raises(gradio.Error, match=re.escape(ui.STALE_FRAME_MESSAGE)):
         page.run_generation("webcam", None, "chair", None, 2, None, 0, False, progress=lambda *args, **kwargs: None)
 
-
-@pytest.mark.usefixtures("no_network")
-def test_generation_records_webcam_frame_age(controller: AppController, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """
-    A webcam round records how old its frame was when Generate ran, and an upload round records no frame age.
-    """
-    from sketchloop import ui
-
-    page = ui.SketchPage(controller, default_candidates=1, default_seed=None)
+    # A fresh frame kept at 10 s and generated from at 10.4 s is 0.4 s old, in the record and in the taken frame.
     page_sketch = np.full((600, 900, 3), 210, dtype=np.uint8)
     cv2.rectangle(page_sketch, (500, 100), (700, 200), (30, 30, 30), 4)
-    clock_seconds = [10.0]
-    monkeypatch.setattr(ui.time, "monotonic", lambda: clock_seconds[0])
-
-    # A frame kept at 10 s and generated from at 10.4 s is 0.4 s old, in the record and in the taken frame.
     page.keep_frame(page_sketch, "webcam", None, "chair")
     clock_seconds[0] = 10.4
     taken = page.take_fresh_frame()
@@ -172,7 +175,7 @@ def make_suggestion_view(*, status: str, is_fake: bool) -> SuggestionView:
 @pytest.mark.usefixtures("no_network")
 def test_drawing_status_and_buttons_follow_the_drawing() -> None:
     """
-    Start drawing waits for a name and no open drawing, the drawing buttons follow the drawing, and the status names each state.
+    Start waits for a name, the drawing buttons and status follow the drawing, and an upload's capture key names its file.
     """
     from sketchloop import ui
 
@@ -214,6 +217,19 @@ def test_drawing_status_and_buttons_follow_the_drawing() -> None:
     finished = ui.describe_drawing_status(make_drawing_view(is_open=False, suggestion_lines=("Suggestion 1: 2 colored parts",)))
     assert restored.endswith("Suggestion 1: 2 colored parts"), f"A reload must show the latest suggestion, got {restored!r}"
     assert "finished" in finished and "1 suggestion" in finished, f"Unexpected finished status {finished!r}"
+
+    drawing = make_drawing_view(is_open=True)
+    other = DrawingView(number=1, experiment="p2", is_open=True, capture_count=0, suggestion_count=0, suggestion_lines=())
+
+    # The same file in the same drawing gives the same key, and another file or experiment gives another.
+    keys = [ui.name_upload_capture(drawing, "upload", "a.png"), ui.name_upload_capture(drawing, "upload", "b.png"),
+            ui.name_upload_capture(other, "upload", "a.png")]
+    assert keys[0] == ui.name_upload_capture(drawing, "upload", "a.png"), "The same upload must keep its key"
+    assert len(set(keys)) == 3, f"Another file or experiment must change the key, got {keys}"
+
+    # A webcam frame and a missing upload have no key.
+    assert ui.name_upload_capture(drawing, "webcam", "a.png") is None, "A webcam frame must have no upload key"
+    assert ui.name_upload_capture(drawing, "upload", None) is None, "A missing upload must have no key"
 
 
 @pytest.mark.usefixtures("no_network")
@@ -275,30 +291,6 @@ def test_page_starts_suggests_and_finishes_a_drawing(controller: AppController, 
     assert suggest.interactive is False and finish.interactive is False, "A finished drawing must disable its buttons"
     assert new_session.interactive is True, "A finished drawing must allow a new session"
     assert "finished" in status and controller.session.drawings[0].record.final_capture is not None, f"Bad finish {status!r}"
-
-
-@pytest.mark.usefixtures("no_network")
-def test_page_has_experiment_controls_and_no_goal(controller: AppController) -> None:
-    """
-    The built page has the experiment name with its privacy hint and the drawing buttons, and nothing names a goal or task.
-    """
-    import gradio
-
-    from sketchloop import ui
-
-    app = ui.SketchPage(controller, default_candidates=1, default_seed=None).build()
-    labels = [str(getattr(block, "label", "") or "") for block in app.blocks.values()]
-    buttons = [block.value for block in app.blocks.values() if isinstance(block, gradio.Button)]
-    hints = [block.info for block in app.blocks.values() if isinstance(block, gradio.Textbox)]
-
-    # The experimenter names the experiment with a code, and the participant has the drawing buttons.
-    assert "Experiment name" in labels and ui.EXPERIMENT_NAME_HINT in hints, f"Missing the name box or its hint in {labels}"
-    missing = {"Start drawing", "Suggest next strokes", "Finish drawing"} - set(buttons)
-    assert not missing, f"Missing buttons {missing}"
-
-    # No component asks for a goal or a task, since the system is never told one.
-    named = [label for label in labels if re.search(r"\b(goal|task)\b", label, re.IGNORECASE)]
-    assert not named, f"The page must not name a goal or task, found {named}"
 
 
 @pytest.mark.usefixtures("no_network")
@@ -367,26 +359,6 @@ def test_page_saves_drawing_captures_quietly(sheet_frame: np.ndarray, tmp_path: 
     assert captures() == finished, "A finished drawing must not get interval captures"
 
 
-def test_upload_capture_key_names_the_drawing_and_file() -> None:
-    """
-    An upload's capture key changes with the drawing or the file, and a webcam frame has none, so it is always saved.
-    """
-    from sketchloop import ui
-
-    drawing = make_drawing_view(is_open=True)
-    other = DrawingView(number=1, experiment="p2", is_open=True, capture_count=0, suggestion_count=0, suggestion_lines=())
-
-    # The same file in the same drawing gives the same key, and another file or experiment gives another.
-    keys = [ui.name_upload_capture(drawing, "upload", "a.png"), ui.name_upload_capture(drawing, "upload", "b.png"),
-            ui.name_upload_capture(other, "upload", "a.png")]
-    assert keys[0] == ui.name_upload_capture(drawing, "upload", "a.png"), "The same upload must keep its key"
-    assert len(set(keys)) == 3, f"Another file or experiment must change the key, got {keys}"
-
-    # A webcam frame and a missing upload have no key.
-    assert ui.name_upload_capture(drawing, "webcam", "a.png") is None, "A webcam frame must have no upload key"
-    assert ui.name_upload_capture(drawing, "upload", None) is None, "A missing upload must have no key"
-
-
 @pytest.mark.usefixtures("no_network")
 def test_page_sends_the_kept_prompt_suggestion_id(controller: AppController, sheet_frame: np.ndarray) -> None:
     """
@@ -439,9 +411,9 @@ class FailingStrokeSuggester(FakeStrokeSuggester):
         raise StrokeSuggestionError("The device ran out of memory. Close other apps and retry.")
 
 
-def test_study_status_lines_hide_the_experiment_and_condition() -> None:
+def test_study_status_and_controls_follow_the_condition_and_drawing() -> None:
     """
-    The participant's status is the same in both conditions and names neither, while the experimenter's status names both.
+    The participant's status hides the name and condition, the experimenter's names both, and the controls follow the drawing.
     """
     from sketchloop import ui
 
@@ -473,13 +445,6 @@ def test_study_status_lines_hide_the_experiment_and_condition() -> None:
     experimenter = ui.describe_experimenter_status(without_ai)
     assert experimenter == "p1, without AI, started 10:02, drawing open", f"Unexpected experimenter status {experimenter!r}"
     assert ui.describe_experimenter_status(None) == ui.NO_EXPERIMENT_STATUS, "No drawing must say how to start one"
-
-
-def test_study_start_and_finish_controls_follow_the_condition_and_drawing() -> None:
-    """
-    Start names the condition and needs a name, Finish needs a second press, and the AI buttons show only with AI.
-    """
-    from sketchloop import ui
 
     # Start is enabled only with a name and a condition and no open drawing, and it repeats the chosen condition.
     readiness = [ui.can_start_study_drawing("p1", "ai", False), ui.can_start_study_drawing("p1", None, False),
@@ -617,23 +582,30 @@ def test_study_page_runs_a_no_ai_and_an_ai_drawing(controller: AppController, sh
 
 
 @pytest.mark.usefixtures("no_network")
-def test_study_capture_flags_a_stopped_webcam_and_a_failed_save(controller: AppController, sheet_frame: np.ndarray,
+def test_study_save_timer_follows_tabs_and_flags_problems(controller: AppController, sheet_frame: np.ndarray,
                                                                 monkeypatch: pytest.MonkeyPatch,
                                                                 capsys: pytest.CaptureFixture[str]) -> None:
     """
-    The save timer flags a stopped webcam or a failed save in the panel and the terminal once, and clears both on recovery.
+    The save timer follows other tabs, flags a stopped webcam or failed save once, and clears the flag on recovery.
     """
     import gradio
 
     from sketchloop import ui
 
     page = ui.SketchPage(controller, default_candidates=1, default_seed=None, study=True)
-    shown = page.start_study_drawing("p1_car", "ai")[12]
     frame = np.ascontiguousarray(sheet_frame[:, :, ::-1])
     page.store_frame(frame)
+    page.start_study_drawing("p1_car", "ai")
 
-    # With fresh frames nothing needs a check, and the tab's status stays as it is.
+    # A tab that has not shown the drawing started elsewhere shows it at the next tick, with its buttons, and only once.
+    _, _, status, suggest_prompt, suggest_strokes, shown = page.save_study_capture("webcam", None, 0, "", None)
+    assert status == ui.DRAWING_STATUS and suggest_prompt.visible and suggest_strokes.visible, f"Bad follow {status!r}"
     assert page.save_study_capture("webcam", None, 0, "", shown) == (gradio.skip(),) * 6, "A working tick must change nothing"
+
+    # A reload during the drawing marks the status so the script closes the panel once the webcam streams.
+    restored_status, *_, start, restored_shown = page.restore_study_view()
+    assert restored_status.elem_classes == [ui.CLOSE_PANEL_CLASS] and restored_shown == shown, "A reload must mark the panel"
+    assert start.interactive is False, "Start must wait for a name and condition after a reload"
 
     # A webcam that stopped sending frames flags the panel and prints one line.
     page.latest_frame_time -= ui.STALE_FRAME_INTERVALS * page.capture_interval_seconds + 1
@@ -662,38 +634,24 @@ def test_study_capture_flags_a_stopped_webcam_and_a_failed_save(controller: AppC
 
 
 @pytest.mark.usefixtures("no_network")
-def test_study_tab_follows_other_tabs_and_reloads(controller: AppController, sheet_frame: np.ndarray) -> None:
+def test_study_failed_suggestions_are_calm_for_the_participant(tmp_path: Path, sheet_frame: np.ndarray) -> None:
     """
-    The save timer updates a tab whose drawing changed elsewhere, once, and a reload during a drawing marks the panel to close.
+    Failed prompt and stroke suggestions give the participant a calm line, while the experimenter status keeps the error.
     """
-    from sketchloop import ui
+    import gradio
 
-    page = ui.SketchPage(controller, default_candidates=1, default_seed=None, study=True)
-    page.store_frame(np.ascontiguousarray(sheet_frame[:, :, ::-1]))
-
-    # A drawing started from another tab shows here at the next tick, with its buttons, and only once.
-    page.start_study_drawing("p1_car", "ai")
-    _, _, status, suggest_prompt, suggest_strokes, shown = page.save_study_capture("webcam", None, 0, "", None)
-    assert status == ui.DRAWING_STATUS and suggest_prompt.visible and suggest_strokes.visible, f"Bad follow {status!r}"
-    assert page.save_study_capture("webcam", None, 0, "", shown)[2:] == (ui.gr.skip(),) * 4, "An unchanged tab must be skipped"
-
-    # A reload during the drawing marks the status so the script closes the panel once the webcam streams.
-    restored_status, *_, start, restored_shown = page.restore_study_view()
-    assert restored_status.elem_classes == [ui.CLOSE_PANEL_CLASS] and restored_shown == shown, "A reload must mark the panel"
-    assert start.interactive is False, "Start must wait for a name and condition after a reload"
-
-
-@pytest.mark.usefixtures("no_network")
-def test_study_failed_suggestion_is_calm_for_the_participant(tmp_path: Path, sheet_frame: np.ndarray) -> None:
-    """
-    A failed stroke suggestion gives the participant a calm line, and the experimenter status keeps the error.
-    """
     from sketchloop import ui
 
     controller = AppController(FakeGenerator(), FolderStore(tmp_path / "runs"), stroke_suggester=FailingStrokeSuggester())
     page = ui.SketchPage(controller, default_candidates=1, default_seed=None, study=True)
-    page.store_frame(np.ascontiguousarray(sheet_frame[:, :, ::-1]))
     page.start_study_drawing("p1_car", "ai")
+
+    # Without a frame a prompt suggestion fails, the prompt and its ID stay, and the participant reads the calm line.
+    prompt, prompt_id, status, experimenter = page.suggest_study_prompt("webcam", None, 0)
+    assert (prompt, prompt_id) == (gradio.skip(), gradio.skip()), "A failure must leave the prompt box and its ID as they were"
+    assert status == f"{ui.PROMPT_FAILED_STATUS}\n\n{ui.DONE_REMINDER}", f"Unexpected participant status {status!r}"
+    assert "Prompt suggestion failed: No sketch yet" in experimenter, f"Unexpected experimenter status {experimenter!r}"
+    page.store_frame(np.ascontiguousarray(sheet_frame[:, :, ::-1]))
 
     # The participant reads the calm line and the reminder, and the experimenter reads the cause.
     status, sketch_view, experimenter, shown = page.suggest_study_strokes("webcam", None, "", None, 0)
@@ -702,22 +660,3 @@ def test_study_failed_suggestion_is_calm_for_the_participant(tmp_path: Path, she
 
     # After a reload the participant still sees the calm line.
     assert page.restore_study_view()[0].value.startswith(ui.SUGGESTION_FAILED_STATUS), "A reload must keep the calm line"
-
-
-@pytest.mark.usefixtures("no_network")
-def test_study_failed_prompt_suggestion_is_calm_for_the_participant(controller: AppController) -> None:
-    """
-    A failed prompt suggestion shows the participant a calm line without a popup, keeps the prompt, and tells the experimenter.
-    """
-    import gradio
-
-    from sketchloop import ui
-
-    page = ui.SketchPage(controller, default_candidates=1, default_seed=None, study=True)
-    page.start_study_drawing("p1_car", "ai")
-
-    # Without a frame it fails, the prompt and its ID stay, the participant reads the calm line, and the experimenter the cause.
-    prompt, prompt_id, status, experimenter = page.suggest_study_prompt("webcam", None, 0)
-    assert (prompt, prompt_id) == (gradio.skip(), gradio.skip()), "A failure must leave the prompt box and its ID as they were"
-    assert status == f"{ui.PROMPT_FAILED_STATUS}\n\n{ui.DONE_REMINDER}", f"Unexpected participant status {status!r}"
-    assert "Prompt suggestion failed: No sketch yet" in experimenter, f"Unexpected experimenter status {experimenter!r}"

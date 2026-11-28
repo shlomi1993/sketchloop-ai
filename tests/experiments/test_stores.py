@@ -24,7 +24,7 @@ def make_drawing_record(number: int) -> DrawingRecord:
 
 def test_folder_store_claims_a_name_once_ignoring_case(tmp_path: Path) -> None:
     """
-    FolderStore creates the named folder, then refuses the same name in any letter case and leaves the folder untouched.
+    FolderStore creates the named folder, then refuses the name in any letter case, or a file's name, touching nothing.
     """
     store = FolderStore(tmp_path / "runs")
     store.claim_session("participant1_car")
@@ -41,36 +41,35 @@ def test_folder_store_claims_a_name_once_ignoring_case(tmp_path: Path) -> None:
     assert [path.name for path in (tmp_path / "runs").iterdir()] == ["participant1_car"], "A refused claim must create nothing"
     assert marker.read_text(encoding="utf-8") == "kept", "A refused claim must leave the existing folder untouched"
 
-
-def test_folder_store_refuses_a_name_matching_a_file(tmp_path: Path) -> None:
-    """
-    A file in the runs folder with the name, ignoring case, also takes it, since the folder could not be created.
-    """
-    runs_dir = tmp_path / "runs"
-    runs_dir.mkdir()
-    (runs_dir / "NOTES").write_text("x", encoding="utf-8")
-
-    # The name of an existing file is taken too.
+    # The name of an existing file, in any letter case, is taken too.
+    (tmp_path / "runs" / "NOTES").write_text("x", encoding="utf-8")
     with pytest.raises(ExperimentNameTakenError):
-        FolderStore(runs_dir).claim_session("notes")
+        store.claim_session("notes")
 
 
-def test_memory_store_claims_a_name_once_ignoring_case() -> None:
+def test_memory_store_claims_names_and_keeps_drawings_without_folders() -> None:
     """
-    MemoryStore refuses a name already claimed, in any letter case.
+    MemoryStore refuses a name already claimed in any letter case, and keeps drawing records and bytes without folders.
     """
     store = MemoryStore()
     store.claim_session("p1")
-
-    # The second claim fails, and only the first name is held.
     with pytest.raises(ExperimentNameTakenError):
         store.claim_session("P1")
+    record = make_drawing_record(1)
+    store.save_drawing("session", record, {"overlay.png": b"png"})
+
+    # Only the first name is held.
     assert store.claimed == {"p1"}, f"Expected only the first claim, got {store.claimed}"
+
+    # The record and bytes are kept by session and number, and no folder exists.
+    assert store.drawings[("session", 1)] is record, "The drawing record must be kept"
+    assert store.drawing_files[("session", 1, "overlay.png")] == b"png", "The drawing file must be kept"
+    assert store.locate_drawing("session", 1) is None, "A memory store has no drawing folders"
 
 
 def test_folder_store_saves_drawing_files_then_record(tmp_path: Path) -> None:
     """
-    FolderStore writes a drawing's files under drawing-<n>/ and then drawing.json, and locates that folder.
+    FolderStore writes a drawing's files under drawing-<n>/ and then drawing.json, and names a file it cannot write.
     """
     store: ExperimentStore = FolderStore(tmp_path / "runs")
     record = make_drawing_record(2)
@@ -83,33 +82,12 @@ def test_folder_store_saves_drawing_files_then_record(tmp_path: Path) -> None:
     assert (folder / "captures" / "capture-0001-raw.png").read_bytes() == b"raw", "The capture file must be written"
     assert data["drawing"] == 2 and data["captures"] == [], f"Unexpected drawing.json {data}"
 
-
-def test_folder_store_names_failed_drawing_file(tmp_path: Path) -> None:
-    """
-    A file that cannot be written raises one StoreError naming it relative to the runs folder, and drawing.json is not written.
-    """
-    store = FolderStore(tmp_path / "runs")
+    # A file that cannot be written raises one StoreError naming it relative to the runs folder, before drawing.json.
     (tmp_path / "runs" / "session" / "drawing-1").mkdir(parents=True)
     (tmp_path / "runs" / "session" / "drawing-1" / "captures").write_text("not a folder", encoding="utf-8")
     with pytest.raises(StoreError) as caught:
         store.save_drawing("session", make_drawing_record(1), {"captures/capture-0001-raw.png": b"raw"})
-
-    # The message is relative and the record was not written after the failed file.
     message = str(caught.value)
     assert message.startswith("Cannot save session/drawing-1/captures/capture-0001-raw.png:"), f"Unexpected message {message!r}"
     assert str(tmp_path) not in message, f"The message must not hold an absolute path: {message!r}"
     assert not (tmp_path / "runs" / "session" / "drawing-1" / DRAWING_FILE).exists(), "drawing.json must follow its files"
-
-
-def test_memory_store_keeps_drawings_without_folders() -> None:
-    """
-    MemoryStore keeps drawing records and file bytes and has no drawing folders.
-    """
-    store = MemoryStore()
-    record = make_drawing_record(1)
-    store.save_drawing("session", record, {"overlay.png": b"png"})
-
-    # The record and bytes are kept by session and number, and no folder exists.
-    assert store.drawings[("session", 1)] is record, "The drawing record must be kept"
-    assert store.drawing_files[("session", 1, "overlay.png")] == b"png", "The drawing file must be kept"
-    assert store.locate_drawing("session", 1) is None, "A memory store has no drawing folders"

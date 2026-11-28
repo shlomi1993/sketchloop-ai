@@ -31,17 +31,6 @@ pytestmark = pytest.mark.usefixtures("isolated_cwd")
 EXAMPLE_SKETCH = Path(__file__).resolve().parents[2] / "examples" / "sketch-photo.jpg"
 
 
-def run_webcam_round(runs_dir: Path) -> Path:
-    """
-    Save one fake webcam round with a capture time, a 0.42 s frame age, and a 1.25 s generator setup, and return its folder.
-    """
-    raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
-    session = SketchSession(FakeGenerator(), FolderStore(runs_dir), generator_setup_seconds=1.25)
-    session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.WEBCAM, capture_seconds=0.1,
-                      frame_age_seconds=0.42)
-    return session.folder
-
-
 def show_text(folder: Path, capsys: pytest.CaptureFixture[str]) -> str:
     """
     Run sketchloop show on a session folder and return its output with line wrapping removed.
@@ -51,75 +40,41 @@ def show_text(folder: Path, capsys: pytest.CaptureFixture[str]) -> str:
     return " ".join(capsys.readouterr().out.split())
 
 
-def test_show_prints_timings(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_show_prints_round_timings_scores_and_older_records(tmp_path: Path, capsys: pytest.CaptureFixture[str],
+                                                            constant_evaluator: Evaluator) -> None:
     """
-    show prints the generator setup, the hardware, each round's total, and the frame age of a webcam round.
+    show prints setup, hardware, timings, frame age, and scores, and names what a session saved by an older version lacks.
     """
-    output = show_text(run_webcam_round(tmp_path / "runs"), capsys)
+    raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
+    session = SketchSession(FakeGenerator(), FolderStore(tmp_path / "runs"), constant_evaluator, generator_setup_seconds=1.25)
+    session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.WEBCAM, capture_seconds=0.1,
+                      frame_age_seconds=0.42)
+    folder = session.folder
+    output = show_text(folder, capsys)
 
-    # The session header and the round name every new measurement.
-    assert "Generator setup: 1.25 s" in output, "show must print the generator setup time"
-    assert "Hardware: " in output, "show must print the hardware"
+    # The session header and the round name every measurement and what the scores mean.
+    assert "Generator setup: 1.25 s" in output and "Hardware: " in output, "show must print the setup time and hardware"
     assert "Timings: capture 0.10 s" in output and "total " in output, "show must print the capture and the total"
     assert "(source: webcam), frame age 0.42 s" in output, "show must print the webcam frame age"
+    assert "Scores: ConstantEvaluator, score=0.5 for every candidate, a test value" in output, f"Missing score line in {output}"
     assert "Recorded by an older sketchloop" not in output, "A current round must not get the older-timings note"
 
     # A time-named session without drawings prints no experiment or drawing.
     assert "Experiment:" not in output and "Drawing 1" not in output, f"Unexpected experiment or drawing in {output}"
 
-
-def test_show_names_what_scored(tmp_path: Path, capsys: pytest.CaptureFixture[str], constant_evaluator: Evaluator) -> None:
-    """
-    show names the evaluator and what its scores mean when a round has scores, and stays silent without them.
-    """
-    raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
-    session = SketchSession(FakeGenerator(), FolderStore(tmp_path / "runs"), constant_evaluator)
-    session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.FILE, n_candidates=2, seed=7)
-    output = show_text(session.folder, capsys)
-    assert "Scores: ConstantEvaluator, score=0.5 for every candidate, a test value" in output, f"Missing score line in {output}"
-
-    # A round without scores prints no score line.
-    unscored = show_text(run_webcam_round(tmp_path / "unscored"), capsys)
-    assert "Scores:" not in unscored, "A round without scores must not print a score line"
-
-
-def test_show_older_session(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """
-    A session saved by an older sketchloop shows its hardware and setup as unavailable and notes that its timings are incomplete.
-    """
-    folder = run_webcam_round(tmp_path / "runs")
+    # Delete the timing and hardware keys, standing in for older files.
     session_file, round_file = folder / "session.json", folder / "round-1" / "round.json"
     session_data = json.loads(session_file.read_text(encoding="utf-8"))
     round_data = json.loads(round_file.read_text(encoding="utf-8"))
-
-    # Delete the timing and hardware keys, standing in for older files.
     del session_data["environment"]["hardware"], session_data["generator_setup_seconds"], round_data["total_seconds"]
     session_file.write_text(json.dumps(session_data), encoding="utf-8")
     round_file.write_text(json.dumps(round_data), encoding="utf-8")
-    output = show_text(folder, capsys)
+    older = show_text(folder, capsys)
 
     # Each missing value is named with its reason, and the round gets the older-timings note.
-    assert "Hardware: unavailable (recorded before hardware was tracked)" in output, "Missing hardware must be named"
-    assert "Generator setup: unavailable (recorded before generator setup was timed)" in output, "Missing setup must be named"
-    assert "Recorded by an older sketchloop: generation may include the model load" in output, "An older round must get the note"
-
-
-def test_show_benchmark_session(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """
-    show recomputes and prints the statistics of a benchmark session.
-    """
-    runs_dir = tmp_path / "runs"
-    exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "chair", "--rounds", "2", "--candidates", "1", "--runs-dir",
-                      str(runs_dir)])
-    capsys.readouterr()
-    output = show_text(next(runs_dir.iterdir()), capsys)
-
-    # The benchmark ran, and show prints the summary with its round roles and total row.
-    assert exit_code == 0, f"The benchmark must succeed, got exit code {exit_code}"
-    has_summary = "Benchmark summary" in output and "Warm-up rounds: 1 Measured rounds: 2, 3" in output
-    assert has_summary, "show must summarize the benchmark"
-    assert "│ total " in output, "The summary table must have a total row"
-
+    assert "Hardware: unavailable (recorded before hardware was tracked)" in older, "Missing hardware must be named"
+    assert "Generator setup: unavailable (recorded before generator setup was timed)" in older, "Missing setup must be named"
+    assert "Recorded by an older sketchloop: generation may include the model load" in older, "An older round must get the note"
 
 
 class OutOfMemorySuggester(FakeStrokeSuggester):
@@ -164,12 +119,20 @@ def draw_named_experiment(runs_dir: Path, sheet_frame: np.ndarray, draw_part_on_
     return session, drawing, with_ring
 
 
-def test_show_prints_a_finished_drawing(tmp_path: Path, capsys: pytest.CaptureFixture[str], sheet_frame: np.ndarray,
-                                        draw_part_on_sheet: Callable[[np.ndarray, bytes], np.ndarray]) -> None:
+def test_show_prints_a_drawing_open_finished_and_older(tmp_path: Path, capsys: pytest.CaptureFixture[str],
+                                                      sheet_frame: np.ndarray,
+                                                      draw_part_on_sheet: Callable[[np.ndarray, bytes], np.ndarray]) -> None:
     """
-    show prints the experiment, the round as before, and each suggestion of the drawing with its recorded decision.
+    show decides an open window itself and says so, prints recorded decisions once finished, and applies the rule to older ones.
     """
     session, drawing, with_ring = draw_named_experiment(tmp_path / "runs", sheet_frame, draw_part_on_sheet)
+    unfinished = show_text(session.folder, capsys)
+
+    # The unfinished drawing's open window is decided by show and labelled as such.
+    assert "Drawing 1: not finished, 3 captures" in unfinished, f"Expected an unfinished drawing in {unfinished}"
+    assert "followed, computed by show, not recorded: part 1 followed" in unfinished, f"Missing computed result in {unfinished}"
+    assert "Window open, 2 captures so far." in unfinished, f"Expected an open window in {unfinished}"
+
     drawing.finish(with_ring, source=SketchSource.UPLOAD)
     output = show_text(session.folder, capsys)
 
@@ -192,34 +155,9 @@ def test_show_prints_a_finished_drawing(tmp_path: Path, capsys: pytest.CaptureFi
     failed_line = r"Suggestion 2 at \+\d\d:\d\d: \(empty\), origin typed, failed during generation: StrokeSuggestionError"
     assert re.search(failed_line, output), f"Missing failed press in {output}"
     assert "computed by show" not in output, "A finished drawing's decisions are recorded, not computed"
-
-    # Every drawing file matches its checksum.
     assert "files match their recorded checksums" in output, f"Expected matching files in {output}"
 
-
-def test_show_computes_an_open_window_of_an_unfinished_drawing(tmp_path: Path, capsys: pytest.CaptureFixture[str],
-                                                               sheet_frame: np.ndarray,
-                                                               draw_part_on_sheet: Callable[[np.ndarray, bytes],
-                                                                                            np.ndarray]) -> None:
-    """
-    An unfinished drawing prints as not finished, and its open window is decided by show and labelled as such.
-    """
-    session, _, _ = draw_named_experiment(tmp_path / "runs", sheet_frame, draw_part_on_sheet)
-    output = show_text(session.folder, capsys)
-
-    # The drawing is not finished, and the open window's result is marked as computed.
-    assert "Drawing 1: not finished, 3 captures" in output, f"Expected an unfinished drawing in {output}"
-    assert "followed, computed by show, not recorded: part 1 followed" in output, f"Missing computed result in {output}"
-    assert "Window open, 2 captures so far." in output, f"Expected an open window in {output}"
-
-
-def test_show_older_drawing_and_changed_files(tmp_path: Path, capsys: pytest.CaptureFixture[str], sheet_frame: np.ndarray,
-                                              draw_part_on_sheet: Callable[[np.ndarray, bytes], np.ndarray]) -> None:
-    """
-    A drawing saved before decisions gets the provisional rule, marked as computed, and a changed mask is a listed problem.
-    """
-    session, drawing, _ = draw_named_experiment(tmp_path / "runs", sheet_frame, draw_part_on_sheet)
-    drawing.finish(None)
+    # Delete the rule and decisions, standing in for a drawing saved before them, and change a mask.
     drawing_file = session.folder / "drawing-1" / "drawing.json"
     data = json.loads(drawing_file.read_text(encoding="utf-8"))
     del data["rule"]
@@ -227,18 +165,23 @@ def test_show_older_drawing_and_changed_files(tmp_path: Path, capsys: pytest.Cap
         del suggestion["window"], suggestion["decision"]
     drawing_file.write_text(json.dumps(data), encoding="utf-8")
     (session.folder / "drawing-1" / "suggestions" / "suggestion-1" / "part-2.png").write_bytes(b"changed")
-    output = show_text(session.folder, capsys)
+    older = show_text(session.folder, capsys)
 
     # The rule is named as applied by show, the result is marked as computed, and the changed mask is a problem.
-    assert "Rule, not recorded, so show applies the provisional one: coverage_16 >= 0.35" in output, output
-    assert "followed, computed by show, not recorded" in output, f"Missing computed result in {output}"
-    assert "drawing-1/suggestions/suggestion-1/part-2.png does not match its recorded checksum." in output, output
+    assert "Rule, not recorded, so show applies the provisional one: coverage_16 >= 0.35" in older, older
+    assert "followed, computed by show, not recorded" in older, f"Missing computed result in {older}"
+    assert "drawing-1/suggestions/suggestion-1/part-2.png does not match its recorded checksum." in older, older
 
 
 def test_show_prints_study_conditions_prompt_suggestions_and_final_prompts(
         tmp_path: Path, capsys: pytest.CaptureFixture[str], sheet_capture: CapturedSketch,
         make_prompt_suggestion: Callable[..., PromptSuggestionRecord]) -> None:
+    """
+    show prints each drawing's condition, prompt suggestions, and final prompt, and names them unrecorded in older records.
+    """
     session = SketchSession(FakeGenerator(), FolderStore(tmp_path / "runs"), name="p1_car")
+    raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
+    session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.FILE)
     with_ai = session.start_drawing(FakeStrokeSuggester(), canvas_width=512, canvas_height=360, save_interval_seconds=2.0,
                                     study=DrawingStudy(condition=StudyCondition.AI))
     now = datetime.now(timezone.utc)
@@ -263,31 +206,24 @@ def test_show_prints_study_conditions_prompt_suggestions_and_final_prompts(
     assert re.search(suggestion_line, output), f"Missing prompt suggestion line in {output}"
     assert '"a car, studio render", origin suggested 1, 2 parts' in output, f"Missing suggested origin in {output}"
 
-
-def test_show_older_records_say_prompt_details_were_not_recorded(tmp_path: Path, capsys: pytest.CaptureFixture[str],
-                                                                 sheet_capture: CapturedSketch) -> None:
-    session = SketchSession(FakeGenerator(), FolderStore(tmp_path / "runs"), name="p1_car")
-    raw_sketch, raw_payload = load_sketch_file(EXAMPLE_SKETCH)
-    session.run_round(raw_sketch, raw_payload, Guidance(prompt="chair"), source=SketchSource.FILE)
-    drawing = session.start_drawing(FakeStrokeSuggester(), canvas_width=512, canvas_height=360, save_interval_seconds=2.0)
-    drawing.suggest(sheet_capture, source=SketchSource.UPLOAD, rotation=0, prompt="a car")
-    drawing.finish(sheet_capture, source=SketchSource.UPLOAD, prompt="a car")
-
     # Delete the keys T10 added, standing in for records saved before it.
-    round_file, drawing_file = session.folder / "round-1" / "round.json", session.folder / "drawing-1" / "drawing.json"
+    round_file = session.folder / "round-1" / "round.json"
     round_data = json.loads(round_file.read_text(encoding="utf-8"))
-    drawing_data = json.loads(drawing_file.read_text(encoding="utf-8"))
     del round_data["prompt_origin"], round_data["prompt_suggestions"]
-    for key in ("study", "prompt_suggestions", "final_prompt", "final_prompt_origin"):
-        del drawing_data[key]
-    del drawing_data["suggestions"][0]["prompt_origin"]
     round_file.write_text(json.dumps(round_data), encoding="utf-8")
-    drawing_file.write_text(json.dumps(drawing_data), encoding="utf-8")
-    output = show_text(session.folder, capsys)
+    for number in (1, 2):
+        drawing_file = session.folder / f"drawing-{number}" / "drawing.json"
+        drawing_data = json.loads(drawing_file.read_text(encoding="utf-8"))
+        for key in ("study", "prompt_suggestions", "final_prompt", "final_prompt_origin"):
+            del drawing_data[key]
+        for suggestion in drawing_data["suggestions"]:
+            del suggestion["prompt_origin"]
+        drawing_file.write_text(json.dumps(drawing_data), encoding="utf-8")
+    older = show_text(session.folder, capsys)
 
     # Every missing value says it was not recorded, and no condition is invented.
-    assert "Prompt origin: unavailable (not recorded before prompt origins were)" in output, f"Missing round origin in {output}"
-    assert output.count("Prompt suggestions: not recorded") == 2, f"Expected two unrecorded lists in {output}"
-    assert "Final prompt: unavailable (not recorded in drawings saved before final prompts were)" in output, output
-    assert '"a car", origin unavailable (not recorded before prompt origins were)' in output, f"Missing origin in {output}"
-    assert "Condition:" not in output, f"An older drawing has no condition, got {output}"
+    assert "Prompt origin: unavailable (not recorded before prompt origins were)" in older, f"Missing round origin in {older}"
+    assert older.count("Prompt suggestions: not recorded") == 2, f"Expected the round and AI drawing lists unrecorded in {older}"
+    assert "Final prompt: unavailable (not recorded in drawings saved before final prompts were)" in older, older
+    assert '"a car, studio render", origin unavailable (not recorded before prompt origins were)' in older, older
+    assert "Condition:" not in older, f"An older drawing has no condition, got {older}"

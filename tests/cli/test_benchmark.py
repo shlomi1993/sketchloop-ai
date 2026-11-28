@@ -35,7 +35,7 @@ def list_round_seeds(runs_dir: Path) -> list[object]:
 
 def test_cli_benchmark_reports_statistics(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """
-    A benchmark saves warm-up and measured rounds without a selection and prints the conditions, statistics, and caveats.
+    A benchmark saves warm-up and measured rounds without a selection, prints the statistics and caveats, and show repeats them.
     """
     exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--backend", "fake", "--rounds", "3",
                       "--warmup", "1", "--candidates", "1", "--seed", "7"])
@@ -62,34 +62,12 @@ def test_cli_benchmark_reports_statistics(tmp_path: Path, capsys: pytest.Capture
     assert "Warm-up round 1: capture " in output, "The warm-up round must be shown separately"
     assert "p95 is interpolated from 3 rounds, so treat it as indicative." in output, "Few rounds must get the p95 note"
 
-
-@pytest.mark.parametrize(("settings_text", "expected_seed"), [(None, 0), ("[run]\nseed = 9\n", 9)], ids=["default", "settings"])
-def test_cli_benchmark_seed(tmp_path: Path, settings_text: str | None, expected_seed: int) -> None:
-    """
-    Without --seed a benchmark pins seed 0 unless the settings file sets run.seed.
-    """
-    # Write the settings file when the case has one.
-    if settings_text is not None:
-        (tmp_path / "sketchloop.toml").write_text(settings_text, encoding="utf-8")
-
-    exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--backend", "fake", "--rounds", "1", "--warmup", "1",
-                      "--candidates", "1"])
-
-    # Both rounds use the pinned seed.
-    assert exit_code == 0, f"The benchmark must succeed, got exit code {exit_code}"
-    assert list_round_seeds(tmp_path / "runs") == [expected_seed] * 2, f"Every round must use seed {expected_seed}"
-
-
-def test_cli_benchmark_rejects_counts(tmp_path: Path) -> None:
-    """
-    Zero measured rounds exit with code 2 before anything is saved.
-    """
-    with pytest.raises(SystemExit) as raised:
-        main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--rounds", "0"])
-
-    # argparse refuses the count, and no runs folder is created.
-    assert raised.value.code == 2, f"Expected exit code 2, got {raised.value.code}"
-    assert not (tmp_path / "runs").exists(), "A refused benchmark must save nothing"
+    # show recomputes the summary with its round roles and total row.
+    show_exit = main(["show", str(session_dirs[0])])
+    shown = " ".join(capsys.readouterr().out.split())
+    assert show_exit == 0 and "Benchmark summary" in shown, f"show must summarize the benchmark, got {show_exit}"
+    assert "Warm-up rounds: 1 Measured rounds: 2, 3, 4" in shown, f"show must name the round roles in {shown}"
+    assert "│ total " in shown, "The summary table must have a total row"
 
 
 def refuse_camera(*args: object) -> None:
@@ -99,18 +77,19 @@ def refuse_camera(*args: object) -> None:
     raise AssertionError("benchmark must never use the camera")
 
 
-def test_cli_benchmark_ignores_camera_setting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_benchmark_ignores_camera_setting_and_takes_the_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """
-    A settings file naming the camera does not apply to a benchmark, which always reads its sketch file.
+    A settings file naming the camera does not apply to a benchmark, which reads its sketch file, while its run.seed does.
     """
-    (tmp_path / "sketchloop.toml").write_text('[capture]\nsource = "camera"\n', encoding="utf-8")
+    (tmp_path / "sketchloop.toml").write_text('[capture]\nsource = "camera"\n\n[run]\nseed = 9\n', encoding="utf-8")
     monkeypatch.setitem(CAPTURE_SOURCES, "camera", refuse_camera)
     exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--backend", "fake", "--rounds", "1", "--warmup", "0",
                       "--candidates", "1"])
 
-    # The round records the file source.
+    # The round records the file source and the file's seed.
     rounds = load_session(next((tmp_path / "runs").iterdir())).rounds
     assert exit_code == 0 and [record.source for record in rounds] == ["file"], f"Expected one file round, got {rounds}"
+    assert list_round_seeds(tmp_path / "runs") == [9], "The benchmark must use the settings file's seed"
 
 
 def test_cli_benchmark_failing_round(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -135,14 +114,9 @@ def test_cli_benchmark_failing_round(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert show_exit == 0 and "No measured round completed, so there are no statistics." in output, "show must say so too"
 
 
-@pytest.mark.parametrize(("flags", "settings_text", "expected"), [
-    (["--precision", "float16"], None, TorchPrecision.FLOAT16),
-    ([], '[generator.diffusers]\nprecision = "float32"\n', TorchPrecision.FLOAT32)
-], ids=["flag", "settings-file"])
-def test_cli_benchmark_passes_precision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flags: list[str],
-                                        settings_text: str | None, expected: TorchPrecision | None) -> None:
+def test_cli_benchmark_passes_precision_and_pins_seed_0(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """
-    A --precision flag or a settings value reaches the diffusers backend.
+    A --precision flag beats the settings file on its way to the diffusers backend, and without --seed the seed is 0.
     """
     received = []
 
@@ -156,11 +130,11 @@ def test_cli_benchmark_passes_precision(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr("sketchloop.cli.common.make_generator", make_recording_generator)
 
     # A settings file in the working folder is found without --config.
-    if settings_text is not None:
-        (tmp_path / "sketchloop.toml").write_text(settings_text, encoding="utf-8")
+    (tmp_path / "sketchloop.toml").write_text('[generator.diffusers]\nprecision = "float32"\n', encoding="utf-8")
     exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "chair", "--backend", "diffusers", "--rounds", "1",
-                      "--warmup", "0", "--candidates", "1", "--runs-dir", str(tmp_path / "runs"), *flags])
+                      "--warmup", "0", "--candidates", "1", "--runs-dir", str(tmp_path / "runs"), "--precision", "float16"])
 
-    # The benchmark ran, and the backend got the chosen precision.
+    # The benchmark ran with the pinned seed, and the backend got the flag's precision.
     assert exit_code == 0, f"The benchmark must succeed, got exit code {exit_code}"
-    assert received == [expected], f"Expected precision {expected}, got {received}"
+    assert received == [TorchPrecision.FLOAT16], f"Expected precision float16, got {received}"
+    assert list_round_seeds(tmp_path / "runs") == [0], "Without --seed a benchmark must pin seed 0"

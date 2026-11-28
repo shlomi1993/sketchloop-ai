@@ -27,15 +27,6 @@ def answer_sysctl(command: list[str], **options: object) -> subprocess.Completed
     return subprocess.CompletedProcess(command, 0, stdout=values[command[-1]], stderr="")
 
 
-def test_mac_hardware(monkeypatch: pytest.MonkeyPatch) -> None:
-    """
-    On macOS the CPU name comes from sysctl, with whitespace collapsed.
-    """
-    monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(subprocess, "run", answer_sysctl)
-    assert read_cpu_name() == "Apple M2 Pro", f"Unexpected CPU name {read_cpu_name()!r}"
-
-
 def time_out(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
     """
     Stand in for a sysctl call that times out.
@@ -50,33 +41,33 @@ def fail_command(command: list[str], **options: object) -> subprocess.CompletedP
     return subprocess.CompletedProcess(command, 1, stdout="", stderr="unknown oid")
 
 
-@pytest.mark.parametrize("run_command", [time_out, fail_command], ids=["timeout", "error-exit"])
-def test_mac_hardware_unavailable(monkeypatch: pytest.MonkeyPatch, run_command: object) -> None:
+def test_cpu_name_readers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """
-    A sysctl call that times out or fails gives an unavailable CPU name instead of raising.
+    The CPU name comes from sysctl on macOS and cpuinfo on Linux, and a failed or unsupported read gives a reason.
     """
+    # On macOS the name comes from sysctl with whitespace collapsed, and a timeout or error exit makes it unavailable.
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(subprocess, "run", run_command)
-    hardware = collect_hardware()
+    monkeypatch.setattr(subprocess, "run", answer_sysctl)
+    assert read_cpu_name() == "Apple M2 Pro", f"Unexpected CPU name {read_cpu_name()!r}"
+    for failing_command in (time_out, fail_command):
+        monkeypatch.setattr(subprocess, "run", failing_command)
+        hardware = collect_hardware()
+        assert isinstance(hardware.cpu, Unavailable), f"Expected an unavailable CPU name, got {hardware.cpu!r}"
+        assert isinstance(hardware.memory_bytes, int), f"Memory must still be read, got {hardware.memory_bytes!r}"
 
-    # The CPU name is unavailable, while the core count and memory still come from the operating system.
-    assert isinstance(hardware.cpu, Unavailable), f"Expected an unavailable CPU name, got {hardware.cpu!r}"
-    assert isinstance(hardware.memory_bytes, int), f"Memory must still be read, got {hardware.memory_bytes!r}"
-
-
-def test_linux_hardware(tmp_path: Path) -> None:
-    """
-    On Linux the CPU name comes from the first model name line of cpuinfo.
-    """
+    # On Linux the first model name is read, and a file without one or a missing file gives a reason.
     cpuinfo = tmp_path / "cpuinfo"
     cpuinfo.write_text("processor\t: 0\nmodel name\t: Synthetic CPU 3000\nmodel name\t: Other\n", encoding="utf-8")
     no_name = tmp_path / "no-name"
     no_name.write_text("processor\t: 0\n", encoding="utf-8")
-
-    # The first model name is read, and a file without one or a missing file gives a reason.
     assert read_linux_cpu_name(cpuinfo) == "Synthetic CPU 3000", f"Unexpected CPU name {read_linux_cpu_name(cpuinfo)!r}"
     assert isinstance(read_linux_cpu_name(no_name), Unavailable), "A cpuinfo without a model name must be unavailable"
     assert isinstance(read_linux_cpu_name(tmp_path / "missing"), Unavailable), "A missing cpuinfo must be unavailable"
+
+    # An operating system without a reader gives the reason.
+    monkeypatch.setattr(sys, "platform", "sunos5")
+    expected = Unavailable("the CPU name is not read on this operating system")
+    assert collect_hardware().cpu == expected, f"Expected an unavailable CPU name, got {collect_hardware().cpu!r}"
 
 
 def refuse_memory() -> None:
@@ -86,26 +77,17 @@ def refuse_memory() -> None:
     raise OSError("no memory information")
 
 
-@pytest.mark.parametrize(("read_memory", "expected"), [
-    (lambda: SimpleNamespace(total=34359738368), 34359738368),
-    (lambda: SimpleNamespace(total=0), Unavailable("psutil reported no memory")),
-    (refuse_memory, Unavailable("psutil could not read the memory size")),
-], ids=["read", "zero", "error"])
-def test_memory_from_psutil(monkeypatch: pytest.MonkeyPatch, read_memory: object, expected: int | Unavailable) -> None:
+def test_memory_from_psutil(monkeypatch: pytest.MonkeyPatch) -> None:
     """
-    Memory is read through psutil, and a zero or failed reading gives a fixed reason instead of raising.
+    Memory is read through psutil, and a failed reading gives a fixed reason instead of raising.
     """
-    monkeypatch.setattr(psutil, "virtual_memory", read_memory)
-    assert read_memory_bytes() == expected, f"Expected {expected!r}, got {read_memory_bytes()!r}"
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(total=34359738368))
+    read = read_memory_bytes()
+    monkeypatch.setattr(psutil, "virtual_memory", refuse_memory)
+    failed = read_memory_bytes()
 
-
-def test_unknown_platform_hardware(monkeypatch: pytest.MonkeyPatch) -> None:
-    """
-    An operating system without a CPU name reader gives an unavailable CPU name with its reason.
-    """
-    monkeypatch.setattr(sys, "platform", "sunos5")
-    expected = Unavailable("the CPU name is not read on this operating system")
-    assert collect_hardware().cpu == expected, f"Expected an unavailable CPU name, got {collect_hardware().cpu!r}"
+    # The size is read, and the failure is unavailable with its reason.
+    assert (read, failed) == (34359738368, Unavailable("psutil could not read the memory size")), f"Got {read!r}, {failed!r}"
 
 
 def test_session_record_has_no_machine_name(monkeypatch: pytest.MonkeyPatch) -> None:

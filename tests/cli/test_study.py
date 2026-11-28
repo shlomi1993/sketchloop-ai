@@ -20,14 +20,25 @@ pytestmark = pytest.mark.usefixtures("isolated_cwd")
 
 
 def run_study(arguments: list[str], capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:
+    """
+    Run a study subcommand and return its exit code and output.
+    """
     # Run the command and return its exit code and its output and errors with line wrapping removed.
     exit_code = main(["study", *arguments])
     captured = capsys.readouterr()
     return exit_code, " ".join((captured.out + captured.err).split())
 
 
-def test_export_prints_counts_missing_reasons_skipped_sessions_and_the_handover_note(
-        study_runs: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_export_command_refuses_prints_and_defaults(study_runs: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """
+    export refuses an output in the runs folder in one line, prints counts and reasons, and defaults to a new dated folder.
+    """
+    refused_exit, refused = run_study(["export", "--runs-dir", str(study_runs), "--output", str(study_runs / "export")], capsys)
+
+    # An output inside the runs folder is refused with one line, and nothing is created.
+    assert refused_exit == 1 and "is inside the runs folder" in refused, f"Expected a refusal, got {refused_exit}: {refused}"
+    assert not (study_runs / "export").exists(), "A refused export must create nothing"
+
     exit_code, output = run_study(["export", "--runs-dir", str(study_runs), "--output", str(tmp_path / "export")], capsys)
 
     # The export succeeds outside Git, saying the check was skipped, and prints the counts and every missing reason.
@@ -42,33 +53,27 @@ def test_export_prints_counts_missing_reasons_skipped_sessions_and_the_handover_
     assert "Passed over 3 runs-folder entries without study drawings." in output, f"Missing passed-over count in {output}"
     assert f"/export/{KEY_FILE}" in output and HANDOVER_NOTE in output, f"Missing key or handover note in {output}"
 
-
-def test_export_defaults_to_a_new_folder_under_the_settings_export_dir(study_runs: Path, tmp_path: Path,
-                                                                       capsys: pytest.CaptureFixture[str]) -> None:
+    # Without --output the export lands in one export-<UTC time> folder under the configured folder.
     (tmp_path / "sketchloop.toml").write_text('[study]\nexport_dir = "exports"\n', encoding="utf-8")
-    exit_code, output = run_study(["export", "--runs-dir", str(study_runs), "--match", "p1_*"], capsys)
-
-    # The export lands in one export-<UTC time> folder under the configured folder.
-    assert exit_code == 0, f"Expected success, got {exit_code}: {output}"
+    default_exit, default_output = run_study(["export", "--runs-dir", str(study_runs), "--match", "p1_*"], capsys)
     folders = [path.name for path in (tmp_path / "exports").iterdir()]
+    assert default_exit == 0, f"Expected success, got {default_exit}: {default_output}"
     assert len(folders) == 1 and re.fullmatch(r"export-\d{8}-\d{6}", folders[0]), f"Unexpected export folders {folders}"
     assert (tmp_path / "exports" / folders[0] / KEY_FILE).is_file(), "The default folder must hold the key"
 
 
-def test_export_refusal_is_one_line_with_exit_code_1(study_runs: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code, output = run_study(["export", "--runs-dir", str(study_runs), "--output", str(study_runs / "export")], capsys)
-
-    # An output inside the runs folder is refused with one line, and nothing is created.
-    assert exit_code == 1 and "is inside the runs folder" in output, f"Expected a refusal, got {exit_code}: {output}"
-    assert not (study_runs / "export").exists(), "A refused export must create nothing"
-
-
 def run_git(folder: Path, *arguments: str) -> None:
+    """
+    Run a Git command in the folder, failing the test if it fails.
+    """
     subprocess.run(["git", "-C", str(folder), *arguments], check=True, capture_output=True)
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="Git is not installed")
-def test_git_check_refuses_a_folder_git_does_not_ignore(tmp_path: Path) -> None:
+def test_git_check_refuses_a_folder_git_does_not_ignore(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    An export under a path Git tracks is refused, and the check is skipped with a note outside Git or without Git.
+    """
     repository = tmp_path / "repository"
     repository.mkdir()
     run_git(repository, "init", "--quiet")
@@ -81,16 +86,16 @@ def test_git_check_refuses_a_folder_git_does_not_ignore(tmp_path: Path) -> None:
         check_ignored_by_git(repository / "tracked" / "export-1", console)
     assert OUTSIDE_GIT_NOTE not in console.export_text(), "Inside a repository the check must run"
 
-
-def test_git_check_is_skipped_outside_a_repository_or_without_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    console = Console(record=True, width=200)
-
     # Outside any working tree, the check is skipped with one line.
+    console = Console(record=True, width=200)
     check_ignored_by_git(tmp_path / "export-1", console)
     assert OUTSIDE_GIT_NOTE in console.export_text(), "Expected the outside-Git note"
 
     # Without Git, the check is skipped with one line too.
     def refuse_git(*_: object, **__: object) -> None:
+        """
+        Fail as a missing git executable does.
+        """
         raise FileNotFoundError("git")
 
     monkeypatch.setattr("sketchloop.cli.study.subprocess.run", refuse_git)
@@ -98,8 +103,11 @@ def test_git_check_is_skipped_outside_a_repository_or_without_git(tmp_path: Path
     assert GIT_MISSING_NOTE in console.export_text(), "Expected the missing-Git note"
 
 
-def test_summary_prints_one_row_per_study_drawing(study_runs: Path, capsys: pytest.CaptureFixture[str],
+def test_summary_prints_one_row_per_study_drawing(study_runs: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str],
                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    summary prints one row per study drawing, marks computed results, names missing drawings, and says when none match.
+    """
     monkeypatch.setenv("COLUMNS", "220")
     exit_code, output = run_study(["summary", "--runs-dir", str(study_runs)], capsys)
 
@@ -119,10 +127,7 @@ def test_summary_prints_one_row_per_study_drawing(study_runs: Path, capsys: pyte
     assert "p4_car drawing 1 has no final drawing: finished without a final frame" in output, f"Missing reason in {output}"
     assert "Skipped p9_broken" in output and "Passed over 3 runs-folder entries" in output, f"Missing notes in {output}"
 
-
-def test_summary_without_study_drawings_says_so(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    (tmp_path / "runs").mkdir()
-    exit_code, output = run_study(["summary", "--runs-dir", str(tmp_path / "runs"), "--match", "p1_*"], capsys)
-
-    # An empty match is reported, not an error.
-    assert exit_code == 0 and "No study drawings in" in output and "match 'p1_*'" in output, f"Unexpected output {output}"
+    # An empty runs folder is reported, not an error.
+    (tmp_path / "empty-runs").mkdir()
+    empty_exit, empty = run_study(["summary", "--runs-dir", str(tmp_path / "empty-runs"), "--match", "p1_*"], capsys)
+    assert empty_exit == 0 and "No study drawings in" in empty and "match 'p1_*'" in empty, f"Unexpected output {empty}"

@@ -264,7 +264,7 @@ def test_session_runs_with_substituted_components(tmp_path: Path, constant_evalu
 @pytest.mark.usefixtures("counting_clock")
 def test_session_records_stage_timings(first_load_generator: Generator) -> None:
     """
-    Capture, a reported model load, saving, and the total are recorded, saved as shown, and kept up to a failure.
+    Capture, a reported model load, saving, and the total are recorded, saved as shown, kept up to a failure, or explained.
     """
     camera, store = StillCamera(), FlakyMemoryStore()
     session = SketchSession(first_load_generator, store, preprocessor=IdentityPreprocessor(), generator_setup_seconds=1.5)
@@ -306,11 +306,15 @@ def test_session_records_stage_timings(first_load_generator: Generator) -> None:
     assert failed_generation.total_seconds >= 0.5, f"A failed round must keep a total, got {failed_generation.total_seconds}"
     assert failed_saving.failure.stage == "saving", f"A failed file save must be a saving failure, got {failed_saving.failure}"
 
-    # A library caller that measures no setup records why.
+    # A library caller that measures no setup or frame age records why, as does a round from an unknown source.
     default_session = SketchSession(FakeGenerator(), MemoryStore())
-    default_session.run_round(captured.image, captured.payload, guidance, source=camera.kind)
+    default_session.run_round(captured.image, captured.payload, guidance, source=SketchSource.WEBCAM)
+    default_session.run_round(captured.image, captured.payload, guidance, source=Unavailable("synthetic unknown source"))
     setup = default_session.session_record.generator_setup_seconds
     assert setup == Unavailable(SETUP_NOT_MEASURED_REASON), f"Expected the not-measured reason, got {setup}"
+    ages = [record.frame_age_seconds for record in default_session.records]
+    expected_ages = [Unavailable(FRAME_AGE_NOT_MEASURED_REASON), Unavailable(UNKNOWN_SOURCE_REASON)]
+    assert ages == expected_ages, f"Expected the frame age reasons, got {ages}"
 
 
 @pytest.mark.usefixtures("counting_clock")
@@ -338,23 +342,6 @@ def test_session_times_evaluator_load_as_model_load(first_load_generator: Genera
     assert second.timings_seconds["evaluation"] == pytest.approx(8.0), f"Unexpected evaluation {second.timings_seconds}"
 
 
-@pytest.mark.parametrize(("source", "expected"), [
-    ("webcam", Unavailable(FRAME_AGE_NOT_MEASURED_REASON)),
-    (Unavailable("synthetic unknown source"), Unavailable(UNKNOWN_SOURCE_REASON))
-], ids=["webcam-without-age", "unknown-source"])
-def test_session_records_frame_age(source: str | Unavailable, expected: Unavailable) -> None:
-    """
-    A webcam round without a measured frame age records why, and a round from an unknown source says so.
-    """
-    captured = StillCamera().capture()
-    session = SketchSession(FakeGenerator(), MemoryStore())
-    session.run_round(captured.image, captured.payload, Guidance(prompt="chair"), source=source)
-
-    # The record holds the age or the reason.
-    recorded = session.records[0].frame_age_seconds
-    assert recorded == expected, f"Expected frame age {expected}, got {recorded}"
-
-
 def test_session_refuses_load_longer_than_call(first_load_generator: Generator) -> None:
     """
     A backend that reports a model load longer than its whole call fails the round in generation instead of being clamped.
@@ -371,7 +358,7 @@ def test_session_refuses_load_longer_than_call(first_load_generator: Generator) 
 
 def test_named_session_claims_its_folder_and_records_name(tmp_path: Path) -> None:
     """
-    A named session claims runs/<name>/ at once, records the name, and a round and a drawing land in that folder.
+    A named session claims runs/<name>/ at once, records the name, holds its round and drawing, and refuses bad names.
     """
     store = FolderStore(tmp_path / "runs")
     session = SketchSession(FakeGenerator(), store, name=" participant1_car ")
@@ -386,27 +373,31 @@ def test_named_session_claims_its_folder_and_records_name(tmp_path: Path) -> Non
     assert saved.session.name == "participant1_car", f"session.json must hold the name, got {saved.session.name!r}"
     assert len(saved.rounds) == 1 and len(saved.drawings) == 1, f"Expected one round and one drawing, got {saved}"
 
-    # The same name in another letter case is taken.
+    # The same name in another letter case is taken, and a name breaking the rules creates nothing.
     with pytest.raises(ExperimentNameTakenError):
         SketchSession(FakeGenerator(), store, name="PARTICIPANT1_CAR")
-
-
-def test_named_session_refuses_bad_name_before_creating_anything(tmp_path: Path) -> None:
-    """
-    A name breaking the rules raises ExperimentNameError and creates no folder.
-    """
     with pytest.raises(ExperimentNameError):
-        SketchSession(FakeGenerator(), FolderStore(tmp_path / "runs"), name="../x")
-
-    # Nothing was created, not even the runs folder.
-    assert not (tmp_path / "runs").exists(), "A refused name must create nothing"
+        SketchSession(FakeGenerator(), FolderStore(tmp_path / "other-runs"), name="../x")
+    assert not (tmp_path / "other-runs").exists(), "A refused name must create nothing"
 
 
-def test_session_allows_one_open_drawing() -> None:
+def test_session_allows_one_open_drawing_with_a_matching_condition() -> None:
     """
-    A second drawing is refused while the first is open and numbered 2 once the first has finished.
+    A study drawing whose condition disagrees with its suggester saves nothing, and only one drawing is open at a time.
     """
-    session = SketchSession(FakeGenerator(), MemoryStore())
+    store = MemoryStore()
+    session = SketchSession(FakeGenerator(), store)
+
+    # An AI drawing without a stroke suggester, or a no-AI drawing with one, is refused before anything is saved.
+    with pytest.raises(SketchLoopError, match="needs a stroke suggester"):
+        session.start_drawing(None, canvas_width=512, canvas_height=360, save_interval_seconds=2.0,
+                              study=DrawingStudy(condition=StudyCondition.AI))
+    with pytest.raises(SketchLoopError, match="cannot have a stroke suggester"):
+        session.start_drawing(FakeStrokeSuggester(), canvas_width=512, canvas_height=360, save_interval_seconds=2.0,
+                              study=DrawingStudy(condition=StudyCondition.NO_AI))
+    assert (store.sessions, store.drawings, session.drawings) == ({}, {}, []), "A refused study drawing must save nothing"
+
+    # A second drawing is refused while the first is open and numbered 2 once the first has finished.
     first = session.start_drawing(FakeStrokeSuggester(), canvas_width=512, canvas_height=360, save_interval_seconds=2.0)
     with pytest.raises(SketchLoopError, match="Drawing 1 is still open"):
         session.start_drawing(None, canvas_width=512, canvas_height=360, save_interval_seconds=2.0)
@@ -419,26 +410,10 @@ def test_session_allows_one_open_drawing() -> None:
     assert not second.record.suggestions_enabled, "A drawing without a suggester has suggestions off"
 
 
-@pytest.mark.parametrize(("condition", "suggester", "message"), [
-    (StudyCondition.AI, None, "needs a stroke suggester"),
-    (StudyCondition.NO_AI, FakeStrokeSuggester(), "cannot have a stroke suggester"),
-])
-def test_study_drawing_refuses_condition_that_disagrees(condition: StudyCondition, suggester: FakeStrokeSuggester | None,
-                                                        message: str) -> None:
-    """
-    An AI drawing without a stroke suggester, or a no-AI drawing with one, is refused before anything is saved.
-    """
-    store = MemoryStore()
-    session = SketchSession(FakeGenerator(), store)
-
-    # The mismatch is refused before the session or the drawing is saved.
-    with pytest.raises(SketchLoopError, match=message):
-        session.start_drawing(suggester, canvas_width=512, canvas_height=360, save_interval_seconds=2.0,
-                              study=DrawingStudy(condition=condition))
-    assert (store.sessions, store.drawings, session.drawings) == ({}, {}, []), "A refused study drawing must save nothing"
-
-
 def test_session_routes_prompt_suggestions_to_drawing_or_next_round(make_prompt_suggestion: Callable[..., PromptSuggestionRecord]) -> None:  # noqa: E501
+    """
+    A prompt suggestion goes to the open drawing or the next round, and each round's origin is found wherever it was shown.
+    """
     captured = StillCamera().capture()
     session = SketchSession(FakeGenerator(), MemoryStore())
     pending = session.record_prompt_suggestion(make_prompt_suggestion("a chair, concept art", "prompt-a", number=5))

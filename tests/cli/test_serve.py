@@ -54,7 +54,7 @@ def launches(monkeypatch: pytest.MonkeyPatch) -> list[tuple[AppController, dict[
 def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
                                     launches: list[tuple[AppController, dict[str, object]]]) -> None:
     """
-    sketchloop ui launches with the defaults and telemetry off, refuses too many candidates, and takes its model from --config.
+    sketchloop ui launches with telemetry off, refuses too many candidates, and takes its components from --config.
     """
     runs_dir = tmp_path / "runs"
     fakes = ["--backend", "fake", "--stroke-suggester", "fake"]
@@ -77,7 +77,8 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     config = config_dir / "ui.toml"
     config.write_text("\n".join(['[generator]', 'backend = "diffusers"', '[generator.diffusers]', 'mode = "quality"',
                                  '[models]', 'dir = "weights"', '[storage]', 'runs_dir = "file-runs"', '[ui]', 'candidates = 3',
-                                 '[prompt_suggester]', 'name = "florence"', '']),
+                                 '[prompt_suggester]', 'name = "florence"', '[stroke_suggester]', 'name = "fake"', '[drawing]',
+                                 'canvas_width = 640', 'canvas_height = 480', 'save_interval_seconds = 3.0', '']),
                       encoding="utf-8")
     config_exit = main(["ui", "--config", str(config)])
     fake_flag_exit = main(["ui", "--config", str(config), "--backend", "fake"])
@@ -112,26 +113,13 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     expected_folder = (config_dir / "weights" / FLORENCE_MODEL.folder).resolve()
     assert suggester_folder == expected_folder, f"The suggester must read {expected_folder}, got {suggester_folder}"
 
+    # The controller holds the file's stroke suggester and drawing settings.
+    assert isinstance(config_controller.stroke_suggester, FakeStrokeSuggester), f"Bad suggester {config_controller}"
+    drawing = (config_controller.canvas_size, config_controller.save_interval_seconds)
+    assert drawing == ((640, 480), 3.0), f"Expected the file's canvas and interval, got {drawing}"
+
     # --backend fake beats the file without a mode conflict, so no diffusers backend is created.
     assert len(diffusers_calls) == 1, f"--backend fake must win over the file's diffusers, got {len(diffusers_calls)} calls"
-
-
-def test_cli_ui_passes_stroke_suggester_and_drawing_settings(tmp_path: Path,
-                                                             launches: list[tuple[AppController, dict[str, object]]]) -> None:
-    """
-    sketchloop ui gives the controller the configured stroke suggester, canvas size, and capture interval.
-    """
-    config = tmp_path / "drawing.toml"
-    config.write_text("\n".join(['[stroke_suggester]', 'name = "fake"', '[drawing]', 'canvas_width = 640', 'canvas_height = 480',
-                                 'save_interval_seconds = 3.0', '']),
-                      encoding="utf-8")
-    exit_code = main(["ui", "--config", str(config)])
-    controller = launches[0][0]
-
-    # The controller holds the fake suggester and the drawing settings from the file.
-    assert exit_code == 0 and isinstance(controller.stroke_suggester, FakeStrokeSuggester), f"Bad suggester {controller}"
-    drawing = (controller.canvas_size, controller.save_interval_seconds)
-    assert drawing == ((640, 480), 3.0), f"Expected the file's canvas and interval, got {drawing}"
 
 
 def test_cli_ui_builds_prompt_suggester_from_settings(tmp_path: Path,
@@ -163,23 +151,23 @@ def test_cli_ui_builds_prompt_suggester_from_settings(tmp_path: Path,
     assert [item.status for item in recorded] == ["failed"], f"Expected one failed press, got {recorded}"
 
 
-@pytest.mark.parametrize(("arguments", "settings_text", "study"), [
-    (["--study"], None, True),
-    (["--no-study"], "[study]\nenabled = true\n", False)
-], ids=["flag", "flag-beats-file"])
 def test_cli_ui_study_mode(tmp_path: Path, capsys: pytest.CaptureFixture[str],
-                           launches: list[tuple[AppController, dict[str, object]]], arguments: list[str],
-                           settings_text: str | None, study: bool) -> None:
+                           launches: list[tuple[AppController, dict[str, object]]]) -> None:
     """
-    Study mode follows --study over the file, and only study mode serves the study page with its stand-in warnings.
+    Study mode follows the file unless --no-study overrides it, and study mode warns about each stand-in.
     """
-    if settings_text is not None:
-        (tmp_path / "sketchloop.toml").write_text(settings_text, encoding="utf-8")
-    exit_code = main(["ui", "--backend", "fake", "--stroke-suggester", "fake", *arguments])
-    output = " ".join(capsys.readouterr().out.split())
-    options = launches[0][1]
+    (tmp_path / "sketchloop.toml").write_text("[study]\nenabled = true\n", encoding="utf-8")
+    study_exit = main(["ui", "--backend", "fake", "--stroke-suggester", "fake"])
+    study_output = " ".join(capsys.readouterr().out.split())
+    plain_exit = main(["ui", "--backend", "fake", "--stroke-suggester", "fake", "--no-study"])
+    plain_output = " ".join(capsys.readouterr().out.split())
+    study_options, plain_options = launches[0][1], launches[1][1]
 
-    # The page gets the study flag only in study mode, which prints its line and a warning for each stand-in.
-    assert exit_code == 0 and options.get("study", False) == study, f"Expected study {study}, got {options}"
-    assert ("Serving the study page" in output) == study, f"Unexpected study line in {output}"
-    assert ("fake stroke suggester" in output and "fixed style templates" in output) == study, f"Unexpected warnings {output}"
+    # The file's study mode serves the study page, which prints its line and a warning for each stand-in.
+    assert study_exit == 0 and study_options.get("study") is True, f"Expected study mode, got {study_options}"
+    assert "Serving the study page" in study_output, f"Missing study line in {study_output}"
+    assert "fake stroke suggester" in study_output and "fixed style templates" in study_output, f"Bad warnings {study_output}"
+
+    # --no-study beats the file, so the ordinary page launches without the study line.
+    assert plain_exit == 0 and not plain_options.get("study", False), f"Expected no study mode, got {plain_options}"
+    assert "Serving the study page" not in plain_output, f"Unexpected study line in {plain_output}"

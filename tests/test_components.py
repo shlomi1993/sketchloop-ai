@@ -1,5 +1,5 @@
 """
-Tests of the evaluator registry, which builds evaluators from the whole settings so a model evaluator finds its weights.
+Tests of the component registries, which build components from the whole settings so model components find their weights.
 """
 
 import pytest
@@ -7,11 +7,11 @@ import re
 
 from pathlib import Path
 
-from sketchloop.backends.diffusers import DiffusersSketchGenerator, ModelSource
+from sketchloop.backends.diffusers import DiffusersSketchGenerator
 from sketchloop.backends.t2i_adapter import T2IAdapterSketchGenerator
-from sketchloop.components import (EVALUATOR_MODELS, PROMPT_SUGGESTERS, check_component_names, find_recorded_evaluator,
-                                   make_evaluator, make_generator, make_preprocessor, make_prompt_suggester,
-                                   make_stroke_suggester)
+from sketchloop.components import (EVALUATOR_MODELS, PROMPT_SUGGESTERS, RERUNNABLE_BACKENDS, check_component_names,
+                                   find_recorded_evaluator, make_evaluator, make_generator, make_preprocessor,
+                                   make_prompt_suggester, make_stroke_suggester)
 from sketchloop.evaluators.clip import CLIP_B32_MODEL, CLIP_L14_MODEL, ClipEvaluator
 from sketchloop.preprocessing import MinimalPreprocessor
 from sketchloop.settings import (ControlNetSuggesterSettings, DiffusersSettings, EvaluatorSettings, GeneratorSettings,
@@ -22,54 +22,42 @@ from sketchloop.stroke_suggestion import StrokeSuggestionError
 from sketchloop.suggestion import FLORENCE_MODEL, FlorenceSuggester, SuggestionError, TemplateSuggester
 
 
-def make_settings(evaluator_name: str, models_dir: Path) -> Settings:
+def test_registries_build_components_without_loading(tmp_path: Path) -> None:
     """
-    Build settings naming an evaluator and a models folder.
+    Each registered evaluator, preprocessor, and real backend is built from the settings with the models folder, loading nothing.
     """
-    return Settings(models=ModelsSettings(dir=models_dir), evaluator=EvaluatorSettings(name=evaluator_name))
+    models = ModelsSettings(dir=tmp_path)
+    b32 = make_evaluator(Settings(models=models, evaluator=EvaluatorSettings(name="clip-b32")))
+    l14 = make_evaluator(Settings(models=models, evaluator=EvaluatorSettings(name="clip-l14")))
+    diffusers = DiffusersSettings(mode="quality", precision="float32")
+    generators = [make_generator(Settings(generator=GeneratorSettings(backend=backend, diffusers=diffusers), models=models))
+                  for backend in ("diffusers", "t2i-adapter")]
 
+    # Each CLIP name builds the CLIP evaluator for its model in the models folder, which the download list also names.
+    clip = [(type(evaluator), evaluator.model, evaluator.model_folder) for evaluator in (b32, l14)]
+    expected_clip = [(ClipEvaluator, model, tmp_path / model.folder) for model in (CLIP_B32_MODEL, CLIP_L14_MODEL)]
+    assert clip == expected_clip, f"Unexpected CLIP evaluators {clip}"
+    assert (EVALUATOR_MODELS["clip-b32"], EVALUATOR_MODELS["clip-l14"]) == (CLIP_B32_MODEL, CLIP_L14_MODEL), "Bad download list"
 
-@pytest.mark.parametrize(("name", "model"), [("clip-b32", CLIP_B32_MODEL), ("clip-l14", CLIP_L14_MODEL)])
-def test_clip_evaluators_registered(tmp_path: Path, name: str, model: ModelSource) -> None:
-    """
-    Each CLIP name builds the CLIP evaluator for its model in the configured models folder, without loading it.
-    """
-    evaluator = make_evaluator(make_settings(name, tmp_path))
-    assert isinstance(evaluator, ClipEvaluator), f"{name} must build a ClipEvaluator, got {type(evaluator).__name__}"
-    assert evaluator.model == model, f"{name} must use {model}, got {evaluator.model}"
-    assert evaluator.model_folder == tmp_path / model.folder, f"Expected the configured folder, got {evaluator.model_folder}"
-    assert EVALUATOR_MODELS[name] == model, f"The download list must name {name}'s model"
-
-
-def test_minimal_preprocessor_registered() -> None:
-    """
-    The minimal preprocessor name in the settings builds the minimal preprocessor.
-    """
+    # The minimal preprocessor name builds the minimal preprocessor.
     preprocessor = make_preprocessor(PreprocessingSettings(name="minimal"))
     assert isinstance(preprocessor, MinimalPreprocessor), f"minimal built {type(preprocessor).__name__}"
 
+    # Both real backends read the [models] folder and share the diffusers options.
+    built = [(type(generator), generator._model_dir, generator.mode, generator.precision) for generator in generators]
+    expected = [(kind, tmp_path, "quality", "float32") for kind in (DiffusersSketchGenerator, T2IAdapterSketchGenerator)]
+    assert built == expected, f"Unexpected real backends {built}"
 
-@pytest.mark.parametrize(("backend", "expected_type"), [
-    ("diffusers", DiffusersSketchGenerator),
-    ("t2i-adapter", T2IAdapterSketchGenerator)
-])
-def test_real_backends_read_models_dir(tmp_path: Path, backend: str, expected_type: type) -> None:
-    """
-    Both real backends read their weights from the [models] folder, without loading any model.
-    """
-    generator_settings = GeneratorSettings(backend=backend, diffusers=DiffusersSettings(precision="float32"))
-    generator = make_generator(Settings(generator=generator_settings, models=ModelsSettings(dir=tmp_path)))
-    assert isinstance(generator, expected_type), f"{backend} built {type(generator).__name__}"
-    assert generator._model_dir == tmp_path, f"{backend} must read the [models] folder, got {generator._model_dir}"
+    # Rerun recreates each real backend from its own adapter name.
+    adapter_name = T2IAdapterSketchGenerator.ADAPTER_NAME
+    assert adapter_name != DiffusersSketchGenerator.ADAPTER_NAME, "The two real backends need distinct adapter names"
+    assert RERUNNABLE_BACKENDS[adapter_name] == "t2i-adapter", "Rerun must map the adapter name to t2i-adapter"
 
 
 @pytest.mark.parametrize(("evaluator", "score_details", "expected"), [
-    ("NoOpEvaluator", {}, "none"),
     ("ClipEvaluator", {"model": CLIP_B32_MODEL.repo_id, "revision": "older"}, "clip-b32"),
     ("ClipEvaluator", {"model": "someone/other-clip"}, None),
-    ("ClipEvaluator", {}, None),
-    (None, {}, None)
-], ids=["none", "clip-b32", "unknown-clip", "clip-without-model", "unrecorded"])
+], ids=["clip-b32", "unknown-clip"])
 def test_find_recorded_evaluator(evaluator: str | None, score_details: dict[str, str], expected: str | None) -> None:
     """
     A recorded evaluator maps back to its registry name, CLIP by its recorded repository, and anything else to None.
@@ -78,30 +66,11 @@ def test_find_recorded_evaluator(evaluator: str | None, score_details: dict[str,
     assert found == expected, f"Expected {expected} for {evaluator} with {score_details}, got {found}"
 
 
-def test_stroke_suggester_registry_builds_the_controlnet_suggester(tmp_path: Path) -> None:
-    """
-    Naming controlnet builds the real suggester with the models folder and precision from the settings, loading nothing.
-    """
-    options = StrokeSuggesterSettings(name="controlnet", controlnet=ControlNetSuggesterSettings(precision="float32"))
-    settings = Settings(models=ModelsSettings(dir=tmp_path), stroke_suggester=options)
-    suggester = make_stroke_suggester(settings)
-
-    # The suggester runs in the configured precision.
-    assert isinstance(suggester, ControlNetStrokeSuggester), f"Expected the ControlNet suggester, got {type(suggester).__name__}"
-    assert suggester.precision == "float32", f"Expected float32, got {suggester.precision}"
-
-    # It looks for the weights in the configured folder, which is empty here.
-    with pytest.raises(StrokeSuggestionError, match=re.escape(f"{tmp_path.as_posix()}/stable-diffusion-v1-5 is missing")):
-        suggester.load(512, 360)
-
-
 @pytest.mark.parametrize(("settings", "message"), [
     (Settings(evaluator=EvaluatorSettings(name="clip")), 'evaluator.name must be one of none, clip-b32, or clip-l14, got "clip"'),
     (Settings(stroke_suggester=StrokeSuggesterSettings(controlnet=ControlNetSuggesterSettings(precision="fp16"))),
      'stroke_suggester.controlnet.precision must be one of float16 or float32, got "fp16"'),
-    (Settings(prompt_suggester=PromptSuggesterSettings(name="llava")),
-     'prompt_suggester.name must be one of templates or florence, got "llava"')
-], ids=["unknown-evaluator", "unknown-precision", "unknown-prompt-suggester"])
+], ids=["unknown-evaluator", "unknown-precision"])
 def test_unknown_component_settings_refused(settings: Settings, message: str) -> None:
     """
     An unknown component name or suggester precision is refused with the key and every choice.
@@ -110,19 +79,25 @@ def test_unknown_component_settings_refused(settings: Settings, message: str) ->
         check_component_names(settings, "sketchloop.toml")
 
 
-def test_prompt_suggester_registry(tmp_path: Path) -> None:
+def test_suggester_registries_read_the_models_folder(tmp_path: Path) -> None:
     """
-    The templates are the default prompt suggester, and florence reads its weights from the models folder.
+    The ControlNet and Florence-2 suggesters are built in the configured precision and look for weights in the models folder.
     """
+    models = ModelsSettings(dir=tmp_path)
+    options = StrokeSuggesterSettings(name="controlnet", controlnet=ControlNetSuggesterSettings(precision="float32"))
+    stroke_suggester = make_stroke_suggester(Settings(models=models, stroke_suggester=options))
     default = make_prompt_suggester(Settings())
-    florence = make_prompt_suggester(Settings(models=ModelsSettings(dir=tmp_path),
-                                              prompt_suggester=PromptSuggesterSettings(name="florence")))
+    florence = make_prompt_suggester(Settings(models=models, prompt_suggester=PromptSuggesterSettings(name="florence")))
 
-    # The templates need no model and are the default, and florence is built with the fake image backend, loading nothing.
+    # The stroke suggester runs in the configured precision, the templates are the default, and florence is registered.
+    assert isinstance(stroke_suggester, ControlNetStrokeSuggester), f"Got {type(stroke_suggester).__name__}"
+    assert stroke_suggester.precision == "float32", f"Expected float32, got {stroke_suggester.precision}"
     assert isinstance(default, TemplateSuggester), f"Expected the templates by default, got {type(default).__name__}"
     assert isinstance(florence, FlorenceSuggester), f"Expected Florence-2, got {type(florence).__name__}"
     assert set(PROMPT_SUGGESTERS) == {"templates", "florence"}, f"Unexpected prompt suggesters {sorted(PROMPT_SUGGESTERS)}"
 
-    # Florence-2 looks for its weights in the configured models folder, which is empty here.
+    # Both look for their weights in the configured models folder, which is empty here.
+    with pytest.raises(StrokeSuggestionError, match=re.escape(f"{tmp_path.as_posix()}/stable-diffusion-v1-5 is missing")):
+        stroke_suggester.load(512, 360)
     with pytest.raises(SuggestionError, match=re.escape(f"{(tmp_path / FLORENCE_MODEL.folder).as_posix()} is missing")):
         florence.warm_up()

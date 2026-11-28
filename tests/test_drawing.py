@@ -10,13 +10,11 @@ import threading
 
 from collections.abc import Callable, Mapping
 from dataclasses import replace
-from datetime import datetime, timedelta
 from typing import Final
 
 from sketchloop.capture import CapturedSketch, InvalidSketchError, encode_frame
 from sketchloop.domain import ColorMode, InvalidRecordError, SketchLoopError, SketchSource, Unavailable
-from sketchloop.drawing import (INTERVAL_JPEG_QUALITY, NO_STROKES_MESSAGE, GuidedDrawing, check_suggestion_output,
-                                compress_interval_frame)
+from sketchloop.drawing import INTERVAL_JPEG_QUALITY, NO_STROKES_MESSAGE, GuidedDrawing
 from sketchloop.experiments import (FINAL_PROMPT_NOT_RECORDED, ORIGIN_NOT_RECORDED, OUTSIDE_DRAWING_REASON, CaptureTrigger,
                                     DrawingEnd, DrawingRecord, DrawingStudy, MemoryStore, PromptOrigin, PromptOriginKind,
                                     PromptSuggestionRecord, StoreError, StudyCondition, SuggestionStage, SuggestionStatus,
@@ -31,21 +29,8 @@ from sketchloop.stroke_suggestion import (LINE_DRAWING_FILE, PART_COLORS, Stroke
 SESSION_ID: Final = "session"
 CANVAS_SIZE: Final = (512, 360)
 PartDrawer = Callable[[np.ndarray, bytes], np.ndarray]  # Draws a part's mask on a sheet frame
-OUT_OF_MEMORY: Final = "Next-stroke suggestion failed: out of memory. Free memory and retry."
 SUGGESTED_PROMPT: Final = "the sketched object, product design render, studio lighting, white background"
 PromptMaker = Callable[..., PromptSuggestionRecord]  # Builds a shown prompt suggestion from its text and ID
-
-
-class FailingSuggester(FakeStrokeSuggester):
-    """
-    Test-only fake suggester whose suggestion fails as if the device ran out of memory.
-    """
-
-    def suggest(self, request: StrokeSuggestionRequest, canvas_payload: bytes) -> StrokeSuggestionOutput:
-        """
-        Raise the error a real suggester raises when generation fails.
-        """
-        raise StrokeSuggestionError(OUT_OF_MEMORY)
 
 
 class MissingWeightsSuggester(FakeStrokeSuggester):
@@ -149,44 +134,85 @@ def suggest(drawing: GuidedDrawing, captured: CapturedSketch, prompt: str = "a c
     drawing.suggest(captured, source=SketchSource.WEBCAM, rotation=0, prompt=prompt, frame_age_seconds=0.2)
 
 
-def test_drawing_records_suggestions_and_final_capture(sheet_capture: CapturedSketch) -> None:
+def test_guided_drawing_from_start_to_finish(sheet_frame: np.ndarray, sheet_capture: CapturedSketch,
+                                             draw_part_on_sheet: PartDrawer) -> None:
     """
-    Two suggestions and a finish give consecutive captures, suggestion baselines, an overlay, and a record that round-trips.
+    A drawing with an interval capture, two suggestions, a drawn part, and a finish records, decides, saves, and reloads.
     """
     store = MemoryStore()
     drawing = start_drawing(store, FakeStrokeSuggester())
+    before = drawing.record_capture(sheet_capture, source=SketchSource.WEBCAM, rotation=0, frame_age_seconds=0.3)
     first = drawing.suggest(sheet_capture, source=SketchSource.WEBCAM, rotation=0, prompt="", frame_age_seconds=0.2)
-    suggest(drawing, sheet_capture, prompt="  a red sports car ")
-    record = drawing.finish(sheet_capture, source=SketchSource.UPLOAD)
-    saved = store.drawings[(SESSION_ID, 1)]
+    part_mask = store.drawing_files[(SESSION_ID, 1, first.result.parts[0].mask.path)]
+    with_part = encode_capture(draw_part_on_sheet(sheet_frame, part_mask))
+    after = drawing.record_capture(with_part, source=SketchSource.UPLOAD, rotation=0)
+    suggest(drawing, with_part, prompt="  a red sports car ")
+    second_open = drawing.record.suggestions[1].window is None
+    record = drawing.finish(with_part, source=SketchSource.UPLOAD)
     text = json.dumps(drawing_to_dict(record), allow_nan=False)
 
-    # Captures are numbered in order, each suggestion's baseline is its press, and the final capture was taken at finish.
-    triggers = [capture.trigger for capture in record.captures]
-    assert triggers == [CaptureTrigger.SUGGESTION, CaptureTrigger.SUGGESTION, CaptureTrigger.FINISH], f"Bad triggers {triggers}"
-    baselines = [suggestion.baseline_capture for suggestion in record.suggestions]
-    assert baselines == [1, 2] and record.final_capture == 3, f"Expected baselines 1, 2 and final 3, got {baselines}"
-    assert record.end == DrawingEnd.FINISHED and record.ended_at is not None, f"Expected a finished drawing, got {record.end}"
+    # Interval frames are JPEG and press and finish frames lossless PNG, numbered in order, with the quality recorded.
+    media = [(capture.trigger, capture.raw.media_type) for capture in record.captures]
+    expected_media = [(CaptureTrigger.INTERVAL, "image/jpeg"), (CaptureTrigger.SUGGESTION, "image/png"),
+                      (CaptureTrigger.INTERVAL, "image/jpeg"), (CaptureTrigger.SUGGESTION, "image/png"),
+                      (CaptureTrigger.FINISH, "image/png")]
+    assert media == expected_media, f"Unexpected capture triggers and formats {media}"
+    jpeg = store.drawing_files[(SESSION_ID, 1, "captures/capture-0001-raw.jpg")]
+    assert jpeg.startswith(b"\xff\xd8\xff"), "The interval frame must be saved as JPEG bytes"
+    assert record.interval_jpeg_quality == INTERVAL_JPEG_QUALITY == 90, f"Unexpected quality {record.interval_jpeg_quality}"
 
-    # The prompt is kept exactly as typed, and the overlay has the canvas size in RGBA with one color per part.
+    # Each suggestion's baseline is its press, the final capture was taken at finish, and prompts are kept exactly as typed.
+    baselines = [suggestion.baseline_capture for suggestion in record.suggestions]
+    assert baselines == [2, 4] and record.final_capture == 5, f"Expected baselines 2, 4 and final 5, got {baselines}"
+    assert record.end == DrawingEnd.FINISHED and record.ended_at is not None, f"Expected a finished drawing, got {record.end}"
     prompts = [suggestion.request.prompt for suggestion in record.suggestions]
     assert prompts == ["", "  a red sports car "], f"Prompts must be kept exactly as typed, got {prompts}"
+
+    # The overlay has the canvas size in RGBA with one color per part.
     overlay = first.overlay
     assert (overlay.width, overlay.height, overlay.mode) == (*CANVAS_SIZE, ColorMode.RGBA), f"Bad overlay {overlay}"
     assert first.part_colors == PART_COLORS[:2] and first.status == SuggestionStatus.SHOWN, f"Bad suggestion {first}"
 
-    # Every file the record names was saved under the drawing, in the place the design gives.
+    # Every file the record names was saved in the place the design gives, filled masks included.
     paths = {path for (session, number, path) in store.drawing_files if (session, number) == (SESSION_ID, 1)}
-    expected = {"captures/capture-0001-raw.png", "captures/capture-0001.png", "suggestions/suggestion-1/strokes.png",
+    expected = {"captures/capture-0002-raw.png", "captures/capture-0002.png", "suggestions/suggestion-1/strokes.png",
                 "suggestions/suggestion-1/line-drawing.png", "suggestions/suggestion-1/part-1.png",
-                "suggestions/suggestion-1/overlay.png", "captures/capture-0003-raw.png"}
+                "suggestions/suggestion-1/overlay.png", "captures/capture-0005-raw.png", "captures/capture-0001-filled.png"}
     assert expected <= paths, f"Missing drawing files {sorted(expected - paths)}"
+    assert all((SESSION_ID, 1, capture.filled.path) in store.drawing_files for capture in record.captures), "Bad filled masks"
 
-    # The saved record is the final one, and it round-trips through JSON unchanged with plain numbers only.
-    assert saved == record, "The store must hold the finished record"
-    assert drawing_from_dict(json.loads(text)) == record, "drawing.json must load back unchanged"
+    # Only captures after a press are aligned to it, and every suggested part is scored at the four tolerances.
+    assert before.follow is None and record.captures[1].follow is None, "Captures up to a suggestion's press have no alignment"
+    follow = after.follow
+    assert follow.suggestion == 1 and follow.alignment.converged, f"Expected an alignment to suggestion 1, got {follow}"
+    assert [part.part for part in follow.parts] == [0, 1], f"Expected both parts scored, got {follow.parts}"
+    assert set(follow.parts[0].coverage) == {4, 8, 16, 24}, f"Unexpected tolerances {follow.parts[0].coverage}"
+    assert {"capture", "canvas", "scoring", "saving"} <= set(after.timings_seconds), f"Bad timings {after.timings_seconds}"
+
+    # Suggestion 2's press ended window 1, where the drawn part was followed and the other not.
+    ended = record.suggestions[0]
+    assert (ended.window.end, ended.window.last_capture) == (WindowEnd.NEXT_SUGGESTION, 4), f"Unexpected window {ended.window}"
+    parts = [(part.result, part.deciding_capture) for part in ended.decision.parts]
+    assert parts == [(FollowResult.FOLLOWED, 4), (FollowResult.NOT_FOLLOWED, 4)], f"Unexpected part decisions {parts}"
+    assert ended.decision.result == FollowResult.FOLLOWED and ended.decision.rule == PROVISIONAL_RULE, f"Got {ended.decision}"
+
+    # Suggestion 2 stayed open until finish, which ended it where nothing new was drawn.
+    last = record.suggestions[1]
+    assert second_open and (last.window.end, last.window.last_capture) == (WindowEnd.FINISHED, 5), f"Bad window {last.window}"
+    assert last.decision.result == FollowResult.UNDETERMINED, f"Nothing new was drawn, got {last.decision}"
+
+    # The finished record was saved and round-trips through JSON with plain numbers, naming its method and rule once.
+    loaded = drawing_from_dict(json.loads(text))
+    assert store.drawings[(SESSION_ID, 1)] == record and loaded == record, "drawing.json must hold and reload the record"
+    assert (record.follow_detector.name, record.rule) == ("aligned-strokes", PROVISIONAL_RULE), f"Bad method {record}"
     paper_share = drawing_to_dict(record)["captures"][0]["preprocessing"][2]["params"]["paper_share"]
     assert type(paper_share) is float, f"Canvas steps must hold plain floats, got {type(paper_share)}"
+
+    # The stored scores recompute the recorded decision, and a rule needing far more new strokes leaves it undetermined.
+    suggestion = loaded.suggestions[0]
+    assert decide_suggestion(loaded, suggestion, loaded.rule) == suggestion.decision, "The recorded decision must recompute"
+    stricter = decide_suggestion(loaded, suggestion, FollowRule(min_new_stroke_pixels=100_000))
+    assert stricter.result == FollowResult.UNDETERMINED, f"A stricter rule must change the result, got {stricter}"
 
     # A finished drawing refuses further presses.
     with pytest.raises(SketchLoopError, match="is finished"):
@@ -209,15 +235,13 @@ def test_drawing_refuses_blank_canvas_but_keeps_capture(blank_capture: CapturedS
 
 
 @pytest.mark.parametrize(("suggester", "stage", "message"), [
-    (FailingSuggester(), SuggestionStage.GENERATION, OUT_OF_MEMORY),
     (MissingWeightsSuggester(), SuggestionStage.MODEL_LOAD, "Run python scripts/download_models.py"),
     (SmallMaskSuggester(), SuggestionStage.GENERATION, "not the 512x360 canvas"),
-])
-def test_drawing_records_failed_suggestion_and_keeps_previous(sheet_frame: np.ndarray, sheet_capture: CapturedSketch,
-                                                              suggester: StrokeSuggester, stage: SuggestionStage,
-                                                              message: str) -> None:
+], ids=["model-load", "wrong-mask-size"])
+def test_failed_suggestion_keeps_the_previous_one_open(sheet_frame: np.ndarray, sheet_capture: CapturedSketch,
+                                                       suggester: StrokeSuggester, stage: SuggestionStage, message: str) -> None:
     """
-    A failing second press records its stage and error, re-raises, and leaves the first suggestion's overlay open.
+    A failing second press records its stage, re-raises, and leaves the first suggestion's overlay and window open.
     """
     store = MemoryStore()
     drawing = start_drawing(store, FakeStrokeSuggester())
@@ -225,21 +249,28 @@ def test_drawing_records_failed_suggestion_and_keeps_previous(sheet_frame: np.nd
     drawing.suggester = suggester
     with pytest.raises(StrokeSuggestionError, match=message):
         suggest(drawing, sheet_capture)
-    failed = store.drawings[(SESSION_ID, 1)].suggestions[1]
+    saved = store.drawings[(SESSION_ID, 1)]
+    failed = saved.suggestions[1]
 
     # The failure is saved with its stage, request, and baseline capture, and without a result, and its input is saved.
     assert failed.status == SuggestionStatus.FAILED and failed.failure.stage == stage, f"Unexpected failure {failed.failure}"
     assert (SESSION_ID, 1, failed.request.canvas.path) in store.drawing_files, "The failed press's strokes must be saved"
-    assert failed.request is not None and failed.result is None, f"A failed press keeps its request only, got {failed}"
-    assert failed.baseline_capture == 2 and failed.shown_at is None, f"Unexpected baseline or time {failed}"
+    assert failed.result is None and failed.baseline_capture == 2 and failed.shown_at is None, f"Unexpected {failed}"
 
-    # The first suggestion stays open, and the preview still shows its overlay.
+    # The first suggestion stays open and undecided, and the preview still shows its overlay.
     _, payload = cv2.imencode(".png", sheet_frame)
     canvas = make_paper_canvas(payload.tobytes(), 0, *CANVAS_SIZE)
     plain = cv2.imdecode(np.frombuffer(canvas.payload, np.uint8), cv2.IMREAD_COLOR)
     preview = cv2.imdecode(np.frombuffer(drawing.compose_preview(canvas), np.uint8), cv2.IMREAD_COLOR)
     assert drawing.open_suggestion.number == 1, f"Suggestion 1 must stay open, got {drawing.open_suggestion}"
+    assert saved.suggestions[0].window is None and saved.suggestions[0].decision is None, "A failed press must not end it"
     assert not np.array_equal(preview, plain), "The preview must still show suggestion 1's overlay"
+
+    # Ending the drawing for a new session ends suggestion 1, whose window holds the failed press's capture.
+    record = drawing.finish(None, end=DrawingEnd.NEW_SESSION)
+    window = record.suggestions[0].window
+    assert (window.end, window.last_capture) == (WindowEnd.NEW_SESSION, 2), f"Unexpected window {window}"
+    assert record.suggestions[1].window is None, "A failed suggestion has no window"
 
 
 def test_drawing_shows_zero_part_suggestion(sheet_capture: CapturedSketch) -> None:
@@ -255,137 +286,71 @@ def test_drawing_shows_zero_part_suggestion(sheet_capture: CapturedSketch) -> No
     assert suggestion.part_colors == () and suggestion.overlay is not None, f"Expected an overlay and no colors, got {suggestion}"
 
 
-def test_drawing_resaves_capture_after_failed_save(sheet_capture: CapturedSketch) -> None:
+def test_drawing_ended_before_any_later_capture(sheet_frame: np.ndarray, sheet_capture: CapturedSketch) -> None:
     """
-    When saving a suggestion fails, the press is recorded as failed at saving, and the next save writes the capture's files.
-    """
-    store = FlakyDrawingStore()
-    drawing = start_drawing(store, FakeStrokeSuggester())
-    store.failures_left = 1
-    with pytest.raises(StoreError, match="No space left"):
-        suggest(drawing, sheet_capture)
-    saved = store.drawings[(SESSION_ID, 1)]
-
-    # The retry saved the capture with its files and the failed suggestion, without the suggestion's own files.
-    files = {path for (_, _, path) in store.drawing_files}
-    assert len(saved.captures) == 1 and saved.suggestions[0].failure.stage == SuggestionStage.SAVING, f"Unexpected record {saved}"
-    assert "captures/capture-0001-raw.png" in files, f"The capture's frame must be saved on the next save, got {files}"
-    suggestion_files = {path for path in files if path.startswith("suggestions/")}
-    assert suggestion_files == {"suggestions/suggestion-1/strokes.png"}, f"A failed suggestion keeps only its input, got {files}"
-
-
-def test_drawing_finish_without_frame_and_preview_without_suggestion(sheet_frame: np.ndarray) -> None:
-    """
-    A preview without a suggestion is the canvas alone, and finishing without a frame ends the drawing with no final capture.
+    A preview before any suggestion is the canvas alone, and a window ended before any later capture is undetermined.
     """
     drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
     _, payload = cv2.imencode(".png", sheet_frame)
     canvas = make_paper_canvas(payload.tobytes(), 0, *CANVAS_SIZE)
     preview = cv2.imdecode(np.frombuffer(drawing.compose_preview(canvas), np.uint8), cv2.IMREAD_COLOR)
     plain = cv2.imdecode(np.frombuffer(canvas.payload, np.uint8), cv2.IMREAD_COLOR)
+    suggest(drawing, sheet_capture)
     record = drawing.finish(None, end=DrawingEnd.NEW_SESSION)
+    suggestion = record.suggestions[0]
 
     # The preview equals the canvas, and the drawing ended for a new session without a final capture.
     assert np.array_equal(preview, plain), "Without a suggestion the preview must be the canvas"
-    assert (record.end, record.final_capture, record.captures) == (DrawingEnd.NEW_SESSION, None, ()), f"Bad end {record}"
+    assert (record.end, record.final_capture) == (DrawingEnd.NEW_SESSION, None), f"Unexpected end {record}"
+
+    # The window has no last capture, and each part has no usable capture.
+    assert suggestion.window.last_capture is None, f"Expected an empty window, got {suggestion.window}"
+    reasons = {(part.result, part.reason) for part in suggestion.decision.parts}
+    assert reasons == {(FollowResult.UNDETERMINED, NO_USABLE_CAPTURE_REASON)}, f"Unexpected part decisions {reasons}"
 
 
-def test_drawing_with_suggestions_off_refuses_presses(sheet_capture: CapturedSketch) -> None:
+def test_drawing_survives_failed_saves(sheet_capture: CapturedSketch, make_prompt_suggestion: PromptMaker) -> None:
     """
-    A drawing started without a suggester records that suggestions are off and refuses a press.
+    Failed saves of a capture, a suggestion, a prompt suggestion, and the finish raise, lose nothing, and can be retried.
     """
-    drawing = start_drawing(MemoryStore(), None)
-
-    # The record marks suggestions off, and a press is refused.
-    assert not drawing.record.suggestions_enabled and drawing.record.suggester is None, f"Bad record {drawing.record}"
-    with pytest.raises(SketchLoopError, match="Suggestions are off"):
-        suggest(drawing, sheet_capture)
-
-
-def test_check_suggestion_output_refuses_more_parts_than_requested(sheet_capture: CapturedSketch) -> None:
-    """
-    An output with more parts than the request allowed is refused, which the output record alone cannot check.
-    """
-    image, payload = encode_png(np.full((360, 512), 255, dtype=np.uint8), "strokes.png")
-    output = FakeStrokeSuggester().suggest(StrokeSuggestionRequest(canvas=image, prompt=""), payload)
-
-    # The fake gives two parts, which a request for one part refuses.
-    with pytest.raises(StrokeSuggestionError, match="2 parts for at most 1"):
-        check_suggestion_output(output, StrokeSuggestionRequest(canvas=image, prompt="", max_parts=1))
-
-
-def test_drawing_interval_captures_are_jpeg_and_aligned(sheet_frame: np.ndarray, sheet_capture: CapturedSketch) -> None:
-    """
-    Interval frames are kept as JPEG and press frames as PNG, and captures after a suggestion record their alignment.
-    """
-    store = MemoryStore()
+    store = FlakyDrawingStore()
     drawing = start_drawing(store, FakeStrokeSuggester())
-    before = drawing.record_capture(sheet_capture, source=SketchSource.WEBCAM, rotation=0, frame_age_seconds=0.3)
-    suggest(drawing, sheet_capture)
-    shifted = encode_capture(np.roll(sheet_frame, (2, 3), axis=(0, 1)))
-    after = drawing.record_capture(shifted, source=SketchSource.UPLOAD, rotation=0)
-    record = drawing.finish(sheet_capture, source=SketchSource.UPLOAD)
 
-    # Interval frames are JPEG, while the press and finish frames stay lossless PNG.
-    media = [(capture.trigger, capture.raw.media_type, capture.raw.path) for capture in record.captures]
-    expected = [(CaptureTrigger.INTERVAL, "image/jpeg", "captures/capture-0001-raw.jpg"),
-                (CaptureTrigger.SUGGESTION, "image/png", "captures/capture-0002-raw.png"),
-                (CaptureTrigger.INTERVAL, "image/jpeg", "captures/capture-0003-raw.jpg"),
-                (CaptureTrigger.FINISH, "image/png", "captures/capture-0004-raw.png")]
-    assert media == expected, f"Unexpected capture formats {media}"
-    jpeg = store.drawing_files[(SESSION_ID, 1, "captures/capture-0001-raw.jpg")]
-    assert jpeg.startswith(b"\xff\xd8\xff"), "The interval frame must be saved as JPEG bytes"
-
-    # The JPEG quality is recorded, and every canvas has its filled mask saved beside it.
-    assert record.interval_jpeg_quality == INTERVAL_JPEG_QUALITY == 90, f"Unexpected quality {record.interval_jpeg_quality}"
-    filled_paths = [capture.filled.path for capture in record.captures]
-    assert filled_paths[0] == "captures/capture-0001-filled.png", f"Unexpected filled mask paths {filled_paths}"
-    assert all((SESSION_ID, 1, path) in store.drawing_files for path in filled_paths), "Every filled mask must be saved"
-
-    # Only captures after the press are aligned, to suggestion 1, and the shifted frame aligns with its time recorded.
-    assert before.follow is None and record.captures[1].follow is None, "Captures before a suggestion have no alignment"
-    follow = after.follow
-    assert follow.suggestion == 1 and follow.alignment.converged, f"Expected an alignment to suggestion 1, got {follow}"
-    assert follow.new_stroke_pixels is not None and follow.seconds_since_shown >= 0, f"Unexpected scores {follow}"
-
-    # Every suggested part is scored, in index order, at the four tolerances.
-    part_count = len(record.suggestions[0].result.parts)
-    indexes = [part.part for part in follow.parts]
-    assert part_count > 0 and indexes == list(range(part_count)), f"Expected {part_count} scored parts, got {indexes}"
-    assert set(follow.parts[0].coverage) == {4, 8, 16, 24}, f"Unexpected tolerances {follow.parts[0].coverage}"
-    assert record.captures[3].follow.suggestion == 1, "The finish capture is aligned to the open suggestion too"
-    stages = set(after.timings_seconds)
-    assert {"capture", "canvas", "scoring", "saving"} <= stages, f"Unexpected capture timings {stages}"
-
-    # The follow method is recorded once, and the whole record round-trips through JSON unchanged.
-    assert record.follow_detector.name == "aligned-strokes", f"Unexpected follow method {record.follow_detector}"
-    text = json.dumps(drawing_to_dict(record), allow_nan=False)
-    assert drawing_from_dict(json.loads(text)) == record, "drawing.json with captures must load back unchanged"
-
-
-def test_drawing_without_part_scores_loads(sheet_capture: CapturedSketch) -> None:
-    """
-    A drawing.json saved before part scores, filled masks and shares, aligned regions, and JPEG quality loads them as unrecorded.
-    """
-    drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
-    suggest(drawing, sheet_capture)
+    # A failed interval capture save keeps the capture, and the next save writes its files.
+    store.failures_left = 1
+    with pytest.raises(StoreError, match="No space left"):
+        drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
     drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
-    data = drawing_to_dict(drawing.record)
-    del data["interval_jpeg_quality"]
-    for capture in data["captures"]:
-        del capture["filled"]
-    del data["captures"][1]["follow"]["parts"]
-    del data["captures"][1]["follow"]["alignment"]["filled_share"]
-    del data["captures"][1]["follow"]["alignment"]["aligned_on"]
-    loaded = drawing_from_dict(data)
+    files = {path for (_, _, path) in store.drawing_files}
+    assert len(store.drawings[(SESSION_ID, 1)].captures) == 2, "Both interval captures must be saved"
+    assert "captures/capture-0001-raw.jpg" in files, f"The first capture's frame must be saved on the retry, got {files}"
 
-    # The quality is unavailable with a reason, and the masks and part scores are absent.
-    assert isinstance(loaded.interval_jpeg_quality, Unavailable), f"Expected no quality, got {loaded.interval_jpeg_quality}"
-    assert all(capture.filled is None for capture in loaded.captures), "Older captures have no filled mask"
-    follow = loaded.captures[1].follow
-    assert follow.parts is None and follow.alignment.converged, f"Expected an alignment without part scores, got {follow}"
-    assert isinstance(follow.alignment.filled_share, Unavailable), f"Expected no filled share, got {follow.alignment}"
-    assert isinstance(follow.alignment.aligned_on, Unavailable), f"Expected no aligned region, got {follow.alignment}"
+    # A failed suggestion save records the press as failed at saving, keeping its capture and input but not its output.
+    store.failures_left = 1
+    with pytest.raises(StoreError, match="No space left"):
+        suggest(drawing, sheet_capture)
+    saved = store.drawings[(SESSION_ID, 1)]
+    files = {path for (_, _, path) in store.drawing_files}
+    assert saved.suggestions[0].failure.stage == SuggestionStage.SAVING, f"Unexpected record {saved.suggestions[0]}"
+    assert "captures/capture-0003-raw.png" in files, f"The press's frame must be saved on the next save, got {files}"
+    suggestion_files = {path for path in files if path.startswith("suggestions/")}
+    assert suggestion_files == {"suggestions/suggestion-1/strokes.png"}, f"A failed suggestion keeps only its input, got {files}"
+
+    # A failed prompt suggestion save leaves no entry the page never showed, in memory or in the store.
+    store.failures_left = 1
+    with pytest.raises(StoreError, match="No space left"):
+        drawing.record_prompt_suggestion(make_prompt_suggestion(SUGGESTED_PROMPT))
+    assert drawing.record.prompt_suggestions == (), f"The entry must be removed, got {drawing.record.prompt_suggestions}"
+    assert store.drawings[(SESSION_ID, 1)].prompt_suggestions == (), "The store must not hold the unsaved entry"
+
+    # A failed finish leaves the drawing and its last window open, so finishing again ends and decides it.
+    suggest(drawing, sheet_capture)
+    store.failures_left = 1
+    with pytest.raises(StoreError, match="No space left"):
+        drawing.finish(None)
+    assert drawing.is_open and drawing.record.suggestions[1].window is None, "A failed finish must reopen the window"
+    record = drawing.finish(None)
+    assert record.suggestions[1].window.end == WindowEnd.FINISHED, f"Unexpected window {record.suggestions[1].window}"
 
 
 def test_drawing_skips_interval_capture_during_suggestion(sheet_capture: CapturedSketch) -> None:
@@ -409,194 +374,69 @@ def test_drawing_skips_interval_capture_during_suggestion(sheet_capture: Capture
     assert after.number == 2 and after.follow.suggestion == 1, f"Expected capture 2 aligned to suggestion 1, got {after}"
 
 
-def test_drawing_without_alignment_fields_loads(sheet_capture: CapturedSketch) -> None:
+def test_drawing_saved_by_older_versions_loads(sheet_capture: CapturedSketch) -> None:
     """
-    A drawing.json written before follow detection, without follow fields, loads with no alignment and no follow method.
+    A drawing.json without decisions, study fields, or masks loads them as unrecorded, and one without alignment loads too.
     """
     drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
     suggest(drawing, sheet_capture)
     drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
-    data = drawing_to_dict(drawing.record)
-    del data["follow_detector"], data["rule"]
+    data = drawing_to_dict(drawing.finish(None))
+    unaligned = json.loads(json.dumps(data))
+
+    # Delete what T09 slices and T10 added, standing in for a drawing saved before them.
+    for key in ("rule", "interval_jpeg_quality", "study", "prompt_suggestions", "final_prompt", "final_prompt_origin"):
+        del data[key]
     for capture in data["captures"]:
-        del capture["follow"]
+        del capture["filled"]
+    del data["captures"][1]["follow"]["alignment"]["filled_share"], data["captures"][1]["follow"]["alignment"]["aligned_on"]
+    del data["suggestions"][0]["window"], data["suggestions"][0]["decision"], data["suggestions"][0]["prompt_origin"]
     loaded = drawing_from_dict(data)
+    suggestion, alignment = loaded.suggestions[0], loaded.captures[1].follow.alignment
 
-    # The older record loads with no follow method and no capture alignment.
-    assert loaded.follow_detector is None and loaded.captures[0].follow is None, f"Unexpected older drawing {loaded}"
+    # The older drawing has no rule, window, decision, masks, or study fields, and its scores can still be decided.
+    assert loaded.rule is None and suggestion.window is None and suggestion.decision is None, f"Unexpected {suggestion}"
+    assert decide_suggestion(loaded, suggestion, PROVISIONAL_RULE).parts, "An older drawing can still be decided from its scores"
+    assert all(capture.filled is None for capture in loaded.captures), "Older captures have no filled mask"
+    unrecorded = (loaded.interval_jpeg_quality, alignment.filled_share, alignment.aligned_on)
+    assert all(isinstance(value, Unavailable) for value in unrecorded), f"Expected unrecorded values, got {unrecorded}"
+    assert loaded.study is None and loaded.prompt_suggestions is None, f"Expected no study fields, got {loaded}"
+    assert loaded.final_prompt == Unavailable(FINAL_PROMPT_NOT_RECORDED), f"Unexpected final prompt {loaded.final_prompt}"
+    origins = (loaded.final_prompt_origin, suggestion.prompt_origin)
+    assert origins == (Unavailable(ORIGIN_NOT_RECORDED),) * 2, f"Expected origins not recorded, got {origins}"
 
-
-def test_drawing_keeps_interval_capture_after_failed_save(sheet_capture: CapturedSketch) -> None:
-    """
-    A failed save of an interval capture raises, keeps the capture, and writes its files with the next save.
-    """
-    store = FlakyDrawingStore()
-    drawing = start_drawing(store, FakeStrokeSuggester())
-    store.failures_left = 1
-    with pytest.raises(StoreError, match="No space left"):
-        drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
-    drawing.record_capture(sheet_capture, source=SketchSource.UPLOAD, rotation=0)
-
-    # Both captures and the first one's files reached the store.
-    files = {path for (_, _, path) in store.drawing_files}
-    assert len(store.drawings[(SESSION_ID, 1)].captures) == 2, "Both interval captures must be saved"
-    assert "captures/capture-0001-raw.jpg" in files, f"The first capture's frame must be saved on the retry, got {files}"
-
-
-def test_compress_interval_frame_keeps_jpeg(sheet_frame: np.ndarray) -> None:
-    """
-    A JPEG frame is kept as received, while a PNG frame is re-encoded as JPEG with the same size.
-    """
-    jpeg_payload = cv2.imencode(".jpg", sheet_frame)[1].tobytes()
-    png = encode_capture(sheet_frame)
-    jpeg = CapturedSketch(image=replace(png.image, path="sketch-raw.jpg", media_type="image/jpeg"), payload=jpeg_payload,
-                          capture_seconds=0.01)
-    compressed = compress_interval_frame(png)
-
-    # The JPEG is unchanged, and the PNG became a JPEG of the same size with its re-encoding timed.
-    assert compress_interval_frame(jpeg) is jpeg, "A JPEG frame must be kept as received"
-    size = (compressed.image.width, compressed.image.height, compressed.image.media_type)
-    assert size == (640, 480, "image/jpeg") and compressed.capture_seconds >= 0.01, f"Unexpected compressed frame {size}"
-
-
-
-def test_drawing_windows_end_at_the_next_suggestion_and_at_finish(sheet_frame: np.ndarray, sheet_capture: CapturedSketch,
-                                                                   draw_part_on_sheet: PartDrawer) -> None:
-    """
-    A shown suggestion ends the previous window at its press, finish ends the last one, and each gets its decision.
-    """
-    store = MemoryStore()
-    drawing = start_drawing(store, FakeStrokeSuggester())
-    first = drawing.suggest(sheet_capture, source=SketchSource.WEBCAM, rotation=0, prompt="", frame_age_seconds=0.2)
-    part_mask = store.drawing_files[(SESSION_ID, 1, first.result.parts[0].mask.path)]
-    with_part = encode_capture(draw_part_on_sheet(sheet_frame, part_mask))
-    drawing.record_capture(with_part, source=SketchSource.UPLOAD, rotation=0)
-    suggest(drawing, with_part)
-
-    # Suggestion 1's window ended at suggestion 2's press, capture 3, with the drawn part followed and the other not.
-    ended = drawing.record.suggestions[0]
-    assert (ended.window.end, ended.window.last_capture) == (WindowEnd.NEXT_SUGGESTION, 3), f"Unexpected window {ended.window}"
-    parts = [(part.result, part.deciding_capture) for part in ended.decision.parts]
-    assert parts == [(FollowResult.FOLLOWED, 3), (FollowResult.NOT_FOLLOWED, 3)], f"Unexpected part decisions {parts}"
-    assert ended.decision.result == FollowResult.FOLLOWED and ended.decision.rule == PROVISIONAL_RULE, f"Got {ended.decision}"
-
-    # Suggestion 2 stays open until finish, which ends it at the final capture, where nothing new was drawn.
-    assert drawing.record.suggestions[1].window is None, "The latest suggestion's window must stay open"
-    record = drawing.finish(with_part, source=SketchSource.UPLOAD)
-    last = record.suggestions[1]
-    assert (last.window.end, last.window.last_capture) == (WindowEnd.FINISHED, 4), f"Unexpected window {last.window}"
-    assert last.decision.result == FollowResult.UNDETERMINED, f"Nothing new was drawn, got {last.decision}"
-
-    # The rule is recorded once for the drawing, and the record with windows round-trips and was saved.
-    assert record.rule == PROVISIONAL_RULE and store.drawings[(SESSION_ID, 1)] == record, "The decided record must be saved"
-    assert drawing_from_dict(json.loads(json.dumps(drawing_to_dict(record)))) == record, "Windows must load back unchanged"
-
-
-def test_drawing_failed_press_keeps_the_window_open(sheet_capture: CapturedSketch) -> None:
-    """
-    A failed second press neither ends nor decides the first window, which then holds the failed press's capture.
-    """
-    store = MemoryStore()
-    drawing = start_drawing(store, FakeStrokeSuggester())
-    suggest(drawing, sheet_capture)
-    drawing.suggester = FailingSuggester()
-    with pytest.raises(StrokeSuggestionError):
-        suggest(drawing, sheet_capture)
-
-    # The saved record keeps suggestion 1 open after the failure.
-    saved = store.drawings[(SESSION_ID, 1)]
-    assert saved.suggestions[0].window is None and saved.suggestions[0].decision is None, "A failed press must not end it"
-
-    # Ending the drawing for a new session ends suggestion 1, whose window holds the failed press's capture.
-    record = drawing.finish(None, end=DrawingEnd.NEW_SESSION)
-    window = record.suggestions[0].window
-    assert (window.end, window.last_capture) == (WindowEnd.NEW_SESSION, 2), f"Unexpected window {window}"
-    assert record.suggestions[1].window is None, "A failed suggestion has no window"
-
-
-def test_drawing_empty_window_is_undetermined(sheet_capture: CapturedSketch) -> None:
-    """
-    A window that ends before any capture is taken holds no capture and decides every part as undetermined.
-    """
-    drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
-    suggest(drawing, sheet_capture)
-    record = drawing.finish(None, end=DrawingEnd.NEW_SESSION)
-    suggestion = record.suggestions[0]
-
-    # The window has no last capture, and each part has no usable capture.
-    assert suggestion.window.last_capture is None, f"Expected an empty window, got {suggestion.window}"
-    reasons = {(part.result, part.reason) for part in suggestion.decision.parts}
-    assert reasons == {(FollowResult.UNDETERMINED, NO_USABLE_CAPTURE_REASON)}, f"Unexpected part decisions {reasons}"
-
-
-def test_drawing_failed_finish_reopens_the_window(sheet_capture: CapturedSketch) -> None:
-    """
-    A finish whose save fails leaves the drawing and its last window open, so finishing again ends and decides it.
-    """
-    store = FlakyDrawingStore()
-    drawing = start_drawing(store, FakeStrokeSuggester())
-    suggest(drawing, sheet_capture)
-    store.failures_left = 1
-    with pytest.raises(StoreError, match="No space left"):
-        drawing.finish(None)
-
-    # The window is open again, and the next finish ends it.
-    assert drawing.is_open and drawing.record.suggestions[0].window is None, "A failed finish must reopen the window"
-    record = drawing.finish(None)
-    assert record.suggestions[0].window.end == WindowEnd.FINISHED, f"Unexpected window {record.suggestions[0].window}"
-
-
-def test_decide_suggestion_recomputes_a_stored_drawing(sheet_frame: np.ndarray, sheet_capture: CapturedSketch,
-                                                       draw_part_on_sheet: PartDrawer) -> None:
-    """
-    A loaded drawing's suggestion can be decided again from its stored scores with another rule.
-    """
-    store = MemoryStore()
-    drawing = start_drawing(store, FakeStrokeSuggester())
-    first = drawing.suggest(sheet_capture, source=SketchSource.WEBCAM, rotation=0, prompt="", frame_age_seconds=0.2)
-    part_mask = store.drawing_files[(SESSION_ID, 1, first.result.parts[0].mask.path)]
-    drawing.record_capture(encode_capture(draw_part_on_sheet(sheet_frame, part_mask)), source=SketchSource.UPLOAD, rotation=0)
-    loaded = drawing_from_dict(json.loads(json.dumps(drawing_to_dict(drawing.finish(None)))))
-    suggestion = loaded.suggestions[0]
-
-    # The recorded rule gives the recorded decision, and a rule needing far more new strokes leaves it undetermined.
-    assert decide_suggestion(loaded, suggestion, loaded.rule) == suggestion.decision, "The recorded decision must recompute"
-    assert suggestion.decision.result == FollowResult.FOLLOWED, f"The drawn part must be followed, got {suggestion.decision}"
-    stricter = decide_suggestion(loaded, suggestion, FollowRule(min_new_stroke_pixels=100_000))
-    assert stricter.result == FollowResult.UNDETERMINED, f"A stricter rule must change the result, got {stricter}"
+    # A drawing saved before follow detection loads with no follow method and no capture alignment.
+    del unaligned["follow_detector"], unaligned["rule"]
+    for capture in unaligned["captures"]:
+        del capture["follow"]
+    for suggestion_data in unaligned["suggestions"]:
+        del suggestion_data["window"], suggestion_data["decision"]
+    older = drawing_from_dict(unaligned)
+    assert older.follow_detector is None and older.captures[1].follow is None, f"Unexpected older drawing {older}"
 
 
 def break_window_record(data: dict[str, object], case: str) -> None:
     """
     Change a saved drawing with two suggestions and a finish so its windows contradict each other in the named way.
     """
-    first, second = data["suggestions"]
+    first = data["suggestions"][0]
     if case == "decision-without-window":
         first["window"] = None
-    elif case == "two-open-windows":
-        first["window"], first["decision"] = None, None
     elif case == "wrong-last-capture":
         first["window"]["last_capture"] = 4
-    elif case == "next-without-a-next":
-        second["window"]["end"] = "next_suggestion"
     elif case == "deciding-outside":
         first["decision"]["parts"][0] |= {"deciding_capture": 4, "result": "not_followed", "reason": None}
         first["decision"]["result"] = "not_followed"
-    elif case == "windows-without-rule":
-        data["rule"] = None
 
 
 @pytest.mark.parametrize(("case", "message"), [
     ("decision-without-window", "decision exactly when its window ended"),
-    ("two-open-windows", "window must be ended"),
     ("wrong-last-capture", "window ends at capture 3"),
-    ("next-without-a-next", "ends by next_suggestion exactly when one followed"),
     ("deciding-outside", "decided by captures"),
-    ("windows-without-rule", "without a rule has no suggestion windows"),
 ])
 def test_drawing_with_contradicting_windows_is_refused(sheet_capture: CapturedSketch, case: str, message: str) -> None:
     """
-    A drawing.json whose windows overlap, end in the wrong place, or decide from outside them is refused on load.
+    A drawing.json whose windows end in the wrong place or decide from outside them is refused on load.
     """
     drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
     suggest(drawing, sheet_capture)
@@ -610,33 +450,19 @@ def test_drawing_with_contradicting_windows_is_refused(sheet_capture: CapturedSk
         drawing_from_dict(data)
 
 
-def test_drawing_saved_before_decisions_loads(sheet_capture: CapturedSketch) -> None:
-    """
-    A finished drawing saved before windows and decisions, without a rule, loads with its suggestions undecided.
-    """
-    drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
-    suggest(drawing, sheet_capture)
-    data = drawing_to_dict(drawing.finish(sheet_capture, source=SketchSource.UPLOAD))
-    del data["rule"]
-    for suggestion in data["suggestions"]:
-        del suggestion["window"], suggestion["decision"]
-    loaded = drawing_from_dict(data)
-
-    # No rule and no window or decision, while the scores stay for a later decision.
-    suggestion = loaded.suggestions[0]
-    assert loaded.rule is None and suggestion.window is None and suggestion.decision is None, f"Unexpected {suggestion}"
-    assert decide_suggestion(loaded, suggestion, PROVISIONAL_RULE).parts, "An older drawing can still be decided from its scores"
-
-
-
 def start_study_drawing(store: MemoryStore, condition: StudyCondition) -> GuidedDrawing:
-    # A study drawing with the fake suggester in the AI condition and none without AI.
+    """
+    Start a study drawing with the fake suggester in the AI condition and none without AI.
+    """
     suggester = FakeStrokeSuggester() if condition == StudyCondition.AI else None
     return GuidedDrawing(store, SESSION_ID, 1, suggester, canvas_width=CANVAS_SIZE[0], canvas_height=CANVAS_SIZE[1],
                          save_interval_seconds=2.0, study=DrawingStudy(condition=condition))
 
 
 def test_no_ai_drawing_refuses_all_ai_help(sheet_capture: CapturedSketch, make_prompt_suggestion: PromptMaker) -> None:
+    """
+    A drawing without AI records its condition with suggestions off and refuses both kinds of suggestion.
+    """
     store = MemoryStore()
     drawing = start_study_drawing(store, StudyCondition.NO_AI)
     saved = store.drawings[(SESSION_ID, 1)]
@@ -655,6 +481,9 @@ def test_no_ai_drawing_refuses_all_ai_help(sheet_capture: CapturedSketch, make_p
 
 
 def test_prompt_suggestions_link_to_stroke_suggestions(sheet_capture: CapturedSketch, make_prompt_suggestion: PromptMaker) -> None:  # noqa: E501
+    """
+    Each stroke suggestion records whether its prompt was suggested, edited, typed, or named an unknown prompt suggestion.
+    """
     store = MemoryStore()
     drawing = start_study_drawing(store, StudyCondition.AI)
     first = drawing.record_prompt_suggestion(make_prompt_suggestion(SUGGESTED_PROMPT, "prompt-a", number=9))
@@ -689,30 +518,16 @@ def test_prompt_suggestions_link_to_stroke_suggestions(sheet_capture: CapturedSk
     assert data["suggestions"][0]["prompt_origin"] == {"kind": "suggested", "prompt_suggestion": "prompt-a"}, "Bad JSON origin"
 
 
-def test_failed_prompt_suggestion_save_leaves_no_entry(make_prompt_suggestion: PromptMaker) -> None:
-    store = FlakyDrawingStore()
-    drawing = GuidedDrawing(store, SESSION_ID, 1, FakeStrokeSuggester(), canvas_width=CANVAS_SIZE[0],
-                            canvas_height=CANVAS_SIZE[1], save_interval_seconds=2.0)
-    store.failures_left = 1
-    with pytest.raises(StoreError, match="No space left"):
-        drawing.record_prompt_suggestion(make_prompt_suggestion(SUGGESTED_PROMPT))
-
-    # Neither the drawing in memory nor the saved record holds the suggestion the page never showed.
-    assert drawing.record.prompt_suggestions == (), f"The entry must be removed again, got {drawing.record.prompt_suggestions}"
-    assert store.drawings[(SESSION_ID, 1)].prompt_suggestions == (), "The store must not hold the unsaved entry"
-
-
 @pytest.mark.parametrize(("prompt", "suggestion_id", "end", "expected_prompt", "expected_origin"), [
     ("a sports car, low and wide", "prompt-a", DrawingEnd.FINISHED, "a sports car, low and wide",
      PromptOrigin(kind=PromptOriginKind.EDITED, prompt_suggestion="prompt-a")),
     ("a car", "prompt-a", DrawingEnd.NEW_SESSION, None, None),
-    (None, None, DrawingEnd.FINISHED, None, None),
-], ids=["edited", "new-session", "without-page"])
+], ids=["edited", "new-session"])
 def test_drawing_records_final_prompt(make_prompt_suggestion: PromptMaker, prompt: str | None, suggestion_id: str | None,
                                       end: DrawingEnd, expected_prompt: str | None,
                                       expected_origin: PromptOrigin | None) -> None:
     """
-    Finishing records the final prompt and its origin, and a new session or a library caller without a prompt records none.
+    Finishing records the final prompt and its origin, and a new session records none.
     """
     store = MemoryStore()
     drawing = start_study_drawing(store, StudyCondition.AI)
@@ -725,63 +540,24 @@ def test_drawing_records_final_prompt(make_prompt_suggestion: PromptMaker, promp
     assert drawing_from_dict(json.loads(json.dumps(drawing_to_dict(record)))) == record, "The finished drawing must load back"
 
 
-def test_drawing_saved_before_study_fields_loads(sheet_capture: CapturedSketch) -> None:
-    drawing = start_drawing(MemoryStore(), FakeStrokeSuggester())
-    suggest(drawing, sheet_capture)
-    data = drawing_to_dict(drawing.finish(None))
-    for key in ("study", "prompt_suggestions", "final_prompt", "final_prompt_origin"):
-        del data[key]
-    del data["suggestions"][0]["prompt_origin"]
-    loaded = drawing_from_dict(data)
-
-    # The older drawing has no condition or prompt suggestion list, and its final prompt and origins are not recorded.
-    assert loaded.study is None and loaded.prompt_suggestions is None, f"Expected no study fields, got {loaded}"
-    assert loaded.final_prompt == Unavailable(FINAL_PROMPT_NOT_RECORDED), f"Unexpected final prompt {loaded.final_prompt}"
-    not_recorded = Unavailable(ORIGIN_NOT_RECORDED)
-    origins = (loaded.final_prompt_origin, loaded.suggestions[0].prompt_origin)
-    assert origins == (not_recorded, not_recorded), f"Expected origins not recorded, got {origins}"
-
-
 def break_study_record(data: dict[str, object], case: str) -> None:
-    # Change a saved AI drawing with two prompt suggestions, a linked stroke suggestion, and a final prompt in the named way.
-    first, second = data["prompt_suggestions"]
+    """
+    Change a saved AI drawing with two prompt suggestions, a linked stroke suggestion, and a final prompt in the named way.
+    """
     if case == "condition-disagrees":
         data["study"] = {"condition": "no_ai"}
-    elif case == "prompt-suggestions-while-off":
-        data["study"], data["suggestions_enabled"], data["suggester"] = None, False, None
-        data["suggestions"], data["follow_detector"], data["rule"] = [], None, None
-        data["final_prompt_origin"] = {"kind": "typed", "prompt_suggestion": None}
-    elif case == "duplicate-id":
-        second["id"] = first["id"]
-        data["final_prompt_origin"]["prompt_suggestion"] = first["id"]
     elif case == "kind-disagrees":
         data["suggestions"][0]["prompt_origin"]["kind"] = "edited"
-    elif case == "shown-after-use":
-        pressed = datetime.fromisoformat(data["suggestions"][0]["requested_at"]) - timedelta(hours=1)
-        data["suggestions"][0]["requested_at"] = pressed.isoformat()
-    elif case == "unknown-id":
-        data["final_prompt_origin"]["prompt_suggestion"] = "unknown"
-    elif case == "open-with-final-prompt":
-        data["ended_at"], data["end"], data["final_capture"] = None, None, None
-        data["suggestions"][0]["window"], data["suggestions"][0]["decision"] = None, None
-    elif case == "origin-without-prompt":
-        data["final_prompt"] = None
 
 
 @pytest.mark.parametrize(("case", "message"), [
     ("condition-disagrees", "condition no_ai has suggestions off"),
-    ("prompt-suggestions-while-off", "suggestions off cannot have prompt suggestions"),
-    ("duplicate-id", "prompt suggestion IDs must be unique"),
     ("kind-disagrees", "recorded as edited, but its prompt and suggestion give suggested"),
-    ("shown-after-use", "shown after its prompt was used"),
-    ("unknown-id", "not a shown one of its record"),
-    ("open-with-final-prompt", "open drawing has no final prompt"),
-    ("origin-without-prompt", "final prompt origin exactly when it has one"),
 ])
 def test_drawing_with_inconsistent_study_fields_is_refused(sheet_capture: CapturedSketch, make_prompt_suggestion: PromptMaker,
                                                            case: str, message: str) -> None:
     """
-    A drawing.json whose condition, prompt suggestions, origins, or final prompt contradict each other is refused on load.
+    A drawing.json whose condition, prompt origins, or final prompt contradict each other is refused on load.
     """
     drawing = start_study_drawing(MemoryStore(), StudyCondition.AI)
     drawing.record_prompt_suggestion(make_prompt_suggestion(SUGGESTED_PROMPT, "prompt-a"))

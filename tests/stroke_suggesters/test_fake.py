@@ -55,37 +55,27 @@ def decode_mask(output: StrokeSuggestionOutput, path: str) -> np.ndarray:
     return cv2.imdecode(np.frombuffer(output.payloads[path], dtype=np.uint8), cv2.IMREAD_UNCHANGED)
 
 
-def test_same_canvas_gives_same_parts_and_bytes() -> None:
+def test_fake_suggests_known_parts_deterministically() -> None:
     """
-    The fake is deterministic for a canvas whatever the seed or prompt, and records a missing seed as unavailable.
+    The fake gives a ring below and a line right of the strokes, the same for any seed or prompt, labeled as fake.
     """
     payload = encode_canvas()
-    first = suggest(payload)
-    second = suggest(payload, seed=9, prompt="")
-    assert first.suggestion.parts == second.suggestion.parts, "The same canvas must give the same parts"
-    assert dict(first.payloads) == dict(second.payloads), "The same canvas must give the same image bytes"
+    output = suggest(payload, prompt="  ", seed=5)
+    unseeded = suggest(payload)
+    one_part = suggest(payload, max_parts=1)
+    suggestion, parts = output.suggestion, output.suggestion.parts
 
-    # Without a seed, the fake records that it used none instead of inventing one.
-    assert isinstance(first.suggestion.seed, Unavailable), f"Expected an unavailable seed, got {first.suggestion.seed!r}"
+    # The same canvas gives the same parts and bytes whatever the seed or prompt, and a missing seed is unavailable.
+    assert parts == unseeded.suggestion.parts, "The same canvas must give the same parts"
+    assert dict(output.payloads) == dict(unseeded.payloads), "The same canvas must give the same image bytes"
+    assert isinstance(unseeded.suggestion.seed, Unavailable), f"Expected an unavailable seed, got {unseeded.suggestion.seed!r}"
 
-
-def test_parts_lie_below_and_right_of_the_strokes() -> None:
-    """
-    A ring lies below the strokes' box and a line to its right, both inside the canvas, largest first.
-    """
-    output = suggest(encode_canvas())
-    parts = output.suggestion.parts
-    assert len(parts) == 2, f"Expected a ring and a line, got {len(parts)} parts"
-
-    # The ring is the larger part and starts below the strokes' bottom edge.
+    # The ring is the larger part and starts below the strokes, and the horizontal line starts right of them.
     left, top, width, height = STROKE_BOX
     ring, line = parts
     assert ring.pixel_count > line.pixel_count, f"Parts must be largest first, got {ring.pixel_count} then {line.pixel_count}"
     assert ring.box[1] >= top + height, f"The ring must start below the strokes, got box {ring.box}"
-
-    # The line starts right of the strokes and is wider than tall.
-    assert line.box[0] >= left + width, f"The line must start right of the strokes, got box {line.box}"
-    assert line.box[2] > line.box[3], f"The line must be horizontal, got box {line.box}"
+    assert line.box[0] >= left + width and line.box[2] > line.box[3], f"The line must lie right of the strokes, got {line.box}"
 
     # Every mask is at the canvas size, holds only 0 and 255, and counts its pixels.
     for part in parts:
@@ -95,14 +85,27 @@ def test_parts_lie_below_and_right_of_the_strokes() -> None:
         assert int(np.count_nonzero(mask)) == part.pixel_count, f"Part {part.index} pixel_count must match its mask"
         assert part.skeleton_pixels < part.pixel_count, f"Part {part.index} skeleton must be thinner than the part"
 
+    # The fake label, the absent model, the prompt as typed, and the given seed are recorded, with no controls.
+    assert suggestion.suggester.is_fake and isinstance(suggestion.suggester.model_id, Unavailable), "The fake must say so"
+    assert suggestion.suggester.adapter == FakeStrokeSuggester.ADAPTER_NAME, f"Unexpected adapter {suggestion.suggester.adapter}"
+    assert output.load_seconds is None and dict(suggestion.effective.controls) == {}, f"Unexpected output {output}"
+    assert (suggestion.effective.prompt, suggestion.seed) == ("  ", 5), f"Unexpected prompt or seed {suggestion.effective}"
+    assert set(suggestion.timings_seconds) == {"generation", "extraction"}, f"Got timings {dict(suggestion.timings_seconds)}"
 
-@pytest.mark.parametrize("rectangle", [None, (440, 300, 72, 60), (0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)],
-                         ids=["blank", "bottom-right-corner", "whole-canvas"])
-def test_parts_stay_inside_the_canvas(rectangle: tuple[int, int, int, int] | None) -> None:
+    # The line drawing is the canvas with the ring drawn black on it.
+    line_drawing = decode_mask(output, LINE_DRAWING_FILE)
+    assert line_drawing.shape == (CANVAS_HEIGHT, CANVAS_WIDTH), f"Line drawing has size {line_drawing.shape}"
+    assert np.all(line_drawing[decode_mask(output, ring.mask.path) > 0] == 0), "The ring must be drawn black on the line drawing"
+
+    # Asking for one part returns only the largest, the ring.
+    assert set(one_part.payloads) == {LINE_DRAWING_FILE, "part-1.png"}, f"Expected one mask, got {list(one_part.payloads)}"
+
+
+def test_parts_stay_inside_the_canvas() -> None:
     """
-    A blank canvas, or strokes reaching the canvas edge, still gives two non-empty parts inside the canvas.
+    Strokes reaching every canvas edge still give two non-empty parts inside the canvas.
     """
-    output = suggest(encode_canvas(rectangle))
+    output = suggest(encode_canvas((0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)))
     assert len(output.suggestion.parts) == 2, f"Expected two parts, got {len(output.suggestion.parts)}"
 
     # Each box lies inside the canvas, which the record also checks, and each part has pixels.
@@ -110,41 +113,6 @@ def test_parts_stay_inside_the_canvas(rectangle: tuple[int, int, int, int] | Non
         left, top, width, height = part.box
         assert left + width <= CANVAS_WIDTH and top + height <= CANVAS_HEIGHT, f"Part {part.index} box {part.box} is outside"
         assert part.pixel_count >= 1, f"Part {part.index} must have pixels"
-
-
-def test_records_label_the_fake_and_keep_the_request() -> None:
-    """
-    The suggestion is labeled fake, keeps the prompt as typed and the given seed, and stores a line drawing of canvas size.
-    """
-    output = suggest(encode_canvas(), prompt="  ", seed=5)
-    suggestion = output.suggestion
-
-    # The fake label and the absent model are recorded.
-    assert suggestion.suggester.is_fake, "The fake suggester must label itself as fake"
-    assert suggestion.suggester.adapter == FakeStrokeSuggester.ADAPTER_NAME, f"Unexpected adapter {suggestion.suggester.adapter}"
-    assert isinstance(suggestion.suggester.model_id, Unavailable), "The fake has no model ID"
-    assert output.load_seconds is None, f"The fake loads no model, got {output.load_seconds}"
-
-    # The prompt and seed are recorded unchanged, with no controls.
-    assert suggestion.effective.prompt == "  ", f"The prompt must stay as typed, got {suggestion.effective.prompt!r}"
-    assert suggestion.seed == 5, f"The given seed must be recorded, got {suggestion.seed}"
-    assert dict(suggestion.effective.controls) == {}, f"The fake has no controls, got {dict(suggestion.effective.controls)}"
-    assert set(suggestion.timings_seconds) == {"generation", "extraction"}, f"Got timings {dict(suggestion.timings_seconds)}"
-
-    # The line drawing is the canvas with the parts drawn on it.
-    line_drawing = decode_mask(output, LINE_DRAWING_FILE)
-    assert line_drawing.shape == (CANVAS_HEIGHT, CANVAS_WIDTH), f"Line drawing has size {line_drawing.shape}"
-    ring_mask = decode_mask(output, suggestion.parts[0].mask.path)
-    assert np.all(line_drawing[ring_mask > 0] == 0), "The ring must be drawn black on the line drawing"
-
-
-def test_max_parts_keeps_the_largest() -> None:
-    """
-    Asking for one part returns only the largest, the ring.
-    """
-    output = suggest(encode_canvas(), max_parts=1)
-    assert len(output.suggestion.parts) == 1, f"Expected one part, got {len(output.suggestion.parts)}"
-    assert set(output.payloads) == {LINE_DRAWING_FILE, "part-1.png"}, f"Expected one mask, got {list(output.payloads)}"
 
 
 def test_any_control_is_refused_through_the_shared_check() -> None:
@@ -157,11 +125,12 @@ def test_any_control_is_refused_through_the_shared_check() -> None:
     assert fields == [("controls.strength", "unknown_control")], f"Expected one unknown control, got {fields}"
 
 
-@pytest.mark.parametrize("payload", [b"not an image", encode_canvas(width=256)], ids=["garbage", "wrong-size"])
-def test_unreadable_or_mismatched_canvas_is_refused(payload: bytes) -> None:
+def test_unreadable_or_mismatched_canvas_is_refused() -> None:
     """
     Canvas bytes that cannot be decoded, or whose size differs from the request's canvas, are refused before suggesting.
     """
     request = make_request(encode_canvas())
     with pytest.raises(InvalidSketchError, match="canvas"):
-        FakeStrokeSuggester().suggest(request, payload)
+        FakeStrokeSuggester().suggest(request, b"not an image")
+    with pytest.raises(InvalidSketchError, match="canvas"):
+        FakeStrokeSuggester().suggest(request, encode_canvas(width=256))

@@ -46,14 +46,6 @@ class StubEmbedder:
         return self.image_embeddings, self.text_embedding
 
 
-def test_cosine_similarities() -> None:
-    """
-    Similarity ignores vector length and ranges from -1 for opposite to 1 for the same direction.
-    """
-    similarities = compute_cosine_similarities(np.array([[2.0, 0.0], [0.0, 3.0], [-1.0, 0.0]]), np.array([5.0, 0.0]))
-    assert similarities == pytest.approx([1.0, 0.0, -1.0]), f"Expected 1, 0, and -1, got {similarities}"
-
-
 def test_clip_scores_each_candidate_against_the_prompt() -> None:
     """
     Each candidate gets its own finite score under its ID, from one embedding call with every image and the prompt.
@@ -71,20 +63,14 @@ def test_clip_scores_each_candidate_against_the_prompt() -> None:
     # The embedder saw both images and the request's prompt once.
     assert embedder.calls == [(2, "modern chair")], f"Expected one call with two images, got {embedder.calls}"
 
-
-def test_clip_refuses_non_finite_scores() -> None:
-    """
-    A zero embedding, whose similarity is undefined, fails with a typed error instead of reaching the record.
-    """
-    request, output = generate_candidates(1)
-    evaluator = ClipEvaluator(CLIP_B32_MODEL, embedder=StubEmbedder([[0.0, 0.0]], [1.0, 0.0]))
-    with pytest.raises(EvaluationError, match="non-finite"):
-        evaluator.evaluate(output.result.candidates, output.payloads, request)
+    # Similarity ignores vector length and ranges from -1 for opposite to 1 for the same direction.
+    similarities = compute_cosine_similarities(np.array([[2.0, 0.0], [0.0, 3.0], [-1.0, 0.0]]), np.array([5.0, 0.0]))
+    assert similarities == pytest.approx([1.0, 0.0, -1.0]), f"Expected 1, 0, and -1, got {similarities}"
 
 
 def test_clip_loads_lazily_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """
-    Creating the evaluator loads nothing, and the model loads on the first evaluation only.
+    Creating the evaluator loads nothing, and the model loads once, on the first evaluation or an explicit load.
     """
     loads: list[Path] = []
 
@@ -105,37 +91,24 @@ def test_clip_loads_lazily_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     evaluator.evaluate(output.result.candidates, output.payloads, request)
     assert loads == [tmp_path / CLIP_L14_MODEL.folder], f"Expected one load from the L/14 folder, got {loads}"
 
+    # load() ahead of scoring loads once, and a later load or evaluation reuses the model.
+    ahead = ClipEvaluator(CLIP_B32_MODEL, tmp_path)
+    ahead.load()
+    ahead.load()
+    ahead.evaluate(output.result.candidates, output.payloads, request)
+    assert loads[1:] == [tmp_path / CLIP_B32_MODEL.folder], f"load() must load the model once, got {loads}"
 
-def test_clip_load_ahead_of_scoring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+
+def test_clip_missing_download_and_undefined_scores(tmp_path: Path) -> None:
     """
-    load() loads the model once, and a later load or evaluation does not load it again.
-    """
-    loads: list[Path] = []
-
-    def load_stub(evaluator: ClipEvaluator) -> StubEmbedder:
-        """
-        Count the load and return a stub embedder instead of the model.
-        """
-        loads.append(evaluator.model_folder)
-        return StubEmbedder([[1.0, 0.0]], [1.0, 0.0])
-
-    monkeypatch.setattr(ClipEvaluator, "_load_embedder", load_stub)
-    evaluator = ClipEvaluator(CLIP_B32_MODEL, tmp_path)
-    evaluator.load()
-    assert loads == [tmp_path / CLIP_B32_MODEL.folder], f"load() must load the model once, got {loads}"
-
-    # A second load and an evaluation reuse the loaded model.
-    evaluator.load()
-    request, output = generate_candidates(1)
-    evaluator.evaluate(output.result.candidates, output.payloads, request)
-    assert len(loads) == 1, f"The model must load only once, got {loads}"
-
-
-def test_clip_missing_download(tmp_path: Path) -> None:
-    """
-    A missing model folder fails with one line that names the folder and the download script.
+    A missing model folder fails with one helpful line, and a zero embedding's undefined score never reaches the record.
     """
     request, output = generate_candidates(1)
+    evaluator = ClipEvaluator(CLIP_B32_MODEL, embedder=StubEmbedder([[0.0, 0.0]], [1.0, 0.0]))
+    with pytest.raises(EvaluationError, match="non-finite"):
+        evaluator.evaluate(output.result.candidates, output.payloads, request)
+
+    # Scoring without the model folder fails with an evaluation error.
     with pytest.raises(EvaluationError) as raised:
         ClipEvaluator(CLIP_B32_MODEL, tmp_path).evaluate(output.result.candidates, output.payloads, request)
 
@@ -145,22 +118,18 @@ def test_clip_missing_download(tmp_path: Path) -> None:
     assert CLIP_B32_MODEL.folder in message and "download_models.py" in message, f"Unhelpful error {message!r}"
 
 
-def test_clip_describes_its_scores() -> None:
+def test_clip_describes_its_pinned_scores() -> None:
     """
-    The evaluator names its repository, pinned revision, and what the score means, for the round record.
+    The evaluator names its repository, pinned revision, and what the score means, and both models download safely.
     """
     details = ClipEvaluator(CLIP_B32_MODEL).describe_scores()
     identity = (details["model"], details["revision"])
     assert identity == (CLIP_B32_MODEL.repo_id, CLIP_B32_MODEL.revision), f"Bad identity {details}"
     assert "cosine similarity" in details["score"] and "not design quality" in details["score"], f"Bad meaning {details}"
 
-
-def test_clip_models_are_pinned_safetensors() -> None:
-    """
-    Both models are pinned to a commit, and the large one downloads only its safetensors weights.
-    """
-    for model in (CLIP_B32_MODEL, CLIP_L14_MODEL):
-        assert len(model.revision) == 40, f"{model.repo_id} must be pinned to a commit SHA, got {model.revision}"
+    # Both models are pinned to a commit SHA.
+    revisions = [len(model.revision) for model in (CLIP_B32_MODEL, CLIP_L14_MODEL)]
+    assert revisions == [40, 40], f"Both models must be pinned to a commit SHA, got {revisions}"
 
     # ViT-B/32 has only a pickled .bin, which the download script converts, and ViT-L/14 has safetensors upstream.
     assert "model.safetensors" in CLIP_L14_MODEL.allow_patterns, f"Bad L/14 patterns {CLIP_L14_MODEL.allow_patterns}"

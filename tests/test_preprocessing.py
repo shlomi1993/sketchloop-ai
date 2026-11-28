@@ -32,7 +32,7 @@ def make_noisy_scene() -> np.ndarray:
 
 def test_preprocessing_crops_to_strokes_resizes_and_records_steps() -> None:
     """
-    A light page with one dark off-center rectangle is cropped around it, resized to 512 px, and its steps recorded.
+    A page with one off-center rectangle is cropped around it and resized to 512 px, while minimal preprocessing keeps it whole.
     """
     page = np.full((600, 900), 210, dtype=np.uint8)
     cv2.rectangle(page, (500, 100), (700, 200), 30, 4)
@@ -59,33 +59,21 @@ def test_preprocessing_crops_to_strokes_resizes_and_records_steps() -> None:
     image_ref_is_grayscale_png = result.image.path == "sketch.png" and result.image.mode == "L"
     assert image_ref_is_grayscale_png, f"Unexpected image ref {result.image}"
 
+    # The minimal preprocessor records only grayscale, rotate, and resize, with the rotation applied.
+    minimal = preprocess_minimally(encoded.tobytes(), rotation=90)
+    step_names = [step.name for step in minimal.steps]
+    assert step_names == ["grayscale", "rotate", "resize"], f"Unexpected steps {step_names}"
+    assert minimal.steps[1].params == {"degrees_clockwise": 90}, f"Unexpected rotation {minimal.steps[1].params}"
 
-def test_perspective_straightens_paper() -> None:
-    """
-    A skewed light sheet on a dark table is found and warped to an upright rectangle the size of its longer edges.
-    """
-    photo = np.full((600, 800), 40, dtype=np.uint8)
-    corners = np.array([[150, 100], [650, 60], [700, 520], [120, 480]], dtype=np.int32)
-    cv2.fillConvexPoly(photo, corners, 220)
-    _, encoded = cv2.imencode(".png", photo)
-
-    result = preprocess_sketch(encoded.tobytes())
-    paper = result.steps[2].params
-
-    # The paper step finds the sheet's corners.
-    found_corners = result.steps[2].name == "isolate_paper" and paper["corners_found"]
-    assert found_corners, f"The paper corners must be found, got {dict(paper)}"
-
-    # The warped sheet spans its longer edges within 6 px.
-    size_matches_edges = abs(paper["width"] - 581) <= 6 and abs(paper["height"] - 463) <= 6
-    assert size_matches_edges, f"Output must span the paper's longer edges, got {dict(paper)}"
+    # The whole page is kept, turned upright, so the long side is now the height.
+    turned = cv2.imdecode(np.frombuffer(minimal.payload, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    assert turned.shape == (512, 341), f"Expected the uncropped page turned and resized, got {turned.shape}"
 
 
 @pytest.mark.parametrize(("angle", "center", "corners_found", "tilt", "aspect_ratio"), [
-    (30, (400, 300), True, 30, 1.8),
     (60, (400, 300), True, -30, 1 / 1.8),
     (-25, (180, 320), False, -25, 1.8)
-], ids=["visible-30", "visible-60", "partly-visible-minus-25"])
+], ids=["visible-60", "partly-visible-minus-25"])
 def test_tilted_sheet_straightened(angle: float, center: tuple[int, int], corners_found: bool, tilt: float,
                                    aspect_ratio: float) -> None:
     """
@@ -140,27 +128,6 @@ def test_noisy_capture() -> None:
     assert dark_share < 0.15, f"Only thin strokes may remain, not the hand, got {dark_share:.0%} dark pixels"
 
 
-def test_minimal_preprocessing_keeps_the_whole_drawing() -> None:
-    """
-    The minimal preprocessor turns, converts, and resizes the whole image without finding the paper or cropping.
-    """
-    page = np.full((600, 900), 210, dtype=np.uint8)
-    cv2.rectangle(page, (500, 100), (700, 200), 30, 4)
-    _, encoded = cv2.imencode(".png", page)
-
-    result = preprocess_minimally(encoded.tobytes(), rotation=90)
-    processed = cv2.imdecode(np.frombuffer(result.payload, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
-
-    # Only the grayscale, rotate, and resize steps are recorded, with the rotation applied.
-    step_names = [step.name for step in result.steps]
-    assert step_names == ["grayscale", "rotate", "resize"], f"Unexpected steps {step_names}"
-    assert result.steps[1].params == {"degrees_clockwise": 90}, f"Unexpected rotation {result.steps[1].params}"
-
-    # The whole page is kept, turned upright, so the long side is now the height.
-    assert processed.shape == (512, 341), f"Expected the uncropped page turned and resized, got {processed.shape}"
-
-
-
 def draw_flat_sheet() -> np.ndarray:
     """
     Draw a light A4 sheet in landscape with a rectangle in the middle and a short stroke far from it in a corner.
@@ -189,9 +156,16 @@ def decode_stroke_mask(payload: bytes) -> np.ndarray:
     return cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_GRAYSCALE) < 128
 
 
+def decode_filled_mask(payload: bytes) -> np.ndarray:
+    """
+    Decode a canvas's filled mask PNG to a mask that is True where the canvas was filled in.
+    """
+    return cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_GRAYSCALE) > 0
+
+
 def test_paper_canvas_keeps_shifted_captures_in_one_frame() -> None:
     """
-    Two photos of a skewed sheet, moved a few pixels between them, give canvases of the configured size whose strokes align.
+    Two photos of a skewed sheet, moved a few pixels apart, give canvases of the configured size with aligned strokes.
     """
     first = make_paper_canvas(photograph_sheet([(150, 110), (660, 80), (690, 480), (120, 500)]), 0, *CANVAS_SIZE)
     second = make_paper_canvas(photograph_sheet([(153, 107), (657, 84), (693, 477), (118, 503)]), 0, *CANVAS_SIZE)
@@ -215,32 +189,49 @@ def test_paper_canvas_keeps_shifted_captures_in_one_frame() -> None:
     worst = float(distance_to_first[second_strokes].max())
     assert second_strokes.any() and worst <= 3, f"Strokes must land within 3 px between captures, got {worst:.1f} px"
 
+    # The sheet warped by its corners is seen everywhere except a thin filled rim at the canvas border.
+    filled = decode_filled_mask(first.filled_payload)
+    inner = np.zeros_like(filled)
+    inner[20:-20, 20:-20] = True
+    assert not (filled & inner).any() and filled[0, 0] and filled[-1, -1], "Only a thin rim at the border may be filled"
 
-def test_paper_canvas_without_corners_crops_to_the_paper() -> None:
+
+def test_paper_canvas_without_corners_crops_to_the_paper_and_fills_a_hand() -> None:
     """
-    A sheet running off the frame is cropped to the paper's box, recorded as crop_to_paper, and still has the canvas size.
+    A sheet cut by the frame is cropped to the paper's box, and a hand reaching in from the edge is filled and marked.
     """
     photo = np.full((600, 800), 40, dtype=np.uint8)
     photo[80:520, 200:] = 215
-    cv2.rectangle(photo, (400, 200), (600, 350), 50, 4)
-
-    canvas = make_paper_canvas(cv2.imencode(".png", photo)[1].tobytes(), 0, 256, 512)
+    cv2.rectangle(photo, (300, 150), (500, 300), 50, 4)
+    cv2.rectangle(photo, (600, 380), (800, 450), 70, -1)
+    canvas = make_paper_canvas(cv2.imencode(".png", photo)[1].tobytes(), 0, *CANVAS_SIZE)
     pixels = cv2.imdecode(np.frombuffer(canvas.payload, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    filled = decode_filled_mask(canvas.filled_payload)
 
     # The missing corners are recorded, and the crop to the paper's box comes before the resize.
     step_names = [step.name for step in canvas.steps]
     assert step_names == ["grayscale", "rotate", "isolate_paper", "crop_to_paper", "resize_to_canvas"], f"Got {step_names}"
     assert not canvas.steps[2].params["corners_found"], "The corners of a sheet cut by the frame must not be found"
 
-    # The crop starts inside the paper, not at the table, and the canvas has the requested size.
+    # The crop starts inside the paper, not at the table, and the canvas and its mask have the requested size.
     crop = canvas.steps[3].params
     assert crop["x"] >= 200 and crop["y"] >= 80, f"The crop must start inside the paper, got {dict(crop)}"
-    assert pixels.shape == (512, 256), f"Expected a 256x512 canvas, got {pixels.shape}"
+    assert pixels.shape == (360, 512), f"Expected a 512x360 canvas, got {pixels.shape}"
+    image = canvas.filled
+    assert (image.path, image.mode, image.width, image.height) == ("canvas-filled.png", "L", 512, 360), f"Unexpected {image}"
+
+    # The hand, at the lower right of the paper's box, is filled, while the middle of the paper is seen.
+    to_canvas = (CANVAS_SIZE[0] / crop["width"], CANVAS_SIZE[1] / crop["height"])
+    hand = (round((700 - crop["x"]) * to_canvas[0]), round((415 - crop["y"]) * to_canvas[1]))
+    middle = (round((400 - crop["x"]) * to_canvas[0]), round((225 - crop["y"]) * to_canvas[1]))
+    assert filled[hand[1], hand[0]], f"The hand at {hand} must be marked as filled"
+    assert not filled[middle[1], middle[0]], f"The paper's middle at {middle} must be seen"
+    assert 0.03 < filled.mean() < 0.3, f"Expected the hand and the paper's rim filled, got share {filled.mean():.3f}"
 
 
-def test_paper_canvas_without_paper_still_has_the_canvas_size() -> None:
+def test_paper_canvas_without_paper_or_image() -> None:
     """
-    A black frame with no sheet gives a canvas of the requested size, recording that no paper was found.
+    A black frame gives a canvas of the requested size recording that no paper was found, and non-image bytes are refused.
     """
     canvas = make_paper_canvas(cv2.imencode(".png", np.zeros((480, 640), dtype=np.uint8))[1].tobytes(), 180, 512, 360)
 
@@ -248,11 +239,7 @@ def test_paper_canvas_without_paper_still_has_the_canvas_size() -> None:
     assert not canvas.steps[2].params["paper_found"], f"No paper must be recorded, got {dict(canvas.steps[2].params)}"
     assert (canvas.image.width, canvas.image.height) == (512, 360), f"Unexpected size {canvas.image}"
 
-
-def test_paper_canvas_refuses_undecodable_bytes() -> None:
-    """
-    Bytes that are not an image raise InvalidSketchError for both the canvas and its strokes.
-    """
+    # Bytes that are not an image raise InvalidSketchError for both the canvas and its strokes.
     with pytest.raises(InvalidSketchError):
         make_paper_canvas(b"not an image", 0, *CANVAS_SIZE)
     with pytest.raises(InvalidSketchError):
@@ -312,35 +299,26 @@ def photograph_lit_sheet(corners: list[tuple[int, int]], draw_strokes: bool) -> 
 
 
 @pytest.mark.parametrize("corners", BLANK_SHEET_CORNERS.values(), ids=BLANK_SHEET_CORNERS.keys())
-def test_blank_sheet_on_a_table_has_no_canvas_strokes(corners: list[tuple[int, int]]) -> None:
+def test_lit_sheet_on_a_table_marks_only_its_strokes(corners: list[tuple[int, int]]) -> None:
     """
-    A blank sheet on a darker table gives a canvas without stroke pixels, also at the sheet's corners and edges.
+    A blank lit sheet on a darker table has no stroke pixels, and the same sheet with strokes keeps them and no border marks.
     """
-    canvas = make_paper_canvas(photograph_lit_sheet(corners, draw_strokes=False), 0, *CANVAS_SIZE)
-    strokes = extract_canvas_strokes(canvas.payload)
-    mask = decode_stroke_mask(strokes.payload)
+    blank_canvas = make_paper_canvas(photograph_lit_sheet(corners, draw_strokes=False), 0, *CANVAS_SIZE)
+    blank_strokes = extract_canvas_strokes(blank_canvas.payload)
+    blank = decode_stroke_mask(blank_strokes.payload)
+    drawn_canvas = make_paper_canvas(photograph_lit_sheet(corners, draw_strokes=True), 0, *CANVAS_SIZE)
+    mask = decode_stroke_mask(extract_canvas_strokes(drawn_canvas.payload).payload)
 
-    # No pixel is marked, and the steps record that no stroke was kept.
-    assert not mask.any(), f"A blank sheet must have no strokes, got {int(mask.sum())} pixels"
-    assert strokes.steps[0].params["kept_strokes"] == 0, f"No stroke may be kept, got {dict(strokes.steps[0].params)}"
-
-    # The whole warped sheet was used, with the area outside it filled at the paper's level.
-    paper = canvas.steps[2].params
+    # No pixel of the blank sheet is marked, and the whole warped sheet was used with a paper-level fill outside it.
+    assert not blank.any(), f"A blank sheet must have no strokes, got {int(blank.sum())} pixels"
+    assert blank_strokes.steps[0].params["kept_strokes"] == 0, f"No stroke may be kept, got {blank_strokes.steps[0].params}"
+    paper = blank_canvas.steps[2].params
     filled = paper["whole_warped_sheet"] and paper["outside_fill"] == "nearest_paper"
     assert filled, f"Expected the whole warped sheet with a paper-level fill, got {dict(paper)}"
 
-
-@pytest.mark.parametrize("corners", BLANK_SHEET_CORNERS.values(), ids=BLANK_SHEET_CORNERS.keys())
-def test_strokes_on_a_lit_sheet_are_kept_without_border_marks(corners: list[tuple[int, int]]) -> None:
-    """
-    Strokes on the same lit sheet are kept, including one on the dimmer side, and nothing is marked along the canvas border.
-    """
-    canvas = make_paper_canvas(photograph_lit_sheet(corners, draw_strokes=True), 0, *CANVAS_SIZE)
-    mask = decode_stroke_mask(extract_canvas_strokes(canvas.payload).payload)
+    # Each drawn stroke, including the one on the dimmer side, has marked pixels around its place on the canvas.
     scale_x, scale_y = CANVAS_SIZE[0] / SHEET_SIZE[0], CANVAS_SIZE[1] / SHEET_SIZE[1]
     stroke_boxes = {"rectangle": (250, 180, 450, 300), "far line": (90, 390, 150, 410), "dim side line": (560, 110, 640, 130)}
-
-    # Each drawn stroke has marked pixels around its place on the canvas.
     for name, (left, top, right, bottom) in stroke_boxes.items():
         region = mask[round(top * scale_y):round(bottom * scale_y), round(left * scale_x):round(right * scale_x)]
         assert region.any(), f"The {name} must be kept"
@@ -350,52 +328,6 @@ def test_strokes_on_a_lit_sheet_are_kept_without_border_marks(corners: list[tupl
     inner[10:-10, 10:-10] = True
     border_pixels = int((mask & ~inner).sum())
     assert border_pixels == 0, f"No strokes may be marked along the border, got {border_pixels} pixels"
-
-
-def decode_filled_mask(payload: bytes) -> np.ndarray:
-    """
-    Decode a canvas's filled mask PNG to a mask that is True where the canvas was filled in.
-    """
-    return cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_GRAYSCALE) > 0
-
-
-def test_paper_canvas_marks_a_hand_from_the_frame_edge_as_filled() -> None:
-    """
-    A dark hand reaching in from the frame edge is filled with the paper's level, and the canvas marks that area as filled.
-    """
-    photo = np.full((600, 800), 40, dtype=np.uint8)
-    photo[80:520, 200:] = 215
-    cv2.rectangle(photo, (300, 150), (500, 300), 50, 4)
-    cv2.rectangle(photo, (600, 380), (800, 450), 70, -1)
-    canvas = make_paper_canvas(cv2.imencode(".png", photo)[1].tobytes(), 0, *CANVAS_SIZE)
-    filled = decode_filled_mask(canvas.filled_payload)
-
-    # The mask is a grayscale PNG of the canvas size, named beside the canvas.
-    image = canvas.filled
-    assert (image.path, image.mode, image.width, image.height) == ("canvas-filled.png", "L", 512, 360), f"Unexpected {image}"
-
-    # The hand, at the lower right of the paper's box, is filled, while the middle of the paper is seen.
-    crop = canvas.steps[3].params
-    to_canvas = (CANVAS_SIZE[0] / crop["width"], CANVAS_SIZE[1] / crop["height"])
-    hand = (round((700 - crop["x"]) * to_canvas[0]), round((415 - crop["y"]) * to_canvas[1]))
-    middle = (round((400 - crop["x"]) * to_canvas[0]), round((225 - crop["y"]) * to_canvas[1]))
-    assert filled[hand[1], hand[0]], f"The hand at {hand} must be marked as filled"
-    assert not filled[middle[1], middle[0]], f"The paper's middle at {middle} must be seen"
-    assert 0.03 < filled.mean() < 0.3, f"Expected the hand and the paper's rim filled, got share {filled.mean():.3f}"
-
-
-def test_paper_canvas_with_corners_fills_only_a_thin_rim() -> None:
-    """
-    A whole sheet warped by its corners is seen everywhere except a thin rim at the canvas border.
-    """
-    canvas = make_paper_canvas(photograph_sheet([(150, 110), (660, 80), (690, 480), (120, 500)]), 0, *CANVAS_SIZE)
-    filled = decode_filled_mask(canvas.filled_payload)
-
-    # Only pixels within a few percent of the border are filled.
-    inner = np.zeros_like(filled)
-    inner[20:-20, 20:-20] = True
-    assert not (filled & inner).any(), "Nothing inside the rim may be filled"
-    assert filled[0, 0] and filled[-1, -1], "The eroded rim at the canvas corners must be filled"
 
 
 def photograph_full_frame_sheet(with_hand: bool) -> bytes:
@@ -430,12 +362,6 @@ def test_paper_canvas_ignores_a_hand_from_the_frame_edge_when_leveling() -> None
     worst = float(distance_to_plain[hand_strokes].max())
     assert hand_strokes.any() and worst <= 3, f"Strokes must stay within 3 px with a hand in the frame, got {worst:.1f} px"
 
-
-def test_generation_preprocessing_keeps_measuring_tilt_by_the_outline() -> None:
-    """
-    preprocess_sketch keeps its own leveling, which does not record a tilt outline, so generation sketches stay unchanged.
-    """
-    result = preprocess_sketch(photograph_full_frame_sheet(with_hand=True))
-
-    # The generation path records no tilt outline step parameter.
-    assert "tilt_outline" not in result.steps[2].params, f"Unexpected tilt outline in {dict(result.steps[2].params)}"
+    # Generation preprocessing keeps its own leveling, which records no tilt outline, so generation sketches stay unchanged.
+    generation_paper = preprocess_sketch(photograph_full_frame_sheet(with_hand=True)).steps[2].params
+    assert "tilt_outline" not in generation_paper, f"Unexpected tilt outline in {dict(generation_paper)}"

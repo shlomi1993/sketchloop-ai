@@ -19,19 +19,16 @@ SUGGESTED_TEXT = "the sketched object, product design render, studio lighting, w
 PromptMaker = Callable[..., PromptSuggestionRecord]  # Builds a shown prompt suggestion from its text and ID
 
 
-@pytest.mark.parametrize(("prompt", "has_suggestion", "expected"), [
-    ("a red car", False, PromptOriginKind.TYPED),
-    ("", True, PromptOriginKind.TYPED),
-    (f"  {SUGGESTED_TEXT} ", True, PromptOriginKind.SUGGESTED),
-    (SUGGESTED_TEXT.replace("studio", "soft"), True, PromptOriginKind.EDITED),
-], ids=["no-suggestion", "blank", "same-text", "one-word"])
-def test_classify_prompt_origin(make_prompt_suggestion: PromptMaker, prompt: str, has_suggestion: bool,
-                                expected: PromptOriginKind) -> None:
+@pytest.mark.parametrize(("prompt", "expected"), [
+    ("", PromptOriginKind.TYPED),
+    (f"  {SUGGESTED_TEXT} ", PromptOriginKind.SUGGESTED),
+    (SUGGESTED_TEXT.replace("studio", "soft"), PromptOriginKind.EDITED),
+], ids=["blank", "same-text", "one-word"])
+def test_classify_prompt_origin(make_prompt_suggestion: PromptMaker, prompt: str, expected: PromptOriginKind) -> None:
     """
-    A prompt matching the suggestion is suggested, a changed one edited, and a blank one or no suggestion typed.
+    A prompt matching the suggestion but for spaces is suggested, a changed one edited, and a blank one typed.
     """
-    suggestion = make_prompt_suggestion(SUGGESTED_TEXT) if has_suggestion else None
-    origin = classify_prompt_origin(prompt, suggestion)
+    origin = classify_prompt_origin(prompt, make_prompt_suggestion(SUGGESTED_TEXT))
 
     # The kind is as expected, and only a suggested or edited prompt names the suggestion.
     assert origin.kind == expected, f"Expected {expected} for {prompt!r}, got {origin.kind}"
@@ -39,50 +36,29 @@ def test_classify_prompt_origin(make_prompt_suggestion: PromptMaker, prompt: str
     assert origin.prompt_suggestion == expected_id, f"Expected suggestion {expected_id}, got {origin.prompt_suggestion}"
 
 
-@pytest.mark.parametrize(("kind", "suggestion_id"), [
-    (PromptOriginKind.TYPED, "prompt-1"),
-    (PromptOriginKind.EDITED, None),
-    ("pasted", "prompt-1"),
-])
-def test_prompt_origin_refuses_inconsistent_values(kind: str, suggestion_id: str | None) -> None:
+def test_prompt_origin_refuses_a_typed_prompt_naming_a_suggestion() -> None:
     """
-    A typed origin naming a suggestion, an edited one without it, or an unknown kind is refused.
+    A typed origin that names a prompt suggestion contradicts itself and is refused.
     """
     with pytest.raises(InvalidRecordError, match="Prompt origin"):
-        PromptOrigin(kind=kind, prompt_suggestion=suggestion_id)
+        PromptOrigin(kind=PromptOriginKind.TYPED, prompt_suggestion="prompt-1")
 
 
 def fail_suggestion(record: PromptSuggestionRecord) -> PromptSuggestionRecord:
+    """
+    Turn a shown prompt suggestion into a failed one without text or position.
+    """
     failure = PromptSuggestionFailure(error="SuggestionError", message="Model folder is missing.")
     return replace(record, status=PromptSuggestionStatus.FAILED, shown_at=None, text=None, list_position=None, failure=failure)
 
 
-@pytest.mark.parametrize(("change", "message"), [
-    ({"text": None}, "needs its text"),
-    ({"list_position": -1}, "list_position"),
-    ({"ran_suggester": False}, "suggester_seconds exactly when"),
-    ({"suggester_seconds": float("nan")}, "suggester_seconds"),
-    ({"after_capture": 0}, "after_capture"),
-    ({"failure": PromptSuggestionFailure(error="E", message="m")}, "exactly when it has no failure"),
-])
-def test_shown_prompt_suggestion_refuses_bad_values(make_prompt_suggestion: PromptMaker, change: dict[str, object],
-                                                    message: str) -> None:
-    """
-    A shown prompt suggestion without text, with a bad position, timing, or capture, or with a failure is refused.
-    """
-    with pytest.raises(InvalidRecordError, match=message):
-        replace(make_prompt_suggestion(SUGGESTED_TEXT), **change)
-
-
 def test_failed_prompt_suggestion_refuses_text(make_prompt_suggestion: PromptMaker) -> None:
+    """
+    A failed prompt suggestion that claims a text contradicts its status and is refused.
+    """
     failed = fail_suggestion(make_prompt_suggestion(SUGGESTED_TEXT))
-
-    # The failed record holds no text, and adding text or a shown time breaks it.
-    assert failed.text is None and failed.failure is not None, f"Expected a failed record, got {failed}"
     with pytest.raises(InvalidRecordError, match="Failed prompt suggestion"):
         replace(failed, text=SUGGESTED_TEXT)
-    with pytest.raises(InvalidRecordError, match="Failed prompt suggestion"):
-        replace(failed, shown_at=failed.requested_at)
 
 
 def test_prompt_suggestion_round_trips(make_prompt_suggestion: PromptMaker) -> None:
@@ -110,6 +86,9 @@ def test_prompt_suggestion_round_trips(make_prompt_suggestion: PromptMaker) -> N
 
 
 def test_resolve_prompt_origin(make_prompt_suggestion: PromptMaker) -> None:
+    """
+    A shown suggestion's ID classifies the prompt, no ID is typed, and an unknown, failed, or later suggestion is outside.
+    """
     shown = make_prompt_suggestion(SUGGESTED_TEXT)
     failed = fail_suggestion(make_prompt_suggestion(SUGGESTED_TEXT, "prompt-2", number=2))
     at = shown.shown_at

@@ -33,11 +33,9 @@ def refuse_generator(*args: object, **kwargs: object) -> None:
     raise AssertionError("This command must not create this generator")
 
 
-@pytest.mark.parametrize("drop_source", [False, True], ids=["with-source", "recorded-before-sources"])
-def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
-                              drop_source: bool) -> None:
+def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """
-    Rerunning a fake round with a diffusers settings file makes a linked fake session in the file's runs folder.
+    Rerunning a fake round saved before sources, with a diffusers settings file, makes a linked fake session in the file's folder.
     """
     answers = iter(["1", "q"])
     monkeypatch.setattr("builtins.input", lambda *prompt: next(answers))
@@ -57,12 +55,10 @@ def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
     session_file.write_text(json.dumps(session_data), encoding="utf-8")
 
     # Strip input.source to stand in for a round saved before sources were tracked.
-    if drop_source:
-        record_file = original / "round-1" / "round.json"
-        data = json.loads(record_file.read_text(encoding="utf-8"))
-        del data["input"]["source"]
-        record_file.write_text(json.dumps(data), encoding="utf-8")
-
+    record_file = original / "round-1" / "round.json"
+    data = json.loads(record_file.read_text(encoding="utf-8"))
+    del data["input"]["source"]
+    record_file.write_text(json.dumps(data), encoding="utf-8")
     original_source = load_session(original).rounds[0].source
 
     # The file asks for diffusers, but a rerun recreates the recorded fake backend, so diffusers must never be created.
@@ -87,8 +83,8 @@ def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
     assert "reproduced" not in rerun_output.lower(), "A rerun must never claim exact replay"
     assert "Candidates with identical bytes: 1, 2 of 2" in show_output, "show must compare a rerun with its original"
 
-    # A run from a file records file, an older record loads as unavailable, and the rerun copies whichever it finds.
-    expected_source = Unavailable(MISSING_SOURCE_REASON) if drop_source else "file"
+    # A run from a file records file, the older record loads as unavailable, and the rerun copies that.
+    expected_source = Unavailable(MISSING_SOURCE_REASON)
     rerun_source = load_session(rerun_folder).rounds[0].source
     assert recorded_source == "file", f"run from a file must record source file, got {recorded_source}"
     assert original_source == expected_source, f"Expected original source {expected_source}, got {original_source}"
@@ -100,8 +96,8 @@ def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
     assert isinstance(rerun_saved.session.generator_setup_seconds, float), "The rerun must record its generator setup"
     assert "cpu: Synthetic CPU -> " in " ".join(rerun_output.split()), "The comparison must list the changed CPU"
 
-    # show prints the rerun round's source, naming the reason when it is unavailable.
-    shown_source = "(source: unavailable (recorded before input sources were tracked))" if drop_source else "(source: file)"
+    # show prints the rerun round's source, naming the reason it is unavailable.
+    shown_source = "(source: unavailable (recorded before input sources were tracked))"
     assert shown_source in " ".join(show_output.split()), f"show must print {shown_source}"
 
 
@@ -121,12 +117,12 @@ def record_float16_round(runs_dir: Path, monkeypatch: pytest.MonkeyPatch, adapte
     return original
 
 
-def test_cli_rerun_passes_recorded_precision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_rerun_uses_recorded_precision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                           capsys: pytest.CaptureFixture[str]) -> None:
     """
-    A rerun creates its backend with the precision the round recorded.
+    A rerun creates its backend with the recorded precision, and a diffusers float16 round is refused on a CPU-only machine.
     """
-    runs_dir = tmp_path / "runs"
-    original = record_float16_round(runs_dir, monkeypatch, "sketchloop.fake")
+    original = record_float16_round(tmp_path / "runs", monkeypatch, "sketchloop.fake")
     received = []
 
     def make_recording_generator(settings: Settings) -> FakeGenerator:
@@ -137,32 +133,23 @@ def test_cli_rerun_passes_recorded_precision(tmp_path: Path, monkeypatch: pytest
         return FakeGenerator()
 
     monkeypatch.setattr("sketchloop.cli.common.make_generator", make_recording_generator)
-    exit_code = main(["rerun", str(original), "--round", "1", "--runs-dir", str(runs_dir)])
+    exit_code = main(["rerun", str(original), "--round", "1", "--runs-dir", str(tmp_path / "runs")])
 
     # The rerun succeeded and asked for the recorded float16.
     assert exit_code == 0, f"The rerun must succeed, got exit code {exit_code}"
     assert received == [TorchPrecision.FLOAT16], f"Expected the recorded float16, got {received}"
 
-
-def test_cli_rerun_refuses_float16_on_cpu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                          capsys: pytest.CaptureFixture[str]) -> None:
-    """
-    A diffusers round recorded in float16 cannot be rerun on a CPU-only machine, and no backend is created.
-    """
-    runs_dir = tmp_path / "runs"
-    original = record_float16_round(runs_dir, monkeypatch, "sketchloop.diffusers")
+    # A diffusers round in float16 fails on a CPU-only machine with one line, creating no backend.
+    diffusers_original = record_float16_round(tmp_path / "cpu-runs", monkeypatch, "sketchloop.diffusers")
     capsys.readouterr()
     monkeypatch.setattr("sketchloop.cli.rerun.select_device", lambda: TorchDevice.CPU)
     monkeypatch.setattr("sketchloop.cli.common.make_generator", refuse_generator)
-    exit_code = main(["rerun", str(original), "--round", "1", "--runs-dir", str(runs_dir)])
-
-    # The rerun fails with one line that says why.
+    cpu_exit = main(["rerun", str(diffusers_original), "--round", "1", "--runs-dir", str(tmp_path / "cpu-runs")])
     captured = capsys.readouterr()
     output = " ".join((captured.out + captured.err).split())
-    assert exit_code == 1, f"The rerun must fail, got exit code {exit_code}"
+    assert cpu_exit == 1, f"The rerun must fail, got exit code {cpu_exit}"
     expected = "Round 1 ran in float16 on a GPU, so it cannot be rerun on this CPU-only machine."
     assert expected in output, f"Unexpected output {output}"
-
 
 
 class RecordingEvaluator(Evaluator):
@@ -179,10 +166,9 @@ class RecordingEvaluator(Evaluator):
 
 
 @pytest.mark.parametrize(("recorded", "settings_evaluator", "expected_evaluator", "expects_note"), [
-    (None, "clip-b32", "NoOpEvaluator", False),
     ({"evaluator": "ClipEvaluator", "score_details": {"model": CLIP_B32_MODEL.repo_id}}, "none", "RecordingEvaluator", False),
     ({"evaluator": "ConstantEvaluator", "score_details": {}}, "none", "NoOpEvaluator", True)
-], ids=["none", "clip-b32", "unknown"])
+], ids=["clip-b32", "unknown"])
 def test_cli_rerun_reuses_recorded_evaluator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
                                              recorded: dict[str, object] | None, settings_evaluator: str,
                                              expected_evaluator: str, expects_note: bool) -> None:

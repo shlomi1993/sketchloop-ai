@@ -81,53 +81,45 @@ def make_suggester(runner: PipelineRunner) -> ControlNetStrokeSuggester:
     return ControlNetStrokeSuggester(device="cpu", runner=runner, count_tokens=count_words)
 
 
-@pytest.mark.parametrize(("prompt", "expected_prompt", "template"), [
-    ("  a ship  ", "a simple black line drawing of a ship, clean thin black outlines on white paper, coloring book page, minimal", "with_prompt"),  # noqa: E501
-    ("   ", NEUTRAL_PROMPT, "neutral")
-], ids=["padded", "spaces"])
-def test_prompt_template_follows_the_typed_prompt(prompt: str, expected_prompt: str, template: str) -> None:
+@pytest.mark.parametrize(("prompt", "expected_prompt", "template", "truncated"), [
+    ("  a ship  ", "a simple black line drawing of a ship, clean thin black outlines on white paper, coloring book page, minimal", "with_prompt", False),  # noqa: E501
+    ("   ", NEUTRAL_PROMPT, "neutral", False),
+    (" ".join(["word"] * 100), None, "with_prompt", True),
+], ids=["padded", "spaces", "long"])
+def test_prompt_template_follows_the_typed_prompt(prompt: str, expected_prompt: str | None, template: str,
+                                                  truncated: bool) -> None:
     """
-    A typed prompt fills the line-drawing template, a blank one gives the neutral prompt, and both are recorded exactly.
+    A typed prompt fills the line-drawing template, a blank one gives the neutral prompt, and a long one is marked truncated.
     """
     request, payload = make_canvas()
     request = StrokeSuggestionRequest(canvas=request.canvas, prompt=prompt, seed=3)
     runner = AddingRunner()
     suggestion = make_suggester(runner).suggest(request, payload).suggestion
+    sent = runner.calls[0]["prompt"]
 
-    # The pipeline gets and the record keeps the exact text, with the fixed negative prompt.
-    assert runner.calls[0]["prompt"] == expected_prompt, f"Unexpected pipeline prompt {runner.calls[0]['prompt']!r}"
-    assert suggestion.effective.prompt == expected_prompt, f"Unexpected recorded prompt {suggestion.effective.prompt!r}"
+    # The pipeline gets and the record keeps the exact text, with the fixed negative prompt, and the request keeps the typed one.
+    assert expected_prompt in (None, sent), f"Unexpected pipeline prompt {sent!r}"
+    assert suggestion.effective.prompt == sent, f"Unexpected recorded prompt {suggestion.effective.prompt!r}"
     assert suggestion.effective.negative_prompt == NEGATIVE_PROMPT, "The negative prompt must be recorded"
-
-    # The template and the token count are recorded, and a short prompt is not truncated.
-    controls = suggestion.effective.controls
-    assert controls["prompt_template"] == template, f"Expected template {template}, got {controls['prompt_template']}"
-    assert controls["prompt_tokens"] == count_words(expected_prompt), f"Unexpected token count {controls['prompt_tokens']}"
-    assert controls["prompt_truncated"] is False, "A short prompt must not be marked truncated"
     assert request.prompt == prompt, "The request must keep the prompt exactly as typed"
 
+    # The template, the token count, and whether the prompt was cut at the token limit are recorded.
+    controls = suggestion.effective.controls
+    assert controls["prompt_template"] == template, f"Expected template {template}, got {controls['prompt_template']}"
+    assert controls["prompt_tokens"] == count_words(sent), f"Unexpected token count {controls['prompt_tokens']}"
+    assert (controls["prompt_tokens"] > PROMPT_TOKEN_LIMIT) == truncated, f"Unexpected token count {controls}"
+    assert controls["prompt_truncated"] is truncated, f"Expected truncated {truncated}, got {controls['prompt_truncated']}"
 
-def test_long_prompt_is_marked_truncated() -> None:
+
+def test_suggestion_gets_the_canvas_and_research_settings_and_finds_new_parts() -> None:
     """
-    A 100-word prompt exceeds the 77-token limit and is recorded as truncated, not refused.
-    """
-    request, payload = make_canvas()
-    request = StrokeSuggestionRequest(canvas=request.canvas, prompt=" ".join(["word"] * 100), seed=3)
-    controls = make_suggester(AddingRunner()).suggest(request, payload).suggestion.effective.controls
-
-    # The count is over the limit, so the end of the prompt was cut.
-    assert controls["prompt_tokens"] > PROMPT_TOKEN_LIMIT, f"Expected over {PROMPT_TOKEN_LIMIT} tokens, got {controls}"
-    assert controls["prompt_truncated"] is True, "A prompt over the token limit must be marked truncated"
-
-
-def test_pipeline_gets_the_canvas_and_research_settings() -> None:
-    """
-    The pipeline receives the canvas black on white, its inverse as control, the research defaults, and the canvas size.
+    The pipeline gets the canvas, its inverse as control, and the research defaults, and only the added circle is a part.
     """
     request, payload = make_canvas()
     runner = AddingRunner()
-    suggestion = make_suggester(runner).suggest(request, payload).suggestion
-    call = runner.calls[0]
+    suggester = make_suggester(runner)
+    output = suggester.suggest(request, payload)
+    suggestion, call = output.suggestion, runner.calls[0]
 
     # The defaults from the research note reach the pipeline with the canvas size and the seed.
     settings = {name: call[name] for name in ("seed", "strength", "num_inference_steps", "guidance_scale",
@@ -143,7 +135,7 @@ def test_pipeline_gets_the_canvas_and_research_settings() -> None:
     assert start[0, 100, 200].tolist() == [0, 0, 0] and start[0, 10, 10].tolist() == [1, 1, 1], "Start must be black on white"
     assert np.array_equal(control, 1 - start), "The control image must be the inverted canvas"
 
-    # The record names the real suggester and every effective setting.
+    # The record names the real suggester and every effective setting, and the description names the run conditions.
     controls = suggestion.effective.controls
     recorded = {name: controls[name] for name in ("strength", "steps", "executed_steps", "guidance_scale", "conditioning_scale",
                                                   "device", "dtype", "scheduler", "lcm_lora_fused", "width", "height")}
@@ -155,17 +147,10 @@ def test_pipeline_gets_the_canvas_and_research_settings() -> None:
     identity = suggestion.suggester
     assert identity.adapter == "sketchloop.controlnet-strokes" and not identity.is_fake, f"Unexpected identity {identity}"
     assert "lllyasviel/control_v11p_sd15_scribble@" in str(identity.model_id), f"Unexpected model ID {identity.model_id}"
+    description = suggester.describe()
+    assert "ControlNet scribble" in description and "CPU" in description and "float32" in description, description
 
-
-def test_new_parts_exclude_the_existing_strokes() -> None:
-    """
-    The redrawn rectangle is not suggested, the added circle is one part, and every image is stored with its bytes.
-    """
-    request, payload = make_canvas()
-    output = make_suggester(AddingRunner()).suggest(request, payload)
-    suggestion = output.suggestion
-
-    # Only the circle below the rectangle is a part, with a box around it.
+    # The redrawn rectangle is not suggested, and only the circle below it is a part, with a box around it.
     assert len(suggestion.parts) == 1, f"Expected only the added circle, got {len(suggestion.parts)} parts"
     left, top, width, height = suggestion.parts[0].box
     assert abs(left - 214) <= 3 and abs(top - 248) <= 3 and abs(width - 85) <= 4, f"Unexpected box {suggestion.parts[0].box}"
@@ -181,63 +166,56 @@ def test_new_parts_exclude_the_existing_strokes() -> None:
     assert set(suggestion.timings_seconds) == {"generation", "extraction"}, f"Unexpected timings {suggestion.timings_seconds}"
 
 
-def test_random_seed_is_drawn_and_recorded() -> None:
+def test_minimal_request_records_what_it_could_not_know() -> None:
     """
-    A request without a seed gets a random one, which the pipeline receives and the record keeps.
+    Without a seed, a tokenizer, or guidance above 1, a random seed is recorded, tokens are unavailable, and no negative prompt.
     """
     request, payload = make_canvas()
-    request = StrokeSuggestionRequest(canvas=request.canvas, prompt="")
+    request = StrokeSuggestionRequest(canvas=request.canvas, prompt="", controls={"guidance_scale": 1.0})
     runner = AddingRunner()
-    suggestion = make_suggester(runner).suggest(request, payload).suggestion
+    suggestion = ControlNetStrokeSuggester(device="cpu", runner=runner).suggest(request, payload).suggestion
+    controls = suggestion.effective.controls
 
     # The drawn seed is the one the pipeline used.
     assert isinstance(suggestion.seed, int) and suggestion.seed == runner.calls[0]["seed"], f"Seed {suggestion.seed} not recorded"
 
+    # Without a tokenizer, the token count and truncation say why they are missing.
+    assert isinstance(controls["prompt_tokens"], Unavailable), f"Expected unavailable tokens, got {controls['prompt_tokens']}"
+    assert isinstance(controls["prompt_truncated"], Unavailable), "Truncation cannot be known without a tokenizer"
 
-def test_low_guidance_records_no_negative_prompt() -> None:
-    """
-    At guidance 1 the pipeline ignores the negative prompt, so none is passed or recorded.
-    """
-    request, payload = make_canvas()
-    request = StrokeSuggestionRequest(canvas=request.canvas, prompt="", seed=3, controls={"guidance_scale": 1.0})
-    runner = AddingRunner()
-    suggestion = make_suggester(runner).suggest(request, payload).suggestion
-
-    # Neither the call nor the record has a negative prompt.
+    # At guidance 1 the pipeline ignores the negative prompt, so neither the call nor the record has one.
     assert "negative_prompt" not in runner.calls[0], "A negative prompt must not be passed at guidance 1"
     assert suggestion.effective.negative_prompt is None, "A negative prompt the pipeline ignores must not be recorded"
 
 
-@pytest.mark.parametrize(("controls", "field"), [
-    ({"strength": 0.3}, "controls.strength"),
-    ({"steps": 1, "strength": 0.5}, "controls.steps")
-], ids=["low-strength", "no-executed-step"])
-def test_bad_controls_refused_before_loading(tmp_path: Path, controls: dict[str, Any], field: str) -> None:
+def test_bad_requests_and_failures_are_refused_in_one_line(tmp_path: Path) -> None:
     """
-    An unknown or out-of-range control, or steps and strength that run no step, are refused before any model loads.
+    Steps that run nothing, float16 on the CPU, canvas bytes of another image, and a failing pipeline each raise one line.
     """
     request, payload = make_canvas()
-    request = StrokeSuggestionRequest(canvas=request.canvas, prompt="", seed=3, controls=controls)
 
-    # The suggester has no models, so reaching the load would raise a different error.
+    # Steps and strength that run no step are refused before any model loads, since this suggester has none.
+    no_step = StrokeSuggestionRequest(canvas=request.canvas, prompt="", seed=3, controls={"steps": 1, "strength": 0.5})
     with pytest.raises(UnsupportedConfigurationError) as raised:
-        ControlNetStrokeSuggester(tmp_path, device="cpu").suggest(request, payload)
-    fields = [issue.field for issue in raised.value.issues]
-    assert fields == [field], f"Expected an issue for {field}, got {fields}"
+        ControlNetStrokeSuggester(tmp_path, device="cpu").suggest(no_step, payload)
+    assert [issue.field for issue in raised.value.issues] == ["controls.steps"], f"Unexpected issues {raised.value.issues}"
 
+    # float16 on the CPU is refused when the suggester is created, naming the setting to change.
+    with pytest.raises(StrokeSuggestionError, match="stroke_suggester.controlnet.precision"):
+        ControlNetStrokeSuggester(device="cpu", precision="float16")
 
-def test_mismatched_canvas_bytes_refused() -> None:
-    """
-    Canvas bytes that are not the requested canvas are refused, so the record names the image actually used.
-    """
-    request, _ = make_canvas()
+    # Canvas bytes that are not the requested canvas are refused before the pipeline runs.
     other = cv2.imencode(".png", np.full((CANVAS_HEIGHT, CANVAS_WIDTH), 255, dtype=np.uint8))[1].tobytes()
-
-    # The suggester refuses the bytes before running the pipeline.
     runner = AddingRunner()
     with pytest.raises(InvalidSketchError, match="do not match"):
         make_suggester(runner).suggest(request, other)
     assert not runner.calls, "The pipeline must not run on the wrong canvas"
+
+    # A failing pipeline keeps only the cause's first line and adds a recovery action.
+    with pytest.raises(StrokeSuggestionError) as failed:
+        make_suggester(FailingRunner()).suggest(request, payload)
+    expected = "Next-stroke suggestion failed: synthetic sampling failure. Free memory and retry."
+    assert str(failed.value) == expected, f"Unexpected message {str(failed.value)!r}"
 
 
 def test_missing_weights_reported_before_library_imports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -257,27 +235,6 @@ def test_missing_weights_reported_before_library_imports(tmp_path: Path, monkeyp
         assert "\n" not in message, "The error must be a single line"
 
 
-def test_pipeline_failure_raises_one_line() -> None:
-    """
-    A failing pipeline raises a one-line StrokeSuggestionError with its first line and a recovery action.
-    """
-    request, payload = make_canvas()
-
-    # The message keeps only the cause's first line.
-    with pytest.raises(StrokeSuggestionError) as raised:
-        make_suggester(FailingRunner()).suggest(request, payload)
-    expected = "Next-stroke suggestion failed: synthetic sampling failure. Free memory and retry."
-    assert str(raised.value) == expected, f"Unexpected message {str(raised.value)!r}"
-
-
-def test_float16_refused_on_cpu() -> None:
-    """
-    float16 on the CPU is refused when the suggester is created, naming the setting to change.
-    """
-    with pytest.raises(StrokeSuggestionError, match="stroke_suggester.controlnet.precision"):
-        ControlNetStrokeSuggester(device="cpu", precision="float16")
-
-
 def test_load_warms_up_once_per_size(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     load runs one blank suggestion per canvas size, and a suggestion reports a load only when it loaded the models.
@@ -286,6 +243,9 @@ def test_load_warms_up_once_per_size(monkeypatch: pytest.MonkeyPatch) -> None:
     loads = []
 
     def load_stub() -> tuple[PipelineRunner, Any]:
+        """
+        Count the load and return the stub runner and tokenizer.
+        """
         loads.append(time.perf_counter())
         return runner, count_words
 
@@ -305,29 +265,6 @@ def test_load_warms_up_once_per_size(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(lazy, "_load_pipeline", load_stub)
     first, second = lazy.suggest(request, payload), lazy.suggest(request, payload)
     assert first.load_seconds is not None and second.load_seconds is None, "Only the loading call reports the load"
-
-
-def test_describe_names_the_method_device_and_precision() -> None:
-    """
-    The description names the model, the device, and the precision.
-    """
-    description = make_suggester(AddingRunner()).describe()
-
-    # One sentence with the run conditions.
-    assert "ControlNet scribble" in description and "CPU" in description and "float32" in description, description
-
-
-def test_injected_runner_without_tokenizer_records_unavailable_tokens() -> None:
-    """
-    Without a tokenizer, the token count and truncation are recorded as unavailable rather than guessed.
-    """
-    request, payload = make_canvas()
-    suggester = ControlNetStrokeSuggester(device="cpu", runner=AddingRunner())
-    controls = suggester.suggest(request, payload).suggestion.effective.controls
-
-    # Both values say why they are missing.
-    assert isinstance(controls["prompt_tokens"], Unavailable), f"Expected unavailable tokens, got {controls['prompt_tokens']}"
-    assert isinstance(controls["prompt_truncated"], Unavailable), "Truncation cannot be known without a tokenizer"
 
 
 def erase_chair_legs(photo_payload: bytes) -> bytes:

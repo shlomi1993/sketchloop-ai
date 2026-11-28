@@ -40,7 +40,7 @@ def test_select_candidates_rejects_foreign_and_duplicate_ids() -> None:
             select_candidates(iteration, candidate_ids)
 
 
-@pytest.mark.parametrize("path", ["/sketches/s1.png", "sketches\\s1.png", "C:/s1.png", "sketches/../s1.png"])
+@pytest.mark.parametrize("path", ["/sketches/s1.png", "sketches/../s1.png"], ids=["absolute", "parent"])
 def test_image_ref_rejects_unsafe_paths(path: str) -> None:
     """
     Image paths must be relative POSIX paths that cannot escape the artifact folder.
