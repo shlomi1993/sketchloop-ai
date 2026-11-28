@@ -199,6 +199,12 @@ def test_study_page_runs_a_no_ai_and_an_ai_drawing(controller: AppController, sh
     monkeypatch.setattr(ui.time, "monotonic", lambda: clock_seconds[0])
     page.store_frame(frame)
 
+    # Orientation swaps the configured sides before drawing and stays separate from camera rotation.
+    original_sides = sorted(controller.canvas_size)
+    page.change_canvas_orientation("Portrait")
+    assert controller.canvas_size == tuple(original_sides), "Portrait must put the shorter side first"
+    assert page.show_canvas_orientation().interactive, "Orientation must be available before Start"
+
     # A start without a condition is refused, and nothing is started.
     with pytest.raises(gradio.Error, match=re.escape(ui.CHOOSE_CONDITION_MESSAGE)):
         page.start_study_drawing("p1_car", None)
@@ -214,6 +220,13 @@ def test_study_page_runs_a_no_ai_and_an_ai_drawing(controller: AppController, sh
     assert prompt.value == "" and prompt_id is None and sketch_view.value is None, "A start must clear the prompt and view"
     assert status == ui.DRAWING_STATUS, f"Unexpected status after a start {status!r}"
     assert shown == ("p1_car", 1, True, 0) and armed is None, f"A start must record what the tab shows, got {shown}"
+
+    # A drawing locks orientation, including a change sent from a stale tab.
+    locked_size = controller.canvas_size
+    assert not page.show_canvas_orientation().interactive, "An open drawing must lock orientation"
+    with pytest.warns(UserWarning, match="Finish the current drawing"):
+        page.change_canvas_orientation("Landscape")
+    assert controller.canvas_size == locked_size, "A stale tab must not change an open drawing's canvas"
 
     # Prompt suggestions are refused without AI.
     with pytest.raises(gradio.Error, match=re.escape(SUGGESTIONS_OFF_MESSAGE)):
@@ -235,6 +248,12 @@ def test_study_page_runs_a_no_ai_and_an_ai_drawing(controller: AppController, sh
     record = controller.session.drawings[0].record
     assert finished[0] == ui.FINISHED_STATUS and finished[7].value is None, "Finish must thank and empty the view"
     assert record.final_prompt == "a lamp" and record.final_prompt_origin.kind == PromptOriginKind.TYPED, "Bad final prompt"
+
+    # Finishing unlocks orientation and the next drawing uses the selected dimensions.
+    assert page.show_canvas_orientation().interactive, "Finish must unlock orientation"
+    page.change_canvas_orientation("Landscape")
+    assert controller.canvas_size == tuple(reversed(original_sides)), "Landscape must put the longer side first"
+    assert record.canvas_height > record.canvas_width, "The completed portrait drawing must keep its dimensions"
 
     # With AI, the buttons show, and a suggested prompt kept unchanged until Finish records suggested.
     started = page.start_study_drawing("p2_car", "ai")

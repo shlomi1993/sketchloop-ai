@@ -578,6 +578,27 @@ class AppController:
 
         return drawing
 
+    def set_canvas_orientation(self, orientation: str) -> None:
+        """
+        Reorder configured canvas sides before the next drawing starts.
+
+        Args:
+            orientation (str): Landscape for a wide canvas or Portrait for a tall canvas.
+
+        Returns:
+            None: The controller retains the selected canvas dimensions.
+        """
+        # Refuse a shape change while recorded captures and suggestions depend on the current canvas.
+        if orientation not in ("Landscape", "Portrait"):
+            raise SketchLoopError("Choose Landscape or Portrait.")
+
+        if self._find_open_drawing() is not None:
+            raise SketchLoopError("Finish the current drawing before changing its orientation.")
+
+        # Preserve the configured side lengths, including square canvases, and change only their order.
+        short_side, long_side = sorted(self.canvas_size)
+        self.canvas_size = (short_side, long_side) if orientation == "Portrait" else (long_side, short_side)
+
     def start_drawing(self, name: str, condition: StudyCondition | None = None) -> DrawingView:
         """
         Start a named experiment as a new session folder and open its first drawing, as a study drawing when given a condition.

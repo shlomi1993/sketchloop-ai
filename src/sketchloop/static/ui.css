@@ -1,5 +1,5 @@
 /* A calm, neutral layout with one accent color. Every box uses the theme's radius, border, and padding, so edges line up. */
-.gradio-container { width: 100%; max-width: none !important; margin: auto; }
+.gradio-container { width: 100%; max-width: 1440px !important; margin: auto; }
 #header h1 { font-size: 2.2rem; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
 .card { background: var(--block-background-fill); border: var(--block-border-width) solid var(--block-border-color);
         border-radius: var(--block-radius); padding: var(--block-padding); }
@@ -45,12 +45,14 @@
 .setting-row { display: grid; grid-template-columns: 66px minmax(0, 1fr); gap: 8px; align-items: center; margin-top: 8px; }
 .setting-key { font-size: 12px; line-height: 1.3; color: var(--body-text-color-subdued); }
 .setting-values { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
-.setting-value { display: inline-flex; align-items: center; justify-content: center; text-align: center;
-                 min-height: 30px; padding: 6px 10px; gap: 6px; box-sizing: border-box;
+.setting-value { position: relative; display: inline-flex; align-items: center; justify-content: center; text-align: center;
+                 min-height: 30px; padding: 6px 22px; box-sizing: border-box;
                  border: 1px solid var(--border-color-primary); border-radius: 5px;
                  font-size: 11px; line-height: 1; overflow-wrap: anywhere; }
 .setting-value.selected { background: #dcfce7; border-color: #16a34a; color: #14532d; font-weight: 650; }
-.setting-check { display: inline-flex; align-items: center; justify-content: center; font-size: 10px; line-height: 1; }
+.setting-label { display: block; text-align: center; line-height: 1.2; }
+.setting-check { position: absolute; left: 8px; top: 50%; transform: translateY(-50%);
+                 font-size: 10px; line-height: 1; color: inherit; }
 .setting-range { font-size: 11px; color: var(--body-text-color-subdued); }
 .settings-warning { font-size: 12px; padding: 8px 10px; border-left: 3px solid #d97706; border-radius: 4px;
                     background: var(--background-fill-secondary); color: var(--body-text-color); }

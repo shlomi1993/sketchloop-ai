@@ -33,3 +33,7 @@ Use one browser tab only. Reloading the page is safe. If an amber "check needed"
 1. Run `sketchloop study summary` and check that all drawings are finished.
 2. Run `sketchloop study export`. It writes the final drawings under random codes to `data/study-exports/`.
 3. Send the experts only the `drawings/` folder. Keep `key.csv` private, because it maps the codes back to participants and conditions.
+
+## Sketch orientation
+
+Before starting a drawing, choose Landscape or Portrait beside the camera controls. This swaps the configured canvas side lengths, such as 512×360 and 360×512, and does not turn the camera. Clockwise rotation remains a separate control. Orientation is locked until the drawing finishes, and each drawing retains its recorded dimensions. The first suggestion after changing orientation can take longer because the model was warmed up at the startup size.

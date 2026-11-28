@@ -123,7 +123,8 @@ def build_setting_row(label: str, choices: tuple[str, ...], active: str) -> str:
         state = " selected" if selected else ""
         suffix = '<span class="setting-check" aria-hidden="true">✓</span>' if selected else ""
         description = ' aria-label="' + escape(value, quote=True) + ', active"' if selected else ""
-        chips.append(f'<span class="setting-value{state}"{description}>{suffix}{escape(value)}</span>')
+        text = f'<span class="setting-label">{escape(value)}</span>'
+        chips.append(f'<span class="setting-value{state}"{description}>{suffix}{text}</span>')
 
     return f'<div class="setting-row"><span class="setting-key">{escape(label)}</span><div class="setting-values">{"".join(chips)}</div></div>'  # noqa: E501
 
@@ -370,6 +371,7 @@ class ExperimenterPanel:
     status: gr.Markdown  # Experiment, condition, start time, and state
     capture_notice: gr.Markdown  # A failed interval save, hidden while saving works
     source: gr.Radio  # Webcam or upload choice
+    orientation: gr.Radio  # Landscape or portrait canvas, locked during a drawing
     rotation: gr.Dropdown  # Degrees to turn the sketch clockwise
     webcam: gr.Image  # Live webcam preview that streams frames
     upload: gr.Image  # Uploaded sketch file, for dry runs
@@ -423,6 +425,36 @@ class SketchPage:
         rotation_choice = gr.Dropdown(value=pick_rotation(choice, use_raw), interactive=not use_raw)
         is_webcam = choice == SketchSource.WEBCAM
         return gr.Image(visible=is_webcam), gr.Image(visible=not is_webcam), rotation_choice
+
+    def show_canvas_orientation(self) -> gr.Radio:
+        """
+        Show the shared canvas orientation and lock its control during an open drawing.
+
+        Returns:
+            gr.Radio: Selected orientation and whether it can be changed.
+        """
+        # Keep every tab in step with the shared canvas and lock its shape during a drawing.
+        width, height = self.controller.canvas_size
+        orientation = "Portrait" if height > width else "Landscape"
+        return gr.Radio(value=orientation, interactive=not is_drawing_open(self.controller.latest_drawing()))
+
+    def change_canvas_orientation(self, orientation: str) -> gr.Radio:
+        """
+        Apply a canvas orientation change or warn when a drawing has already started.
+
+        Args:
+            orientation (str): Landscape or Portrait selected by the experimenter.
+
+        Returns:
+            gr.Radio: The actual shared orientation and its current lock state.
+        """
+        # Reject a stale tab's change after another tab started a drawing, without changing the stored canvas.
+        try:
+            self.controller.set_canvas_orientation(orientation)
+        except SketchLoopError as error:
+            gr.Warning(str(error))
+
+        return self.show_canvas_orientation()
 
     def turn_preview(self, degrees: int | None) -> gr.Image:
         """
@@ -886,6 +918,9 @@ class SketchPage:
                                       visible=False, height=CAMERA_HEIGHT)
                     with gr.Column(elem_classes="card"):
                         source = gr.Radio(choices=SOURCE_CHOICES, value=SketchSource.WEBCAM, label="Source")
+                        canvas = self.show_canvas_orientation()
+                        orientation = gr.Radio(choices=["Landscape", "Portrait"], value=canvas.value,
+                                               interactive=canvas.interactive, label="Sketch orientation")
                         rotation = gr.Dropdown(choices=list(Rotation), value=DEFAULT_ROTATION_BY_SOURCE[SketchSource.WEBCAM],
                                                label="Clockwise rotation")
 
@@ -912,7 +947,8 @@ class SketchPage:
                                       shown_drawing=gr.State(None))
         experimenter = ExperimenterPanel(panel=panel, name=name, condition=condition, start=start, finish=finish,
                                          status=experimenter_status, capture_notice=capture_notice, source=source,
-                                         rotation=rotation, webcam=webcam, upload=upload, finish_armed=gr.State(None))
+                                         orientation=orientation, rotation=rotation, webcam=webcam, upload=upload,
+                                         finish_armed=gr.State(None))
         return participant, experimenter
 
     def _wire_study_events(self, app: gr.Blocks, participant: ParticipantArea, experimenter: ExperimenterPanel) -> None:
@@ -932,6 +968,10 @@ class SketchPage:
         experimenter.webcam.stream(self.store_frame, [experimenter.webcam], None, stream_every=self.capture_interval_seconds,
                                    show_progress="hidden", time_limit=None)
 
+        # Apply only user-triggered orientation changes, with Start and Finish sharing the same mutation queue.
+        experimenter.orientation.input(self.change_canvas_orientation, [experimenter.orientation], [experimenter.orientation],
+                                        concurrency_id="session", concurrency_limit=1, show_progress="hidden")
+
         # Start needs a name and a condition and names the condition, and it runs in the session queue with errors as one line.
         drawing_outputs = [participant.status, participant.suggest_prompt, participant.suggest_strokes, experimenter.name,
                            experimenter.condition, experimenter.finish, experimenter.status]
@@ -940,15 +980,18 @@ class SketchPage:
             component.change(self.update_study_start_button, start_inputs, [experimenter.start], show_progress="hidden")
         start_outputs = [*drawing_outputs, experimenter.start, participant.sketch_view, participant.prompt,
                          participant.prompt_suggestion, experimenter.panel, participant.shown_drawing, experimenter.finish_armed]
-        experimenter.start.click(self.start_study_drawing, start_inputs, start_outputs, concurrency_id="session",
-                                 concurrency_limit=1, show_progress="hidden")
+        starting = experimenter.start.click(self.start_study_drawing, start_inputs, start_outputs, concurrency_id="session",
+                                           concurrency_limit=1, show_progress="hidden")
+        starting.then(self.show_canvas_orientation, None, [experimenter.orientation], show_progress="hidden")
 
         # Finish takes two presses within a few seconds, and a timer turns an unconfirmed first press back.
         prompt_inputs = [participant.prompt, participant.prompt_suggestion]
         finish_outputs = [*drawing_outputs, participant.sketch_view, participant.shown_drawing, experimenter.finish_armed,
                           experimenter.start]
-        experimenter.finish.click(self.press_finish, [*sketch_inputs, *prompt_inputs, experimenter.finish_armed], finish_outputs,
-                                  concurrency_id="session", concurrency_limit=1, show_progress="hidden")
+        finish_inputs = [*sketch_inputs, *prompt_inputs, experimenter.finish_armed]
+        finishing = experimenter.finish.click(self.press_finish, finish_inputs, finish_outputs, concurrency_id="session",
+                                             concurrency_limit=1, show_progress="hidden")
+        finishing.then(self.show_canvas_orientation, None, [experimenter.orientation], show_progress="hidden")
         finish_timer = gr.Timer(1)
         finish_timer.tick(self.disarm_finish, [experimenter.finish_armed], [experimenter.finish, experimenter.finish_armed],
                           show_progress="hidden")
@@ -977,6 +1020,10 @@ class SketchPage:
                            participant.suggest_strokes, participant.shown_drawing]
         capture_timer.tick(self.save_study_capture, [*sketch_inputs, experimenter.capture_notice, participant.shown_drawing],
                            capture_outputs, concurrency_id="drawing-capture", concurrency_limit=1, show_progress="hidden")
+
+        # Refresh orientation and its lock in all tabs, including when another tab starts or finishes a drawing.
+        finish_timer.tick(self.show_canvas_orientation, None, [experimenter.orientation], show_progress="hidden")
+        app.load(self.show_canvas_orientation, None, [experimenter.orientation])
 
         # Restore the latest drawing on load.
         app.load(self.restore_study_view, None, [*drawing_outputs, experimenter.start, participant.shown_drawing])
