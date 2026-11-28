@@ -245,7 +245,7 @@ def build_study_drawing_outputs(view: DrawingView | None, *, clear_inputs: bool 
     condition_update: dict[str, object] = {"value": None} if clear_inputs else {}
     name_box = gr.Textbox(info=FINISH_FIRST_MESSAGE if is_open else EXPERIMENT_NAME_HINT, interactive=not is_open, **name_update)
     condition = gr.Radio(interactive=not is_open, **condition_update)
-    finish = gr.Button(value=FINISH_LABEL, interactive=is_open)
+    finish = gr.Button(value=FINISH_LABEL, interactive=is_open, visible=is_open)
     return (describe_participant_status(view), gr.Button(visible=shows_ai), gr.Button(visible=shows_ai, interactive=shows_ai),
             name_box, condition, finish, describe_experimenter_status(view))
 
@@ -609,9 +609,10 @@ class SketchPage:
 
         view = self.open_drawing(name, StudyCondition(condition))
 
-        # Empty the view until the paper is found, clear the previous prompt and its ID, and hide the panel from the participant.
-        return (*build_study_drawing_outputs(view, clear_inputs=True), gr.Button(value=START_LABEL, interactive=False),
-                gr.Image(value=None), gr.Textbox(value=""), None, gr.skip(), sign_drawing(view), None)
+        # Hide Start so Finish takes its place, empty the view until the paper is found, and clear the previous prompt.
+        start = gr.Button(value=START_LABEL, interactive=False, visible=False)
+        return (*build_study_drawing_outputs(view, clear_inputs=True), start, gr.Image(value=None), gr.Textbox(value=""), None,
+                gr.skip(), sign_drawing(view), None)
 
     def press_finish(self, choice: str, upload_path: str | None, rotation_degrees: int, prompt_text: str | None,
                      prompt_suggestion_id: str | None, armed_at: float | None) -> tuple[object, ...]:
@@ -633,10 +634,12 @@ class SketchPage:
         now = time.monotonic()
         if not is_finish_armed(armed_at, now):
             unchanged = [gr.skip()] * 5
-            return (*unchanged, gr.Button(value=FINISH_CONFIRM_LABEL), gr.skip(), gr.skip(), gr.skip(), now)
+            return (*unchanged, gr.Button(value=FINISH_CONFIRM_LABEL), gr.skip(), gr.skip(), gr.skip(), now, gr.skip())
 
+        # Finishing puts Start back in Finish's place.
         view = self.close_drawing(choice, upload_path, rotation_degrees, prompt_text or "", prompt_suggestion_id)
-        return *build_study_drawing_outputs(view), gr.Image(value=None), sign_drawing(view), None
+        start = gr.Button(value=START_LABEL, interactive=False, visible=True)
+        return *build_study_drawing_outputs(view), gr.Image(value=None), sign_drawing(view), None, start
 
     def disarm_finish(self, armed_at: float | None) -> tuple[gr.Button | dict, float | None | dict]:
         """
@@ -771,7 +774,8 @@ class SketchPage:
         view = self.controller.latest_drawing()
         status, *outputs = build_study_drawing_outputs(view)
         marked_status = gr.Markdown(value=status, elem_classes=[CLOSE_PANEL_CLASS] if is_drawing_open(view) else [])
-        return marked_status, *outputs, gr.Button(value=START_LABEL, interactive=False), sign_drawing(view)
+        start = gr.Button(value=START_LABEL, interactive=False, visible=not is_drawing_open(view))
+        return marked_status, *outputs, start, sign_drawing(view)
 
     def describe_system(self) -> str:
         """
@@ -815,7 +819,7 @@ class SketchPage:
                 prompt = gr.Textbox(label="Prompt", placeholder=STUDY_PROMPT_PLACEHOLDER, lines=3)
                 with gr.Row():
                     start = gr.Button(START_LABEL, interactive=False)
-                    finish = gr.Button(FINISH_LABEL, variant="stop", interactive=False)
+                    finish = gr.Button(FINISH_LABEL, variant="stop", interactive=False, visible=False)
                 with gr.Column(elem_id="ai-help"):
                     suggest_prompt = gr.Button("Suggest a prompt", visible=False, elem_id="suggest-prompt")
                     suggest_strokes = gr.Button("Suggest next strokes", variant="primary", visible=False,
@@ -863,7 +867,8 @@ class SketchPage:
 
         # Finish takes two presses within a few seconds, and a timer turns an unconfirmed first press back.
         prompt_inputs = [participant.prompt, participant.prompt_suggestion]
-        finish_outputs = [*drawing_outputs, participant.sketch_view, participant.shown_drawing, experimenter.finish_armed]
+        finish_outputs = [*drawing_outputs, participant.sketch_view, participant.shown_drawing, experimenter.finish_armed,
+                          experimenter.start]
         experimenter.finish.click(self.press_finish, [*sketch_inputs, *prompt_inputs, experimenter.finish_armed], finish_outputs,
                                   concurrency_id="session", concurrency_limit=1, show_progress="hidden")
         finish_timer = gr.Timer(1)

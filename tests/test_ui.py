@@ -220,7 +220,7 @@ def test_study_page_runs_a_no_ai_and_an_ai_drawing(controller: AppController, sh
 
     # A first Finish press only asks for a second, and the timer turns it back after the window.
     first = page.press_finish("webcam", None, 0, "a lamp", None, None)
-    assert first[5].value == ui.FINISH_CONFIRM_LABEL and first[-1] == 100.0, f"A first press must arm Finish, got {first[5]}"
+    assert first[5].value == ui.FINISH_CONFIRM_LABEL and first[-2] == 100.0, f"A first press must arm Finish, got {first[5]}"
     assert controller.latest_drawing().is_open, "A first press must not finish the drawing"
     clock_seconds[0] = 106.0
     reset_button, reset_armed = page.disarm_finish(100.0)
@@ -228,7 +228,7 @@ def test_study_page_runs_a_no_ai_and_an_ai_drawing(controller: AppController, sh
 
     # Two presses within the window finish with the typed prompt as typed.
     page.store_frame(frame)
-    armed_at = page.press_finish("webcam", None, 0, "a lamp", None, None)[-1]
+    armed_at = page.press_finish("webcam", None, 0, "a lamp", None, None)[-2]
     clock_seconds[0] = 108.0
     finished = page.press_finish("webcam", None, 0, "a lamp", None, armed_at)
     record = controller.session.drawings[0].record
@@ -239,7 +239,7 @@ def test_study_page_runs_a_no_ai_and_an_ai_drawing(controller: AppController, sh
     started = page.start_study_drawing("p2_car", "ai")
     assert [started[1].visible, started[2].visible] == [True, True], "With AI the AI buttons must show"
     text, suggestion_id = page.suggest_another("webcam", None, 0)
-    armed_at = page.press_finish("webcam", None, 0, text, suggestion_id, None)[-1]
+    armed_at = page.press_finish("webcam", None, 0, text, suggestion_id, None)[-2]
     page.press_finish("webcam", None, 0, text, suggestion_id, armed_at)
     origin = controller.session.drawings[0].record.final_prompt_origin
     assert origin.kind == PromptOriginKind.SUGGESTED and origin.prompt_suggestion == suggestion_id, f"Bad final origin {origin}"
