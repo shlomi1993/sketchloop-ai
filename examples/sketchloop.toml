@@ -50,5 +50,4 @@ save_interval_seconds = 2.0  # seconds between saved captures while a drawing is
 name = "florence"  # templates, which needs no model, or florence, the local Florence-2-base model from the models folder, also --prompt-suggester
 
 [study]
-enabled = false  # serve the study page with sketchloop ui, also --study and --no-study
 export_dir = "data/study-exports"  # where sketchloop study export creates a new folder, relative to this file

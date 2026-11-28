@@ -88,7 +88,6 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert exit_codes == (0, 0, 0) and len(launches) == 3, f"Expected three launches, got {exit_codes} and {launches}"
     controller, options = launches[0]
     assert isinstance(controller, AppController) and controller.store.root == runs_dir, f"Bad controller {controller}"
-    assert options["default_candidates"] == 1 and options["default_seed"] == 5, f"Unexpected launch options {options}"
 
     # Telemetry is off before the UI module runs.
     telemetry = (options["GRADIO_ANALYTICS_ENABLED"], options["HF_HUB_DISABLE_TELEMETRY"])
@@ -100,11 +99,10 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert not runs_dir.exists(), "Launching the UI must not create a session folder before the first round"
 
     # The file's diffusers backend gets quality mode and the models folder next to the file, and its other defaults apply.
-    config_controller, config_options = launches[1]
+    config_controller = launches[1][0]
     expected_call = ("quality", (config_dir / "weights").resolve())
     resolved_calls = [(mode, model_dir.resolve()) for mode, model_dir in diffusers_calls]
     assert resolved_calls == [expected_call], f"Expected one diffusers backend {expected_call}, got {diffusers_calls}"
-    assert config_options["default_candidates"] == 3, f"The file's ui.candidates must apply, got {config_options}"
     controller_runs = config_controller.store.root.resolve()
     assert controller_runs == (config_dir / "file-runs").resolve(), f"Runs must sit next to the file, got {controller_runs}"
 
@@ -151,23 +149,14 @@ def test_cli_ui_builds_prompt_suggester_from_settings(tmp_path: Path,
     assert [item.status for item in recorded] == ["failed"], f"Expected one failed press, got {recorded}"
 
 
-def test_cli_ui_study_mode(tmp_path: Path, capsys: pytest.CaptureFixture[str],
-                           launches: list[tuple[AppController, dict[str, object]]]) -> None:
+def test_cli_ui_warns_about_stand_ins(capsys: pytest.CaptureFixture[str],
+                                      launches: list[tuple[AppController, dict[str, object]]]) -> None:
     """
-    Study mode follows the file unless --no-study overrides it, and study mode warns about each stand-in.
+    The page prints a warning for each stand-in suggester before it opens.
     """
-    (tmp_path / "sketchloop.toml").write_text("[study]\nenabled = true\n", encoding="utf-8")
-    study_exit = main(["ui", "--backend", "fake", "--stroke-suggester", "fake"])
-    study_output = " ".join(capsys.readouterr().out.split())
-    plain_exit = main(["ui", "--backend", "fake", "--stroke-suggester", "fake", "--no-study"])
-    plain_output = " ".join(capsys.readouterr().out.split())
-    study_options, plain_options = launches[0][1], launches[1][1]
+    exit_code = main(["ui", "--backend", "fake", "--stroke-suggester", "fake"])
+    output = " ".join(capsys.readouterr().out.split())
 
-    # The file's study mode serves the study page, which prints its line and a warning for each stand-in.
-    assert study_exit == 0 and study_options.get("study") is True, f"Expected study mode, got {study_options}"
-    assert "Serving the study page" in study_output, f"Missing study line in {study_output}"
-    assert "fake stroke suggester" in study_output and "fixed style templates" in study_output, f"Bad warnings {study_output}"
-
-    # --no-study beats the file, so the ordinary page launches without the study line.
-    assert plain_exit == 0 and not plain_options.get("study", False), f"Expected no study mode, got {plain_options}"
-    assert "Serving the study page" not in plain_output, f"Unexpected study line in {plain_output}"
+    # Both stand-ins are named before the page opens.
+    assert exit_code == 0 and len(launches) == 1, f"Expected one launch, got {exit_code}"
+    assert "fake stroke suggester" in output and "fixed style templates" in output, f"Missing warnings in {output}"

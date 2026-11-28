@@ -80,29 +80,20 @@ The download script fetches about 7 GB into the git-ignored `models/` folder and
 
 Run `sketchloop`, which is short for `sketchloop ui`. The page is served on 127.0.0.1 only, with no share link and Gradio analytics off.
 
-1. **Sketch:** the webcam starts streaming by itself, or switch to uploading a PNG or JPEG. The page shows the sketch the model will receive, refreshed every 0.5 s and preprocessed unless raw is ticked. Clockwise rotation turns the input, 180 degrees by default for the webcam.
-2. **Direction:** type a prompt, or press **Suggest a prompt**. Pressing it again for the same drawing gives the next style. The suggestions come from the fixed style templates by default, or from the local Florence-2 model with `[prompt_suggester] name = "florence"`. Every suggestion is recorded with the open drawing or the next round, with the suggester that made it. Set the steps and the other generation sliders, the seed, and the number of candidates.
-3. **Choose:** click **Generate**, tick the candidates you like, or none, and click **Record selection**. Then change the drawing or the prompt and generate the next round.
-
-The page lists the current session's history, and **New session** starts a fresh session with the model still loaded. All browser tabs share one session, and reloading the page keeps it.
-
-**Guided drawing:** under **Experiment**, type a code such as `participant1_car`, never a real name, and press **Start drawing**. The code names the session folder, as in `runs/participant1_car/`. While the drawing is open, **Suggest next strokes** sends the current sketch and the prompt box text as typed, even when empty, and the sketch view shows the live paper with the suggested parts in color. **Finish drawing** keeps the current sketch as the final drawing. Every suggestion is checked against what is drawn until the next suggestion appears or the drawing ends, and is recorded as followed, not followed, or undetermined, part by part. The page never shows this to the participant, and `sketchloop show` prints it. The stroke suggester is set under `[stroke_suggester]` in the settings or with `--stroke-suggester`, and the fake one draws labeled test shapes.
+The page is for guided drawing. The experimenter types an experiment name such as `participant1_car`, chooses With AI or Without AI, and presses Start. The name becomes the session folder, as in `runs/participant1_car/`. While the drawing is open, the page saves the sketch every 2 s. With AI, **Suggest a prompt** and **Suggest next strokes** appear, and suggested parts show in color over the live sketch. Each suggestion is checked against what is drawn next and recorded as followed, not followed, or undetermined, part by part. The participant never sees these decisions, and `sketchloop show` prints them. Image generation stays available from the command line with `sketchloop run`.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--backend` | `fake` | `fake`, `diffusers` for ControlNet scribble, or `t2i-adapter` for the T2I-Adapter sketch model |
 | `--mode` | `fast` on CPU, `quality` on a GPU | Diffusers sampling mode |
 | `--precision` | `float16` on a GPU, `float32` on CPU | Diffusers precision, and the CPU cannot use float16 |
-| `--candidates` | 1 | Starting number of candidates per round |
-| `--seed` | random | Starting base seed |
 | `--capture-interval` | 0.5 | Seconds between the webcam frames the page keeps |
 | `--runs-dir` | `runs` | Where sessions are saved |
-| `--study` | off | Serve the study page, see below |
 | `--stroke-suggester` | `fake` | `fake` or `controlnet` behind Suggest next strokes |
 | `--prompt-suggester` | `templates` | `templates` or `florence` for the Florence-2 model behind Suggest a prompt |
 | `--config` | `./sketchloop.toml` if present | Settings file |
 
-**Study mode:** `sketchloop ui --study`, or `enabled = true` under `[study]`, serves the page for a user study, and `--no-study` turns it off for one run. The command prints a warning for each stand-in, the fake stroke suggester or the template prompts, since a study needs the real ones. `sketchloop ui --config study.toml` chooses the real ones, and [the study guide](docs/STUDY-GUIDE.md) has the full procedure.
+**The page:** the command prints a warning for each stand-in, the fake stroke suggester or the template prompts, since a study needs the real ones. `sketchloop ui --config study.toml` chooses the real ones, and [the study guide](docs/STUDY-GUIDE.md) has the full procedure.
 
 - **Participant view:** only the sketch view, the prompt box, and a status line worded the same in both conditions. "Suggest a prompt" and "Suggest next strokes" appear only while a drawing with AI is open, in a column that keeps its space without them, so nothing moves between conditions. Image generation is not part of study mode.
 - **Experimenter panel:** at the bottom, holding the experiment name, the condition (With AI or Without AI, no default), Start, Finish, and the camera controls. It is open when the page loads, because the webcam only starts once its panel has been shown, and Start closes it. Start needs a name and a condition and clears both, so nothing carries over to the next experiment.

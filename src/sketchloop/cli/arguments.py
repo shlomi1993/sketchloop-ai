@@ -65,7 +65,6 @@ FLAG_SETTINGS: Final[dict[str, dict[str, str]]] = {
         "backend": "generator.backend",
         "mode": "generator.diffusers.mode",
         "precision": "generator.diffusers.precision",
-        "study": "study.enabled",
         "stroke_suggester": "stroke_suggester.name",
         "prompt_suggester": "prompt_suggester.name",
     },
@@ -271,7 +270,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ui_parser.add_argument("--backend", choices=list(GENERATORS), default=unset, help="generation backend to use (settings generator.backend, default fake)")  # noqa: E501
     ui_parser.add_argument("--mode", type=GenerationMode, choices=list(GenerationMode), default=unset, help="mode of a real backend (settings generator.diffusers.mode, default fast on CPU and quality on a GPU)")  # noqa: E501
     ui_parser.add_argument("--precision", type=TorchPrecision, choices=list(TorchPrecision), default=unset, help="precision of a real backend (settings generator.diffusers.precision, default float16 on a GPU and float32 on CPU)")  # noqa: E501
-    ui_parser.add_argument("--study", action=argparse.BooleanOptionalAction, default=unset, help="serve the study page, where participants see only the sketch, the prompt, and the AI buttons in the AI condition (settings study.enabled, default off)")  # noqa: E501
     ui_parser.add_argument("--stroke-suggester", choices=list(STROKE_SUGGESTERS), default=unset, help="next-stroke suggester behind Suggest next strokes (settings stroke_suggester.name, default fake)")  # noqa: E501
     ui_parser.add_argument("--prompt-suggester", choices=list(PROMPT_SUGGESTERS), default=unset, help="prompt suggester behind Suggest a prompt (settings prompt_suggester.name, default templates)")  # noqa: E501
     ui_parser.add_argument("--config", type=Path, help=CONFIG_HELP)

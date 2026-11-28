@@ -100,7 +100,7 @@ def test_cli_ui_chooses_suggesters(tmp_path: Path) -> None:
     The ui suggester flags choose the stroke and prompt suggesters and override the settings file.
     """
     (tmp_path / "sketchloop.toml").write_text('[prompt_suggester]\nname = "templates"\n', encoding="utf-8")
-    settings = parse_args(["ui", "--study", "--stroke-suggester", "controlnet", "--prompt-suggester", "florence"]).settings
+    settings = parse_args(["ui", "--stroke-suggester", "controlnet", "--prompt-suggester", "florence"]).settings
 
     # Each flag sets its suggester's registry name over the file.
     chosen = (settings.stroke_suggester.name, settings.prompt_suggester.name)

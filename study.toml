@@ -13,5 +13,3 @@ name = "controlnet"
 [prompt_suggester]
 name = "florence"
 
-[study]
-enabled = true

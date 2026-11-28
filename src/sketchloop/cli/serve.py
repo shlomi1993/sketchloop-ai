@@ -104,9 +104,6 @@ def launch_ui(args: argparse.Namespace, console: Console) -> None:
     settings = args.settings
     controller = make_controller(settings, console)
 
-    # Tell the experimenter which stand-ins are in use before the study page opens.
-    if settings.study.enabled:
-        announce_study_mode(controller, console)
-
-    launch_app(controller, default_candidates=settings.ui.candidates, default_seed=settings.ui.seed,
-               capture_interval_seconds=settings.ui.capture_interval_seconds, study=settings.study.enabled)
+    # Tell the experimenter which stand-ins are in use before the page opens.
+    announce_study_mode(controller, console)
+    launch_app(controller, capture_interval_seconds=settings.ui.capture_interval_seconds)
