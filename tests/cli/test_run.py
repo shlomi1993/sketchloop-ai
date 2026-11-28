@@ -37,7 +37,7 @@ def test_cli_full_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: p
     answers = iter(["²", "1 01", "1", "", "", "q"])
     monkeypatch.setattr("builtins.input", lambda *prompt: next(answers))
 
-    exit_code = main(["run", str(sketch), "--prompt", "modern chair", "--runs-dir", str(tmp_path / "runs")])
+    exit_code = main(["dev", "run", str(sketch), "--prompt", "modern chair", "--runs-dir", str(tmp_path / "runs")])
     output = capsys.readouterr().out
     session_dirs = list((tmp_path / "runs").iterdir())
     round_dir = session_dirs[0] / "round-1"
@@ -94,7 +94,7 @@ def test_cli_session_survives_errors(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr("builtins.input", lambda *prompt: next(answers))
     monkeypatch.setattr("sketchloop.experiments.stores.os.replace", raise_disk_full)
     runs_dir = str(tmp_path / "runs")
-    exit_code = main(["run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--candidates", "2", "--runs-dir", runs_dir])
+    exit_code = main(["dev", "run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--candidates", "2", "--runs-dir", runs_dir])
     output = capsys.readouterr().out
     failure_lines = [line for line in output.splitlines() if line.startswith("Round failed:")]
 
@@ -195,7 +195,7 @@ def test_cli_rounds_track_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr("sketchloop.components.FakeGenerator", create_counted_fake)
 
-    exit_code = main(["run", "--prompt", "chair", "--candidates", "2"])
+    exit_code = main(["dev", "run", "--prompt", "chair", "--candidates", "2"])
     output = capsys.readouterr().out
     session_dirs = list((tmp_path / "file-runs").iterdir())
     rounds = load_session(session_dirs[0]).rounds
@@ -234,7 +234,7 @@ def test_cli_rejects_bad_image(tmp_path: Path, capsys: pytest.CaptureFixture[str
     corrupt = tmp_path / "corrupt.jpg"
     corrupt.write_bytes(b"\xff\xd8\xff" + b"not an image")
 
-    exit_code = main(["run", str(corrupt), "--prompt", "modern chair", "--runs-dir", str(tmp_path / "runs")])
+    exit_code = main(["dev", "run", str(corrupt), "--prompt", "modern chair", "--runs-dir", str(tmp_path / "runs")])
     errors = capsys.readouterr().err
 
     # The corrupt image fails with one concise error line and leaves no run folder.

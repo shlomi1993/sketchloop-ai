@@ -48,7 +48,7 @@ def launches(monkeypatch: pytest.MonkeyPatch) -> list[tuple[AppController, dict[
 
 @pytest.mark.usefixtures("launches")
 @pytest.mark.parametrize(("command", "option", "settings_text", "error_pattern"), [
-    ("ui", ["--backend", "fake", "--mode", "fast"], None, r"--mode needs a real backend, such as --backend diffusers"),
+    ("start", ["--backend", "fake", "--mode", "fast"], None, r"--mode needs a real backend, such as --backend diffusers"),
     ("run", [], '[generator]\nbackend = "difusers"\n', r'sketchloop\.toml: generator\.backend must be one of .+"difusers"\.'),
     ("run", [], '[generator\nbackend = "fake"\n', r"sketchloop\.toml is not valid TOML: .+\. Fix the file and retry\."),
     ("run", [], "[preprocessing]\nrotation = 90\nraw = true\n",
@@ -63,9 +63,9 @@ def test_cli_rejects_invalid_options(tmp_path: Path, capsys: pytest.CaptureFixtu
     """
     runs_option = ["--runs-dir", str(tmp_path / "runs")]
     base = {
-        "run": ["run", str(EXAMPLE_SKETCH), "--prompt", "chair", *runs_option],
-        "ui": ["ui", *runs_option],
-        "rerun": ["rerun", str(tmp_path / "runs" / "earlier"), "--round", "1", *runs_option],
+        "run": ["dev", "run", str(EXAMPLE_SKETCH), "--prompt", "chair", *runs_option],
+        "start": ["start", *runs_option],
+        "rerun": ["dev", "rerun", str(tmp_path / "runs" / "earlier"), "--round", "1", *runs_option],
     }[command]
 
     # A settings file in the working folder is found without --config.
@@ -91,7 +91,7 @@ def test_cli_without_command_opens_ui_with_settings(tmp_path: Path) -> None:
     args = parse_args([])
 
     # The page command is chosen with the file's backend.
-    assert args.command == "ui", f"Expected the ui command, got {args.command!r}"
+    assert args.command == "start", f"Expected the start command, got {args.command!r}"
     assert args.settings.generator.backend == "diffusers", f"Expected diffusers, got {args.settings.generator.backend!r}"
 
 
@@ -100,7 +100,7 @@ def test_cli_ui_chooses_suggesters(tmp_path: Path) -> None:
     The ui suggester flags choose the stroke and prompt suggesters and override the settings file.
     """
     (tmp_path / "sketchloop.toml").write_text('[prompt_suggester]\nname = "templates"\n', encoding="utf-8")
-    settings = parse_args(["ui", "--stroke-suggester", "controlnet", "--prompt-suggester", "florence"]).settings
+    settings = parse_args(["start", "--stroke-suggester", "controlnet", "--prompt-suggester", "florence"]).settings
 
     # Each flag sets its suggester's registry name over the file.
     chosen = (settings.stroke_suggester.name, settings.prompt_suggester.name)

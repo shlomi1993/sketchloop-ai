@@ -34,7 +34,7 @@ class Command(StrEnum):
     RUN = "run"
     SHOW = "show"
     RERUN = "rerun"
-    UI = "ui"
+    START = "start"
     BENCHMARK = "benchmark"
     STUDY = "study"
 
@@ -57,7 +57,7 @@ FLAG_SETTINGS: Final[dict[str, dict[str, str]]] = {
         "precision": "generator.diffusers.precision",
         "camera_index": "capture.camera_index",
     },
-    Command.UI: {
+    Command.START: {
         "candidates": "ui.candidates",
         "seed": "ui.seed",
         "runs_dir": "storage.runs_dir",
@@ -217,11 +217,15 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     # Options that a settings file can also set are absent unless given, so the file and the defaults can apply.
     formatter = argparse.ArgumentDefaultsHelpFormatter
     unset = argparse.SUPPRESS
-    parser = argparse.ArgumentParser(prog="sketchloop", description="Run, inspect, and rerun sketch sessions. No command means ui.")  # noqa: E501
+    parser = argparse.ArgumentParser(prog="sketchloop", description="Start the browser page, manage study data, or use development tools. No command means start.")  # noqa: E501
     commands = parser.add_subparsers(dest="command", required=True)
 
+    # Group research tools separately while retaining their leaf command for dispatch and settings.
+    dev_parser = commands.add_parser("dev", help="development and research tools")
+    dev_commands = dev_parser.add_subparsers(dest="command", required=True)
+
     # Run a new session.
-    run_parser = commands.add_parser(Command.RUN, help="run a new session", description="Generate alternatives from a sketch and pick some.", formatter_class=formatter)  # noqa: E501
+    run_parser = dev_commands.add_parser(Command.RUN, help="run a new session", description="Generate alternatives from a sketch and pick some.", formatter_class=formatter)  # noqa: E501
     run_parser.add_argument("sketch", type=Path, nargs="?", help="PNG or JPEG sketch image to start from")
     run_parser.add_argument("--camera", action="store_true", help="capture the sketch from a webcam instead of a file (settings capture.source)")  # noqa: E501
     run_parser.add_argument("--camera-index", type=make_int_parser(0), default=unset, help="webcam to use with --camera (settings capture.camera_index, default 0)")  # noqa: E501
@@ -237,16 +241,16 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     run_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
 
     # Show or rerun a saved session.
-    show_parser = commands.add_parser(Command.SHOW, help="show a saved session without loading a model", description="Show a saved session and check its files.")  # noqa: E501
+    show_parser = dev_commands.add_parser(Command.SHOW, help="show a saved session without loading a model", description="Show a saved session and check its files.")  # noqa: E501
     show_parser.add_argument("session_folder", type=Path, help="session folder, such as runs/<session>")
-    rerun_parser = commands.add_parser(Command.RERUN, help="rerun a saved round as a new linked session", description="Rerun a saved round with its recorded sketch and settings.", formatter_class=formatter)  # noqa: E501
+    rerun_parser = dev_commands.add_parser(Command.RERUN, help="rerun a saved round as a new linked session", description="Rerun a saved round with its recorded sketch and settings.", formatter_class=formatter)  # noqa: E501
     rerun_parser.add_argument("session_folder", type=Path, help="session folder, such as runs/<session>")
     rerun_parser.add_argument("--round", type=make_int_parser(1), required=True, dest="round_number", help="round number to rerun")  # noqa: E501
     rerun_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for the new session (settings storage.runs_dir, default runs)")  # noqa: E501
     rerun_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
 
     # Measure repeated rounds from one sketch file.
-    benchmark_parser = commands.add_parser(Command.BENCHMARK, help="time repeated rounds from one sketch file", description="Run warm-up and measured rounds and print stage timing statistics.", formatter_class=formatter)  # noqa: E501
+    benchmark_parser = dev_commands.add_parser(Command.BENCHMARK, help="time repeated rounds from one sketch file", description="Run warm-up and measured rounds and print stage timing statistics.", formatter_class=formatter)  # noqa: E501
     benchmark_parser.add_argument("sketch", type=Path, help="PNG or JPEG sketch image to load for every round")
     benchmark_parser.add_argument("--prompt", required=True, help="text guidance for generation")
     benchmark_parser.add_argument("--rounds", type=make_int_parser(1), default=5, help="measured rounds the statistics cover")
@@ -262,7 +266,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     benchmark_parser.add_argument("--config", type=Path, help=CONFIG_HELP)
 
     # Serve the local browser interface.
-    ui_parser = commands.add_parser(Command.UI, help="open the local browser interface", description="Run sessions from a local browser page.", formatter_class=formatter)  # noqa: E501
+    ui_parser = commands.add_parser(Command.START, help="open the local browser interface", description="Run sessions from a local browser page.", formatter_class=formatter)  # noqa: E501
     ui_parser.add_argument("--candidates", type=make_int_parser(1), default=unset, help="default number of candidates per round (settings ui.candidates, default 1)")  # noqa: E501
     ui_parser.add_argument("--seed", type=make_int_parser(0), default=unset, help="default base seed for reproducible candidates (settings ui.seed, default random)")  # noqa: E501
     ui_parser.add_argument("--runs-dir", type=Path, default=unset, help="folder for run outputs (settings storage.runs_dir, default runs)")  # noqa: E501
@@ -287,7 +291,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
     # A bare sketchloop opens the browser page with the settings file's choices.
     if not (sys.argv[1:] if argv is None else argv):
-        argv = [Command.UI]
+        argv = [Command.START]
 
     args = parser.parse_args(argv)
 
@@ -296,7 +300,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     command_parsers = {
         Command.RUN: run_parser,
         Command.RERUN: rerun_parser,
-        Command.UI: ui_parser,
+        Command.START: ui_parser,
         Command.BENCHMARK: benchmark_parser,
         Command.STUDY: study_parser,
     }

@@ -33,9 +33,9 @@ EXAMPLE_SKETCH = Path(__file__).resolve().parents[2] / "examples" / "sketch-phot
 
 def show_text(folder: Path, capsys: pytest.CaptureFixture[str]) -> str:
     """
-    Run sketchloop show on a session folder and return its output with line wrapping removed.
+    Run sketchloop dev show on a session folder and return its output with line wrapping removed.
     """
-    exit_code = main(["show", str(folder)])
+    exit_code = main(["dev", "show", str(folder)])
     assert exit_code == 0, f"show must succeed, got exit code {exit_code}"
     return " ".join(capsys.readouterr().out.split())
 

@@ -54,12 +54,12 @@ def launches(monkeypatch: pytest.MonkeyPatch) -> list[tuple[AppController, dict[
 def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
                                     launches: list[tuple[AppController, dict[str, object]]]) -> None:
     """
-    sketchloop ui launches with telemetry off, refuses too many candidates, and takes its components from --config.
+    sketchloop start launches with telemetry off, refuses too many candidates, and takes its components from --config.
     """
     runs_dir = tmp_path / "runs"
     fakes = ["--backend", "fake", "--stroke-suggester", "fake"]
-    exit_code = main(["ui", *fakes, "--runs-dir", str(runs_dir), "--seed", "5"])
-    over_limit_exit = main(["ui", *fakes, "--runs-dir", str(runs_dir), "--candidates", "9"])
+    exit_code = main(["start", *fakes, "--runs-dir", str(runs_dir), "--seed", "5"])
+    over_limit_exit = main(["start", *fakes, "--runs-dir", str(runs_dir), "--candidates", "9"])
     errors = capsys.readouterr().err
     diffusers_calls: list[tuple[object, Path]] = []
 
@@ -80,8 +80,8 @@ def test_cli_ui_launches_controller(tmp_path: Path, monkeypatch: pytest.MonkeyPa
                                  '[prompt_suggester]', 'name = "florence"', '[stroke_suggester]', 'name = "fake"', '[drawing]',
                                  'canvas_width = 640', 'canvas_height = 480', 'save_interval_seconds = 3.0', '']),
                       encoding="utf-8")
-    config_exit = main(["ui", "--config", str(config)])
-    fake_flag_exit = main(["ui", "--config", str(config), "--backend", "fake"])
+    config_exit = main(["start", "--config", str(config)])
+    fake_flag_exit = main(["start", "--config", str(config), "--backend", "fake"])
 
     # The three valid commands each launch once, and the first has a controller for the runs folder and 2 candidates.
     exit_codes = (exit_code, config_exit, fake_flag_exit)
@@ -127,8 +127,8 @@ def test_cli_ui_builds_prompt_suggester_from_settings(tmp_path: Path,
     """
     config = tmp_path / "prompts.toml"
     config.write_text('[prompt_suggester]\nname = "florence"\n\n[models]\ndir = "no-weights"\n', encoding="utf-8")
-    default_exit = main(["ui", "--backend", "fake", "--stroke-suggester", "fake"])
-    florence_exit = main(["ui", "--backend", "fake", "--stroke-suggester", "fake", "--config", str(config)])
+    default_exit = main(["start", "--backend", "fake", "--stroke-suggester", "fake"])
+    florence_exit = main(["start", "--backend", "fake", "--stroke-suggester", "fake", "--config", str(config)])
     default_controller, florence_controller = launches[0][0], launches[1][0]
 
     # The templates are the default with the fake backend, and the file chooses Florence-2 with the fake backend too.
@@ -154,7 +154,7 @@ def test_cli_ui_warns_about_stand_ins(capsys: pytest.CaptureFixture[str],
     """
     The page prints a warning for each stand-in suggester before it opens.
     """
-    exit_code = main(["ui", "--backend", "fake", "--stroke-suggester", "fake"])
+    exit_code = main(["start", "--backend", "fake", "--stroke-suggester", "fake"])
     output = " ".join(capsys.readouterr().out.split())
 
     # Both stand-ins are named before the page opens.

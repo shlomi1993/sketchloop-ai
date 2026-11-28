@@ -37,7 +37,7 @@ def test_cli_benchmark_reports_statistics(tmp_path: Path, capsys: pytest.Capture
     """
     A benchmark saves warm-up and measured rounds without a selection, prints the statistics and caveats, and show repeats them.
     """
-    exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--backend", "fake", "--rounds", "3",
+    exit_code = main(["dev", "benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--backend", "fake", "--rounds", "3",
                       "--warmup", "1", "--candidates", "1", "--seed", "7"])
     output = " ".join(capsys.readouterr().out.split())
     session_dirs = list((tmp_path / "runs").iterdir())
@@ -63,7 +63,7 @@ def test_cli_benchmark_reports_statistics(tmp_path: Path, capsys: pytest.Capture
     assert "p95 is interpolated from 3 rounds, so treat it as indicative." in output, "Few rounds must get the p95 note"
 
     # show recomputes the summary with its round roles and total row.
-    show_exit = main(["show", str(session_dirs[0])])
+    show_exit = main(["dev", "show", str(session_dirs[0])])
     shown = " ".join(capsys.readouterr().out.split())
     assert show_exit == 0 and "Benchmark summary" in shown, f"show must summarize the benchmark, got {show_exit}"
     assert "Warm-up rounds: 1 Measured rounds: 2, 3, 4" in shown, f"show must name the round roles in {shown}"
@@ -83,8 +83,8 @@ def test_cli_benchmark_ignores_camera_setting_and_takes_the_seed(tmp_path: Path,
     """
     (tmp_path / "sketchloop.toml").write_text('[capture]\nsource = "camera"\n\n[run]\nseed = 9\n', encoding="utf-8")
     monkeypatch.setitem(CAPTURE_SOURCES, "camera", refuse_camera)
-    exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--backend", "fake", "--rounds", "1", "--warmup", "0",
-                      "--candidates", "1"])
+    exit_code = main(["dev", "benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--backend", "fake", "--rounds", "1",
+                      "--warmup", "0", "--candidates", "1"])
 
     # The round records the file source and the file's seed.
     rounds = load_session(next((tmp_path / "runs").iterdir())).rounds
@@ -96,7 +96,7 @@ def test_cli_benchmark_failing_round(tmp_path: Path, capsys: pytest.CaptureFixtu
     """
     A refused round ends the benchmark with one error line, leaves the failed round saved, and leaves nothing to summarize.
     """
-    exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--candidates", "99"])
+    exit_code = main(["dev", "benchmark", str(EXAMPLE_SKETCH), "--prompt", "x", "--candidates", "99"])
     errors = capsys.readouterr().err
     folder = next((tmp_path / "runs").iterdir())
     saved = load_session(folder)
@@ -108,7 +108,7 @@ def test_cli_benchmark_failing_round(tmp_path: Path, capsys: pytest.CaptureFixtu
 
     # Without a completed measured round, the conditions and show both say there is nothing to report.
     print_benchmark_conditions(saved, summarize_benchmark(rounds, saved.session.benchmark), Console())
-    show_exit = main(["show", str(folder)])
+    show_exit = main(["dev", "show", str(folder)])
     output = " ".join(capsys.readouterr().out.split())
     assert "Benchmark conditions" in output and "No measured round completed." in output, "The conditions must say none completed"
     assert show_exit == 0 and "No measured round completed, so there are no statistics." in output, "show must say so too"
@@ -131,7 +131,7 @@ def test_cli_benchmark_passes_precision_and_pins_seed_0(tmp_path: Path, monkeypa
 
     # A settings file in the working folder is found without --config.
     (tmp_path / "sketchloop.toml").write_text('[generator.diffusers]\nprecision = "float32"\n', encoding="utf-8")
-    exit_code = main(["benchmark", str(EXAMPLE_SKETCH), "--prompt", "chair", "--backend", "diffusers", "--rounds", "1",
+    exit_code = main(["dev", "benchmark", str(EXAMPLE_SKETCH), "--prompt", "chair", "--backend", "diffusers", "--rounds", "1",
                       "--warmup", "0", "--candidates", "1", "--runs-dir", str(tmp_path / "runs"), "--precision", "float16"])
 
     # The benchmark ran with the pinned seed, and the backend got the flag's precision.

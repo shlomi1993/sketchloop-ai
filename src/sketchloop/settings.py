@@ -69,20 +69,20 @@ class ModelsSettings:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CaptureSettings:
     """
-    The image source for sketchloop run.
+    The image source for sketchloop dev run.
     """
-    source: str = "file"  # Registry name of the capture source for sketchloop run
+    source: str = "file"  # Registry name of the capture source for sketchloop dev run
     camera_index: int = 0  # Webcam index for the camera source
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PreprocessingSettings:
     """
-    The preprocessor and the rotation and raw defaults of sketchloop run.
+    The preprocessor and the rotation and raw defaults of sketchloop dev run.
     """
     name: str = "strokes"  # Registry name of the preprocessor
-    rotation: int = Rotation.DEG_000  # Clockwise degrees before preprocessing, for sketchloop run
-    raw: bool = False  # Generate from the raw sketch and skip preprocessing, for sketchloop run
+    rotation: int = Rotation.DEG_000  # Clockwise degrees before preprocessing, for sketchloop dev run
+    raw: bool = False  # Generate from the raw sketch and skip preprocessing, for sketchloop dev run
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -106,16 +106,16 @@ class StorageSettings:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RunSettings:
     """
-    Defaults for sketchloop run.
+    Defaults for sketchloop dev run.
     """
-    candidates: int = 4  # Candidates per round for sketchloop run
+    candidates: int = 4  # Candidates per round for sketchloop dev run
     seed: int | None = None  # Base seed, None for random
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class UiSettings:
     """
-    Defaults for sketchloop ui.
+    Defaults for sketchloop start.
     """
     candidates: int = 1  # Default candidates per round on the page
     seed: int | None = None  # Default base seed, None for random
@@ -164,12 +164,12 @@ class Settings:
     """
     generator: GeneratorSettings = GeneratorSettings()  # Generation backend and its options
     models: ModelsSettings = ModelsSettings()  # Folder holding every downloaded model
-    capture: CaptureSettings = CaptureSettings()  # Image source for sketchloop run
+    capture: CaptureSettings = CaptureSettings()  # Image source for sketchloop dev run
     preprocessing: PreprocessingSettings = PreprocessingSettings()  # Preprocessor and run defaults
     evaluator: EvaluatorSettings = EvaluatorSettings()  # Candidate scorer
     storage: StorageSettings = StorageSettings()  # Experiment store and its folder
-    run: RunSettings = RunSettings()  # Defaults for sketchloop run
-    ui: UiSettings = UiSettings()  # Defaults for sketchloop ui
+    run: RunSettings = RunSettings()  # Defaults for sketchloop dev run
+    ui: UiSettings = UiSettings()  # Defaults for sketchloop start
     stroke_suggester: StrokeSuggesterSettings = StrokeSuggesterSettings()  # Next-stroke suggester and its options
     drawing: DrawingSettings = DrawingSettings()  # Paper canvas and capture interval of guided sketching
     prompt_suggester: PromptSuggesterSettings = PromptSuggesterSettings()  # Prompt suggester behind "Suggest a prompt"

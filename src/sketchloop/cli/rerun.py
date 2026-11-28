@@ -42,7 +42,7 @@ def find_rerunnable_round(saved: SavedSession, round_number: int) -> RoundRecord
     # Refuse damaged inputs, since the rerun would not repeat the recorded conditions.
     if any(problem.startswith(f"round-{round_number}/") for problem in saved.problems):
         folder = saved.folder.as_posix()
-        raise SketchLoopError(f"Round {round_number} fails integrity checks. Run sketchloop show {folder} for details.")
+        raise SketchLoopError(f"Round {round_number} fails integrity checks. Run sketchloop dev show {folder} for details.")
 
     return next(record for record in saved.rounds if record.number == round_number)
 

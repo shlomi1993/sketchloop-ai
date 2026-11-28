@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
         Command.RUN: run_session,
         Command.SHOW: show_session,
         Command.RERUN: rerun_round,
-        Command.UI: launch_ui,
+        Command.START: launch_ui,
         Command.BENCHMARK: run_benchmark,
         Command.STUDY: run_study,
     }

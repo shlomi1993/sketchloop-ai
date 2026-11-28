@@ -236,13 +236,13 @@ def load_session(folder: Path) -> SavedSession:
     Load a session folder's records, failing on structural faults and listing artifact problems.
 
     Args:
-        folder (Path): Session folder created by sketchloop run.
+        folder (Path): Session folder created by sketchloop dev run.
 
     Returns:
         SavedSession: The session, its rounds and drawings, and any problems found.
     """
     if not (folder / SESSION_FILE).is_file():
-        raise ExperimentRecordError(f"No {SESSION_FILE} in {folder.as_posix()}. Give a session folder created by sketchloop run.")
+        raise ExperimentRecordError(f"No {SESSION_FILE} in {folder.as_posix()}. Use a folder from sketchloop dev run.")
 
     # Load the rounds, then any drawings, which sessions saved before T09 do not have.
     session = convert_record(SESSION_FILE, read_json(folder / SESSION_FILE, SESSION_FILE), session_from_dict)

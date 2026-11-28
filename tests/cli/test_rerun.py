@@ -44,7 +44,7 @@ def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
     config_dir.mkdir()
     config = config_dir / "rerun.toml"
     config.write_text('[generator]\nbackend = "diffusers"\n\n[storage]\nruns_dir = "runs"\n', encoding="utf-8")
-    main(["run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--candidates", "2", "--runs-dir", str(runs_dir)])
+    main(["dev", "run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--candidates", "2", "--runs-dir", str(runs_dir)])
     original = next(runs_dir.iterdir())
     recorded_source = load_session(original).rounds[0].source
 
@@ -63,12 +63,12 @@ def test_cli_rerun_links_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, c
 
     # The file asks for diffusers, but a rerun recreates the recorded fake backend, so diffusers must never be created.
     monkeypatch.setattr("sketchloop.components.DiffusersSketchGenerator", refuse_generator)
-    rerun_exit = main(["rerun", str(original), "--round", "1", "--config", str(config)])
+    rerun_exit = main(["dev", "rerun", str(original), "--round", "1", "--config", str(config)])
     rerun_output = capsys.readouterr().out
 
     rerun_folders = [path for path in runs_dir.iterdir() if path != original]
     monkeypatch.setattr("sketchloop.components.FakeGenerator", refuse_generator)
-    show_exit = main(["show", str(rerun_folders[0])]) if rerun_folders else None
+    show_exit = main(["dev", "show", str(rerun_folders[0])]) if rerun_folders else None
     show_output = capsys.readouterr().out
 
     # Both commands succeed, the rerun is saved in the file's runs folder, and it records which original round it repeats.
@@ -107,7 +107,7 @@ def record_float16_round(runs_dir: Path, monkeypatch: pytest.MonkeyPatch, adapte
     """
     answers = iter(["1", "q"])
     monkeypatch.setattr("builtins.input", lambda *prompt: next(answers))
-    main(["run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--runs-dir", str(runs_dir)])
+    main(["dev", "run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--runs-dir", str(runs_dir)])
     original = next(runs_dir.iterdir())
     record_file = original / "round-1" / "round.json"
     data = json.loads(record_file.read_text(encoding="utf-8"))
@@ -133,7 +133,7 @@ def test_cli_rerun_uses_recorded_precision(tmp_path: Path, monkeypatch: pytest.M
         return FakeGenerator()
 
     monkeypatch.setattr("sketchloop.cli.common.make_generator", make_recording_generator)
-    exit_code = main(["rerun", str(original), "--round", "1", "--runs-dir", str(tmp_path / "runs")])
+    exit_code = main(["dev", "rerun", str(original), "--round", "1", "--runs-dir", str(tmp_path / "runs")])
 
     # The rerun succeeded and asked for the recorded float16.
     assert exit_code == 0, f"The rerun must succeed, got exit code {exit_code}"
@@ -144,7 +144,7 @@ def test_cli_rerun_uses_recorded_precision(tmp_path: Path, monkeypatch: pytest.M
     capsys.readouterr()
     monkeypatch.setattr("sketchloop.cli.rerun.select_device", lambda: TorchDevice.CPU)
     monkeypatch.setattr("sketchloop.cli.common.make_generator", refuse_generator)
-    cpu_exit = main(["rerun", str(diffusers_original), "--round", "1", "--runs-dir", str(tmp_path / "cpu-runs")])
+    cpu_exit = main(["dev", "rerun", str(diffusers_original), "--round", "1", "--runs-dir", str(tmp_path / "cpu-runs")])
     captured = capsys.readouterr()
     output = " ".join((captured.out + captured.err).split())
     assert cpu_exit == 1, f"The rerun must fail, got exit code {cpu_exit}"
@@ -178,7 +178,7 @@ def test_cli_rerun_reuses_recorded_evaluator(tmp_path: Path, monkeypatch: pytest
     answers = iter(["1", "q"])
     monkeypatch.setattr("builtins.input", lambda *prompt: next(answers))
     runs_dir = tmp_path / "runs"
-    main(["run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--candidates", "1", "--runs-dir", str(runs_dir)])
+    main(["dev", "run", str(EXAMPLE_SKETCH), "--prompt", "chair", "--candidates", "1", "--runs-dir", str(runs_dir)])
     original = next(runs_dir.iterdir())
 
     # Rewrite the recorded evaluator to stand in for a CLIP round or an evaluator rerun cannot recreate.
@@ -193,7 +193,7 @@ def test_cli_rerun_reuses_recorded_evaluator(tmp_path: Path, monkeypatch: pytest
     config = tmp_path / "rerun.toml"
     config.write_text(f'[evaluator]\nname = "{settings_evaluator}"\n', encoding="utf-8")
     capsys.readouterr()
-    exit_code = main(["rerun", str(original), "--round", "1", "--config", str(config), "--runs-dir", str(runs_dir)])
+    exit_code = main(["dev", "rerun", str(original), "--round", "1", "--config", str(config), "--runs-dir", str(runs_dir)])
     output = " ".join(capsys.readouterr().out.split())
 
     # The rerun round records the expected evaluator.
